@@ -1,0 +1,36 @@
+{
+  "style_id": "interview_expert",
+  "style_name": "インタビュー／対談",
+  "description": "聞き手と専門家のQ&A対談形式。質問で論点を引き出し、専門家が深掘りして答える。",
+  "speakers": [
+    {
+      "id": "speaker_a",
+      "name": "聞き手",
+      "voice_id": "",
+      "role": "進行・質問",
+      "tone": "視聴者目線・素朴な疑問を投げかける・相づちで会話を回す",
+      "default_emotion": "neutral"
+    },
+    {
+      "id": "speaker_b",
+      "name": "専門家",
+      "voice_id": "",
+      "role": "回答・解説",
+      "tone": "知識豊富・落ち着いて丁寧に解説・具体例を交える",
+      "default_emotion": "neutral"
+    }
+  ],
+  "structure": [
+    { "id": "intro",      "label": "導入・紹介",   "description": "テーマと専門家を紹介し、対談の狙いを提示する（4〜6行）" },
+    { "id": "question1",  "label": "基礎の質問",   "description": "前提や全体像を問う質問と回答（8〜12行）" },
+    { "id": "question2",  "label": "深掘りの質問", "description": "核心に踏み込む質問と詳しい回答（10〜14行）" },
+    { "id": "question3",  "label": "応用・見解",   "description": "今後の展望や実践的な見解を引き出す（8〜12行）" },
+    { "id": "wrapup",     "label": "総括",         "description": "対談の要点を整理し視聴者へのメッセージで締める（4〜6行）" },
+    { "id": "outro",      "label": "アウトロ",     "description": "締め・チャンネル登録促し（2〜3行）" }
+  ],
+  "content_mode": "long",
+  "target_line_count": 60,
+  "balance_ratio": { "speaker_a": 0.4, "speaker_b": 0.6 },
+  "emotions_allowed": ["neutral", "happy", "surprised", "thinking", "serious", "excited"],
+  "prompt_template": "あなたはYouTube動画の脚本ライターです。\n以下の情報をもとに、「{style_name}」スタイルの台本を作成してください。\n\n## 登場人物設定\n{speakers_description}\n\n## 構成\n{structure_description}\n\n## 入力情報\n{input_content}\n\n## 出力形式\n各セリフを以下の形式で出力してください：\n[SECTION:セクションID] [SPEAKER:話者ID] [EMOTION:感情] セリフ内容\n※[SPEAKER:...] には上記の話者ID（speaker_a 等）をそのまま使い、名前は使わないこと。\n\n例：\n[SECTION:question1] [SPEAKER:speaker_a] [EMOTION:thinking] そもそも、これはどういう仕組みなんでしょうか？\n[SECTION:question1] [SPEAKER:speaker_b] [EMOTION:neutral] いい質問ですね。基本から説明しましょう。\n\n## 注意事項\n- 合計{target_line_count}行前後になるようにしてください\n- 聞き手は視聴者の疑問を代弁し、専門家がそれに丁寧に答える流れを保ってください\n- 入力情報のすべてのトピックを質問と回答に落とし込んでください\n- 専門用語は専門家が噛み砕いて説明してください"
+}

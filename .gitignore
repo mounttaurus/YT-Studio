@@ -1,0 +1,62 @@
+# 共有フォルダ（大容量・環境依存）
+shared/
+
+# ユーザー向け友好フォルダ（host固有のジャンクション集。refresh-user-folders.ps1 が生成）
+_ユーザーファイル/
+
+# 環境変数
+.env
+.env.local
+
+# .mcp.json はホスト固有の絶対パスを含む生成物（.mcp.json.template から install.ps1/.sh が生成）
+.mcp.json
+
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+.venv/
+venv/
+*.egg-info/
+
+# Irodori-TTS-Server ソース（git clone で取得）
+tts-agent/irodori-tts-server-src/
+
+# Irodori HFモデルキャッシュ（数GB・初回起動でHFから自動DL。バインドマウントで可視化）
+tts-agent/irodori-models/
+
+# Docker
+*.log
+
+# OS
+.DS_Store
+Thumbs.db
+
+# テスト素材・参考音声（バイナリ）
+Test material/
+reference/*.wav
+tts-agent/voices/*.wav
+
+# pytest キャッシュ
+.pytest_cache/
+
+# Claude Code ローカル設定
+.claude/
+
+# imagegen-agent モデル・生成物（大容量、READMEのURLから再取得）
+imagegen-agent/models/**/*.safetensors
+imagegen-agent/models/**/*.ckpt
+imagegen-agent/models/**/*.pt
+imagegen-agent/models/**/*.pth
+imagegen-agent/models/**/*.bin
+imagegen-agent/output/
+
+# 大容量バイナリ素材（ローカル保持・公開リポジトリには入れない／bind運用）
+/Images/
+/Voices/
+reference/*.png
+/Conteiner Flow.png
+/Tab flow.png
+
+# 使い捨てスパイク・スクラッチ（FCPXML忠実度調査の再現用ローカルファイル）
+editing-agent/tmp/

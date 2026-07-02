@@ -1,0 +1,30 @@
+{
+  "style_id": "news_narration_long",
+  "style_name": "ニュースナレーション（長尺）",
+  "description": "単一ナレーターによる深掘り報道スタイル。入力情報のすべてを網羅した8〜10分の詳細解説動画向け。",
+  "speakers": [
+    {
+      "id": "speaker_a",
+      "name": "ナレーター",
+      "voice_id": "guest_male_calm",
+      "role": "ナレーター",
+      "tone": "落ち着き・明瞭・中立・丁寧語",
+      "default_emotion": "neutral"
+    }
+  ],
+  "structure": [
+    { "id": "headline",    "label": "ヘッドライン",   "description": "冒頭で結論・最重要情報を提示（2〜3行）" },
+    { "id": "overview",    "label": "全体概要",       "description": "今回扱う全トピックの予告と位置づけ（3〜5行）" },
+    { "id": "background",  "label": "背景説明",       "description": "テーマの文脈・歴史的経緯・前提知識（6〜9行）" },
+    { "id": "detail_1",    "label": "詳細報道①",     "description": "入力情報の前半トピックを詳細に報告（10〜14行）" },
+    { "id": "detail_2",    "label": "詳細報道②",     "description": "入力情報の後半トピックを詳細に報告（10〜14行）" },
+    { "id": "data",        "label": "データ・事例",   "description": "具体的な数字・統計・引用・事例を網羅（6〜10行）" },
+    { "id": "analysis",    "label": "分析・影響",     "description": "今後の展望・社会的影響・専門家見解（6〜9行）" },
+    { "id": "outro",       "label": "締め",           "description": "全体のまとめと次回予告（2〜3行）" }
+  ],
+  "content_mode": "long",
+  "target_line_count": 60,
+  "balance_ratio": { "speaker_a": 1.0 },
+  "emotions_allowed": ["neutral", "serious", "thinking"],
+  "prompt_template": "あなたはYouTube深掘りニュース動画のナレーター脚本ライターです。\n以下の情報をもとに、「{style_name}」スタイルのナレーション脚本を作成してください。\n\n## ナレーター設定\n{speakers_description}\n\n## 構成\n{structure_description}\n\n## 入力情報\n{input_content}\n\n## 出力形式\n各ナレーションを以下の形式で出力してください：\n[SECTION:セクションID] [SPEAKER:speaker_a] [EMOTION:感情] ナレーション内容\n\n例：\n[SECTION:headline] [SPEAKER:speaker_a] [EMOTION:serious] 本日、AIの新展開が明らかになりました。詳しく解説します。\n\n## 重要な注意事項\n- 合計{target_line_count}行前後になるようにしてください（これは深掘り解説動画です。短くしてはいけません）\n- 入力情報に含まれるすべてのトピック・数字・事実を必ず台本に反映してください\n- 情報を省略・要約しないでください。各トピックを十分に展開してください\n- 各セクションは構成の説明にある行数を守ってください\n- 客観的・中立的な表現を使用してください\n- 文体は報道調を維持してください"
+}

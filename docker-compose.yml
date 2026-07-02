@@ -1,0 +1,222 @@
+# ===================================================
+# YouTube Auto — 統合 docker-compose.yml（base / 再現性重視）
+#
+# このファイルは「クリーンな本番相当」構成:
+#   - コードはイメージにCOPY済み（ソースのホストマウントなし）
+#   - 設定はルート単一 .env（利用者が編集するのはこの1枚だけ）
+#   - 大容量データ/モデルは全てホストの見えるフォルダにバインドマウント（Volume不使用）
+#
+# 開発時のホットリロード（ソースマウント + --reload）は docker-compose.override.yml が
+# `docker compose up` 時に自動適用される。
+#
+# 使い方:
+#   開発（自動でoverride適用・ホットリロード）:  docker compose up -d
+#   クリーン/本番相当（overrideを使わない）:      docker compose -f docker-compose.yml up -d
+#   GPUサービス込み(全部):                        docker compose --profile gpu up -d
+#
+# 初回セットアップは install.ps1 を実行してください。
+# ===================================================
+
+name: yt-studio
+
+networks:
+  youtube-auto-net:
+    name: youtube-auto-net
+    driver: bridge
+
+services:
+  # ─── リサーチ（持ち込み素材→ラフ台本ダイジェスト）───
+  research-agent:
+    build: ./research-agent
+    ports:
+      - "8001:8001"
+    env_file:
+      - .env
+    environment:
+      - SHARED_DIR=/shared
+      # 頭脳=Gemini（このプロジェクト専用キー RESEARCH_GEMINI_API_KEY を .env で。無ければ GEMINI_API_KEY にフォールバック）
+      - RESEARCH_DEFAULT_MODEL=gemini/gemini-2.5-pro
+      - RESEARCH_FLASH_MODEL=gemini/gemini-2.5-flash
+      # 協調=Cloudflare Workers AI（鍵は .env(env_file)・モデル名は固定値）
+      # フォールバック頭脳（Geminiがクォータ/レート超過時の退避先）
+      - CLOUDFLARE_TEXT_MODEL=@cf/meta/llama-3.3-70b-instruct-fp8-fast
+      # 音声/動画ソースの書き起こし（Whisper）
+      - CLOUDFLARE_STT_MODEL=@cf/openai/whisper-large-v3-turbo
+    volumes:
+      - ./shared:/shared
+    networks:
+      - youtube-auto-net
+    restart: unless-stopped
+
+  # ─── 脚本・絵コンテ生成（パイプラインの中心）───
+  scripting-agent:
+    build: ./scripting-agent
+    ports:
+      - "8002:8002"
+    env_file:
+      - .env
+    environment:
+      - SHARED_DIR=/shared
+      - TTS_AGENT_URL=http://tts-agent:8004
+    volumes:
+      - ./shared:/shared
+    networks:
+      - youtube-auto-net
+    restart: unless-stopped
+
+  # ─── 司令塔（各エージェントへの命令中継・進捗表示）───
+  director-agent:
+    build: ./director-agent
+    ports:
+      - "8005:8005"
+    env_file:
+      - .env
+    environment:
+      - SHARED_DIR=/shared
+      - RESEARCH_AGENT_URL=http://research-agent:8001
+      - SCRIPTING_AGENT_URL=http://scripting-agent:8002
+      - TTS_AGENT_URL=http://tts-agent:8004
+      - SCRAPPING_AGENT_URL=http://scrapping-agent:8003
+      - EDITING_AGENT_URL=http://editing-agent:8006
+    volumes:
+      - ./shared:/shared
+    networks:
+      - youtube-auto-net
+    restart: unless-stopped
+
+  # ─── 映像素材収集・管理 ───
+  scrapping-agent:
+    build: ./scrapping-agent
+    ports:
+      - "8003:8003"
+    env_file:
+      - .env
+    environment:
+      - SHARED_DIR=/shared
+      - MODELS_DIR=/imagegen_models
+      - COMFY_URL=http://imagegen-agent:8188
+      - COMFY_PUBLIC_URL=http://localhost:8188
+      - SCRAP_PUBLIC_URL=http://localhost:8003
+      # Cloudflare Workers AI（規約回避フォールバック）。鍵は .env(env_file)・モデル名は固定値。
+      - CLOUDFLARE_IMAGE_MODEL=@cf/black-forest-labs/flux-2-klein-4b
+      # Runware（規約回避の本命・実在人物可）。鍵は .env(env_file)・モデルAIRは固定値。
+      # AIR識別子: FLUX schnell=runware:100@1(t2i) / FLUX dev=runware:101@1 / SDXL等は別AIR。
+      - RUNWARE_IMAGE_MODEL=runware:100@1
+      # i2i編集モデル=FLUX Kontext dev(runware:106@1)。顔の同一性を保ったまま画風変換（有名人の本命）。
+      - RUNWARE_EDIT_MODEL=runware:106@1
+      # Grok（xAI Imagine）。鍵は .env(env_file=GROK_API_KEY)・モデル名は固定値。
+      # quality=高品質版（grok-imagine-image=安価版）。t2i/i2i 共通。
+      - GROK_IMAGE_MODEL=grok-imagine-image-quality
+      - GROK_EDIT_MODEL=grok-imagine-image-quality
+    volumes:
+      - ./shared:/shared
+      # SD/LoRA/VAE はホストの imagegen-agent/models をユーザーが直接管理（UIのURL投入でここに保存）
+      - ./imagegen-agent/models:/imagegen_models
+    networks:
+      - youtube-auto-net
+    restart: unless-stopped
+
+  # ─── 編集情報（コマ割り・尺・字幕・OTIO）生成 ───
+  editing-agent:
+    build: ./editing-agent
+    ports:
+      - "8006:8006"
+    env_file:
+      - .env
+    environment:
+      - SHARED_DIR=/shared
+    volumes:
+      - ./shared:/shared
+    networks:
+      - youtube-auto-net
+    restart: unless-stopped
+
+  # ─── テキスト→音声変換（APIレイヤー。実推論は irodori-tts-server）───
+  tts-agent:
+    build: ./tts-agent
+    ports:
+      - "8004:8004"
+    env_file:
+      - .env
+    environment:
+      - SHARED_DIR=/shared
+      - IRODORI_SERVER_URL=http://irodori-tts-server:8088
+      # 声カタログは shared/voices/{engine}/ へ移設（旧 ./tts-agent/voices）。/shared は既にマウント済み
+      - VOICES_DIR=/shared/voices/irodori
+    volumes:
+      - ./shared:/shared
+    networks:
+      - youtube-auto-net
+    restart: unless-stopped
+
+  # ════════════════════════════════════════════════
+  # GPU profile — NVIDIA GPU が必要。`--profile gpu` で起動
+  # ════════════════════════════════════════════════
+
+  # ─── Irodori-TTS-Server（実音声推論エンジン）───
+  # ソースは install.ps1 が ./tts-agent/irodori-tts-server-src へ clone する
+  irodori-tts-server:
+    profiles: ["gpu"]
+    build:
+      context: ./tts-agent/irodori-tts-server-src
+      dockerfile: Dockerfile
+      args:
+        IRODORI_TTS_BACKEND: cu128   # CUDA 12.8 用。CPU の場合は cpu に変更
+    ports:
+      - "8088:8088"
+    env_file:
+      - .env
+    environment:
+      # このサーバが想定する既定モデル＝参照音声ボイスクローン対応（README/.env.example準拠）。
+      # 旧 600M-v3-VoiceDesign はキャプション駆動で参照音声非対応＋新アーキがvendライブラリ非対応だった
+      - IRODORI_HF_CHECKPOINT=Aratako/Irodori-TTS-500M-v3
+      - IRODORI_MODEL_DEVICE=cuda
+      - IRODORI_CODEC_DEVICE=cuda
+      - IRODORI_MODEL_PRECISION=bf16
+      - IRODORI_CODEC_PRECISION=bf16
+      - IRODORI_ALLOW_NO_REF_VOICE=true
+      - IRODORI_VOICES_DIR=/app/voices
+    volumes:
+      # HFモデルキャッシュ(数GB)もホストの見えるフォルダへ（Volume不使用・ユーザーがバックアップ/削除可能）
+      - ./tts-agent/irodori-models:/root/.cache/huggingface
+      # 声カタログは shared/voices/{engine}/ へ移設（旧 ./tts-agent/voices）。コンテナ内パスは /app/voices 据え置き
+      - ./shared/voices/irodori:/app/voices
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8088/health')"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 180s   # モデルDL・ロード時間を考慮
+    networks:
+      - youtube-auto-net
+    restart: unless-stopped
+
+  # ─── AI画像生成（ComfyUI）───
+  imagegen-agent:
+    profiles: ["gpu"]
+    build: ./imagegen-agent
+    ports:
+      - "8188:8188"
+    volumes:
+      - ./imagegen-agent/models/checkpoints:/comfyui/models/checkpoints
+      - ./imagegen-agent/models/vae:/comfyui/models/vae
+      - ./imagegen-agent/models/loras:/comfyui/models/loras
+      - ./imagegen-agent/models/controlnet:/comfyui/models/controlnet
+      - ./imagegen-agent/output:/comfyui/output
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+    networks:
+      - youtube-auto-net
+    restart: unless-stopped

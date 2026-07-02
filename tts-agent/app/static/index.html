@@ -1,0 +1,670 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>TTS Agent</title>
+<script defer src="https://cdn.jsdelivr.net/npm/alpinejs@3.x.x/dist/cdn.min.js"></script>
+<style>
+*{box-sizing:border-box;margin:0;padding:0}
+body{font-family:system-ui,sans-serif;background:#0f1117;color:#e0e0e0;min-height:100vh}
+header{background:#1a1d27;border-bottom:1px solid #2a2d3a;padding:12px 24px;display:flex;align-items:center;gap:16px}
+header h1{font-size:1.1rem;font-weight:600}
+.badge{font-size:.75rem;padding:2px 8px;border-radius:4px;background:#2a2d3a;color:#888}
+.badge.ok{background:#1a3a1a;color:#4caf50}
+.badge.err{background:#3a1a1a;color:#f44336}
+
+.container{max-width:960px;margin:0 auto;padding:24px 16px}
+
+.tabs{display:flex;gap:4px;margin-bottom:0}
+.tab-btn{padding:8px 20px;border-radius:6px 6px 0 0;border:1px solid #2a2d3a;border-bottom:none;
+  background:#1a1d27;color:#888;cursor:pointer;font-size:.9rem}
+.tab-btn.active{background:#22253a;color:#e0e0e0}
+
+.panel{background:#1a1d27;border:1px solid #2a2d3a;border-radius:0 8px 8px 8px;padding:20px}
+
+label{display:block;font-size:.8rem;color:#888;margin-bottom:4px;margin-top:12px}
+select,input,textarea{width:100%;padding:8px 12px;background:#0f1117;border:1px solid #2a2d3a;
+  border-radius:6px;color:#e0e0e0;font-size:.9rem}
+textarea{resize:vertical;min-height:80px;font-family:system-ui}
+input[type="number"]{width:auto}
+
+.row{display:flex;gap:12px;align-items:flex-start}
+.row>*{flex:1}
+
+button{padding:8px 18px;border-radius:6px;border:none;cursor:pointer;font-size:.88rem;
+  font-weight:500;transition:opacity .15s}
+button:disabled{opacity:.4;cursor:not-allowed}
+.btn-primary{background:#4f6ef7;color:#fff}
+.btn-danger{background:#f44336;color:#fff}
+.btn-sm{background:#2a2d3a;color:#e0e0e0;padding:5px 12px;font-size:.8rem}
+
+.progress-bar{height:6px;background:#2a2d3a;border-radius:3px;overflow:hidden;margin:12px 0}
+.progress-fill{height:100%;background:#4f6ef7;transition:width .3s}
+
+.log-area{background:#0f1117;border:1px solid #2a2d3a;border-radius:6px;padding:10px;
+  max-height:200px;overflow-y:auto;font-size:.8rem;font-family:monospace;margin-top:8px}
+.log-line.ok{color:#4caf50}
+.log-line.err{color:#f44336}
+.log-line.info{color:#888}
+.log-line.warn{color:#ffb74d}
+
+audio{width:100%;margin-top:10px}
+
+.mode-tabs{display:flex;gap:6px;margin-bottom:14px}
+.mode-btn{padding:6px 14px;border-radius:6px;border:1px solid #2a2d3a;background:#0f1117;
+  color:#888;cursor:pointer;font-size:.83rem}
+.mode-btn.active{background:#2a2d3a;color:#e0e0e0;border-color:#4f6ef7}
+
+.dropzone{border:2px dashed #2a2d3a;border-radius:8px;padding:32px;text-align:center;
+  color:#888;font-size:.9rem;cursor:pointer;transition:border-color .2s}
+.dropzone.drag-over{border-color:#4f6ef7;color:#4f6ef7}
+
+/* 話者カード */
+.speaker-cards{display:flex;gap:10px;flex-wrap:wrap;margin-top:8px}
+.speaker-card{flex:1;min-width:220px;background:#0f1117;border:1px solid #2a2d3a;
+  border-radius:8px;padding:12px}
+.speaker-card h3{font-size:.85rem;margin-bottom:6px;color:#ccc}
+.caption-hint{font-size:.73rem;color:#555;margin-top:3px}
+
+/* 絵文字パレット */
+.emoji-section summary{cursor:pointer;font-size:.8rem;color:#888;user-select:none;
+  padding:4px 0;list-style:none;display:flex;align-items:center;gap:6px}
+.emoji-section summary::before{content:"▶";font-size:.65rem;transition:transform .2s}
+.emoji-section[open] summary::before{transform:rotate(90deg)}
+.emoji-grid{display:flex;flex-wrap:wrap;gap:4px;margin-top:8px}
+.emoji-btn{background:#1a1d27;border:1px solid #2a2d3a;border-radius:4px;
+  padding:4px 8px;cursor:pointer;font-size:.78rem;color:#ccc;
+  display:flex;align-items:center;gap:3px;white-space:nowrap;transition:background .1s}
+.emoji-btn:hover{background:#2a2d3a;color:#fff}
+
+/* 参照音声管理 */
+.voice-list{display:flex;flex-direction:column;gap:6px;margin-top:8px}
+.voice-item{display:flex;align-items:center;gap:10px;background:#0f1117;
+  border:1px solid #2a2d3a;border-radius:6px;padding:8px 12px}
+.voice-item span{flex:1;font-size:.88rem;font-family:monospace}
+
+.info-note{font-size:.78rem;color:#666;margin-top:6px;padding:8px;
+  background:#0a0d14;border-radius:4px;border-left:3px solid #2a2d3a}
+
+/* スピーカーマップ */
+.speaker-map-row{display:flex;align-items:center;gap:10px;margin-bottom:6px;font-size:.85rem}
+.speaker-map-row .sp-name{min-width:80px;color:#ccc}
+</style>
+</head>
+<body x-data="app()" x-init="init()">
+
+<header>
+  <h1>🎙️ TTS Agent</h1>
+  <span class="badge" :class="engineOk?'ok':'err'" x-text="engineOk?'● エンジン接続中':'● エンジン未接続'"></span>
+</header>
+
+<div class="container">
+  <div class="tabs">
+    <button class="tab-btn" :class="tab==='project'&&'active'" @click="tab='project'">📁 プロジェクト</button>
+    <button class="tab-btn" :class="tab==='direct'&&'active'"  @click="tab='direct'">✍️ 直接入力</button>
+    <button class="tab-btn" :class="tab==='voices'&&'active'"  @click="tab='voices';loadVoices()">🎤 参照音声</button>
+  </div>
+
+  <!-- ═══════════ プロジェクトタブ ═══════════ -->
+  <div class="panel" x-show="tab==='project'">
+
+    <div class="mode-tabs">
+      <button class="mode-btn" :class="pMode==='folder'&&'active'" @click="pMode='folder'">📁 プロジェクトフォルダ</button>
+      <button class="mode-btn" :class="pMode==='text'&&'active'"   @click="pMode='text'">📝 テキスト入力</button>
+    </div>
+
+    <!-- フォルダモード -->
+    <div x-show="pMode==='folder'">
+      <label>プロジェクト選択</label>
+      <select x-model="selectedProject" @change="loadProjectDetail()">
+        <option value="">-- 選択してください --</option>
+        <template x-for="p in projects" :key="p.id">
+          <option :value="p.id" x-text="`${p.id} — ${p.title||''}`"></option>
+        </template>
+      </select>
+
+      <template x-if="projects.length===0">
+        <div style="margin-top:14px;text-align:center">
+          <p style="color:#888;font-size:.85rem;margin-bottom:10px">プロジェクトがありません</p>
+          <button class="btn-primary" @click="createSample()">📦 サンプルプロジェクトを作成</button>
+        </div>
+      </template>
+
+      <!-- 話者設定（voice + caption） -->
+      <div x-show="pSpeakers.length">
+        <label style="margin-top:16px">話者設定</label>
+        <p class="info-note">
+          🎤 <b>参照音声</b>: voices/ フォルダに .wav を置くと話者の声になります<br>
+          💬 <b>キャプション</b>: スタイル・感情の追加指示（VoiceDesignモデル用・任意）
+        </p>
+        <div class="speaker-cards">
+          <template x-for="sp in pSpeakers" :key="sp.id">
+            <div class="speaker-card">
+              <h3 x-text="sp.name||sp.id"></h3>
+              <label>参照音声</label>
+              <select x-model="sp.voice">
+                <option value="none">none（参照音声なし）</option>
+                <template x-for="v in voices" :key="v.id">
+                  <option :value="v.id" x-text="v.id"></option>
+                </template>
+              </select>
+              <label>キャプション <span style="color:#555;font-size:.72rem">（任意）</span></label>
+              <textarea x-model="sp.caption" rows="2"
+                placeholder="例: 元気で明るい女の子の声で話してください。"></textarea>
+            </div>
+          </template>
+        </div>
+      </div>
+
+      <div style="margin-top:16px;display:flex;gap:10px">
+        <button class="btn-primary" @click="runProject()" :disabled="!selectedProject||running">🎬 全セリフ生成</button>
+        <button class="btn-danger"  @click="cancelProject()" :disabled="!running">⏸ 中断</button>
+      </div>
+    </div>
+
+    <!-- テキストモード -->
+    <div x-show="pMode==='text'">
+      <label>フォーマット</label>
+      <div style="display:flex;gap:8px;margin-bottom:10px">
+        <button class="mode-btn" :class="textFmt==='colon'&&'active'"   @click="textFmt='colon';parseSpeakers()">A: B: 形式</button>
+        <button class="mode-btn" :class="textFmt==='bracket'&&'active'" @click="textFmt='bracket';parseSpeakers()">【話者名】形式</button>
+      </div>
+
+      <textarea x-model="rawScript" rows="8"
+        :placeholder="textFmt==='bracket'?'【ずんだもん】こんにちは！\n【めたん】こんにちは！':'A: こんにちは！\nB: こんにちは！'"
+        @input="parseSpeakers()"></textarea>
+
+      <!-- プロジェクト選択 -->
+      <label style="margin-top:12px">保存先プロジェクト</label>
+      <select x-model="selectedProject">
+        <option value="">-- 選択してください --</option>
+        <template x-for="p in projects" :key="p.id">
+          <option :value="p.id" x-text="`${p.id} — ${p.title||''}`"></option>
+        </template>
+      </select>
+
+      <!-- 話者マッピング（voice + caption） -->
+      <div x-show="detectedSpeakers.length" style="margin-top:12px">
+        <label>話者マッピング</label>
+        <template x-for="sp in detectedSpeakers" :key="sp">
+          <div style="background:#0f1117;border:1px solid #2a2d3a;border-radius:6px;padding:10px;margin-bottom:8px">
+            <div style="font-size:.85rem;color:#ccc;margin-bottom:6px" x-text="sp + ' →'"></div>
+            <div class="row">
+              <div>
+                <label>参照音声</label>
+                <select x-model="speakerMap[sp].voice" style="font-size:.82rem">
+                  <option value="none">none</option>
+                  <template x-for="v in voices" :key="v.id">
+                    <option :value="v.id" x-text="v.id"></option>
+                  </template>
+                </select>
+              </div>
+              <div>
+                <label>キャプション <span style="color:#555;font-size:.7rem">（任意）</span></label>
+                <input x-model="speakerMap[sp].caption" placeholder="スタイル指示">
+              </div>
+            </div>
+          </div>
+        </template>
+      </div>
+
+      <div style="margin-top:12px;display:flex;gap:10px">
+        <button class="btn-primary" @click="runFromText()" :disabled="!rawScript.trim()||!selectedProject">🎬 スクリプト保存 → 生成</button>
+      </div>
+    </div>
+
+    <!-- 進捗・ログ -->
+    <div class="progress-bar" x-show="running||progress>0">
+      <div class="progress-fill" :style="`width:${progress}%`"></div>
+    </div>
+    <div x-show="running||progress>0" style="font-size:.78rem;color:#888;margin-bottom:4px" x-text="progressLabel"></div>
+    <div class="log-area" x-show="logs.length">
+      <template x-for="l in logs" :key="l.id">
+        <div class="log-line" :class="l.type" x-text="l.msg"></div>
+      </template>
+    </div>
+
+    <!-- 生成済み音声 -->
+    <div x-show="projectAudioFiles.length>0" style="margin-top:16px">
+      <div style="font-size:.8rem;color:#888;margin-bottom:8px">
+        🎵 生成済み (<span x-text="projectAudioFiles.length"></span> ファイル)
+        — <code style="color:#aaa" x-text="`shared/projects/${selectedProject}/audio/`"></code>
+      </div>
+      <div style="display:flex;flex-direction:column;gap:6px">
+        <template x-for="f in projectAudioFiles" :key="f">
+          <div style="display:flex;align-items:center;gap:10px;background:#0f1117;border:1px solid #2a2d3a;border-radius:6px;padding:8px 12px">
+            <span style="font-size:.78rem;color:#888;min-width:90px;font-family:monospace" x-text="f"></span>
+            <audio :src="`/audio/project/${selectedProject}/${f}`" controls style="flex:1;height:32px"></audio>
+          </div>
+        </template>
+      </div>
+    </div>
+  </div>
+
+  <!-- ═══════════ 直接入力タブ ═══════════ -->
+  <div class="panel" x-show="tab==='direct'">
+
+    <label>テキスト</label>
+    <textarea id="direct-text-input" x-model="previewText" rows="4"
+      placeholder="こんにちは！テストです。&#10;テキスト先頭の絵文字でスタイル制御: 😊こんにちは！"></textarea>
+
+    <!-- 絵文字パレット -->
+    <details class="emoji-section" style="margin-top:8px" open>
+      <summary>絵文字スタイル挿入</summary>
+      <div class="emoji-grid">
+        <template x-for="e in emojiPalette" :key="e.emoji">
+          <button class="emoji-btn" :title="e.desc" @click="insertEmoji(e.emoji)">
+            <span x-text="e.emoji"></span><span x-text="e.label"></span>
+          </button>
+        </template>
+      </div>
+    </details>
+
+    <div class="row" style="margin-top:12px">
+      <div>
+        <label>参照音声 (voice)</label>
+        <select x-model="previewVoice">
+          <option value="none">none（参照音声なし）</option>
+          <template x-for="v in voices" :key="v.id">
+            <option :value="v.id" x-text="v.id"></option>
+          </template>
+        </select>
+        <p x-show="voices.length===0" style="font-size:.73rem;color:#666;margin-top:3px">
+          🎤 参照音声タブで .wav をアップロードしてください
+        </p>
+      </div>
+      <div>
+        <label>速度</label>
+        <input type="number" x-model.number="previewSpeed" min="0.25" max="4.0" step="0.1" style="width:80px">
+      </div>
+    </div>
+
+    <!-- キャプション -->
+    <label style="margin-top:12px">
+      キャプション
+      <span style="color:#555;font-size:.72rem">（任意）— 参照音声と組み合わせると効果的</span>
+    </label>
+    <textarea x-model="previewCaption" rows="2"
+      placeholder="例: 落ち着いた女性の声で、やわらかく自然に話してください。"></textarea>
+
+    <div style="margin-top:12px;display:flex;gap:10px;align-items:center">
+      <button class="btn-primary" @click="generatePreview()" :disabled="!previewText||previewing">
+        <span x-text="previewing?'生成中...':'▶ 生成'"></span>
+      </button>
+    </div>
+
+    <template x-if="previewUrl">
+      <div>
+        <audio :src="previewUrl" controls></audio>
+        <a :href="previewUrl" :download="savedFilename" style="font-size:.78rem;color:#4f6ef7;display:block;margin-top:4px">
+          📥 ダウンロード
+        </a>
+      </div>
+    </template>
+  </div>
+
+  <!-- ═══════════ 参照音声タブ ═══════════ -->
+  <div class="panel" x-show="tab==='voices'">
+    <p class="info-note" style="margin-bottom:16px">
+      🎤 <b>参照音声の使い方</b><br>
+      ① .wav ファイル（3〜30秒、単一話者のクリーンな音声）をアップロード<br>
+      ② ファイル名のstemがvoice IDになります（例: <code>zundamon.wav</code> → <code>zundamon</code>）<br>
+      ③ プロジェクト・直接入力タブの「参照音声」で選択<br>
+      ④ キャプションと組み合わせると声色とスタイルを同時に制御できます
+    </p>
+
+    <!-- アップロード -->
+    <div class="dropzone"
+         :class="dragOver&&'drag-over'"
+         @dragover.prevent="dragOver=true"
+         @dragleave="dragOver=false"
+         @drop.prevent="onVoiceDrop($event)"
+         @click="$refs.voiceFileInput.click()">
+      <div>🎤 ここに参照音声をドラッグ＆ドロップ</div>
+      <div style="font-size:.78rem;margin-top:4px;color:#666">または クリックして選択 (.wav / .flac / .mp3)</div>
+    </div>
+    <input type="file" x-ref="voiceFileInput" accept=".wav,.flac,.mp3,.m4a,.ogg"
+           style="display:none" @change="onVoiceFileSelect($event)">
+
+    <!-- 登録済み一覧 -->
+    <label style="margin-top:16px">登録済み参照音声</label>
+    <template x-if="voices.length===0">
+      <p style="color:#888;font-size:.85rem;margin-top:8px">まだ参照音声がありません</p>
+    </template>
+    <div class="voice-list">
+      <template x-for="v in voices" :key="v.id">
+        <div class="voice-item">
+          <span x-text="v.id"></span>
+          <button class="btn-sm" @click="testVoice(v.id)" :disabled="testingVoice===v.id">
+            <span x-text="testingVoice===v.id?'生成中...':'▶ テスト'"></span>
+          </button>
+          <button class="btn-sm btn-danger" @click="deleteVoice(v.id)"
+                  style="background:#3a1a1a;color:#f44336">🗑️ 削除</button>
+        </div>
+      </template>
+    </div>
+
+    <!-- テスト音声 -->
+    <template x-if="testVoiceUrl">
+      <div style="margin-top:10px">
+        <audio :src="testVoiceUrl" controls style="width:100%;height:36px"></audio>
+      </div>
+    </template>
+  </div>
+</div>
+
+<script>
+const EMOJI_PALETTE = [
+  {emoji:"😊",label:"楽しい",   desc:"楽しげに、嬉しそうに"},
+  {emoji:"😭",label:"悲しい",   desc:"悲しみ、嗚咽"},
+  {emoji:"😠",label:"怒り",     desc:"怒り、不満げに"},
+  {emoji:"😱",label:"叫び",     desc:"悲鳴、絶叫"},
+  {emoji:"🫣",label:"恥ずか",  desc:"恥ずかしそうに、照れながら"},
+  {emoji:"👂",label:"囁き",     desc:"囁き、耳元の音"},
+  {emoji:"⏩",label:"早口",     desc:"早口、まくしたてる"},
+  {emoji:"🐢",label:"ゆっくり",desc:"ゆっくりと"},
+  {emoji:"📖",label:"ナレ",     desc:"ナレーション、独白"},
+  {emoji:"😎",label:"自信",     desc:"得意げに、自信ありげに"},
+  {emoji:"🤔",label:"疑問",     desc:"疑問の声"},
+  {emoji:"🫶",label:"優しく",  desc:"優しく、穏やかに"},
+  {emoji:"😲",label:"驚き",     desc:"驚き、感嘆"},
+  {emoji:"😟",label:"心配",     desc:"心配そうに"},
+  {emoji:"🥺",label:"震え声",  desc:"声を震わせながら"},
+  {emoji:"😆",label:"喜び",     desc:"喜びながら"},
+  {emoji:"😌",label:"安堵",     desc:"安堵、満足げに"},
+  {emoji:"💪",label:"力強く",  desc:"力を込めて、力強く"},
+  {emoji:"🎵",label:"鼻歌",    desc:"鼻歌"},
+  {emoji:"😪",label:"眠そう",  desc:"眠そうに、気だるげに"},
+  {emoji:"😰",label:"緊張",    desc:"慌てて、緊張"},
+  {emoji:"📢",label:"エコー",  desc:"エコー、リバーブ"},
+  {emoji:"📞",label:"電話",    desc:"電話越しのような音"},
+];
+
+function app() {
+  return {
+    tab: 'project',
+    engineOk: false,
+    projects: [],
+    voices: [],
+
+    // プロジェクトタブ
+    pMode: 'folder',
+    selectedProject: '',
+    pSpeakers: [],
+    projectAudioFiles: [],
+    running: false,
+    progress: 0,
+    progressLabel: '',
+    logs: [],
+    logId: 0,
+    pollTimer: null,
+
+    // テキストモード
+    textFmt: 'colon',
+    rawScript: '',
+    detectedSpeakers: [],
+    speakerMap: {},  // {spName: {voice, caption}}
+
+    // 直接入力タブ
+    previewText: '',
+    previewVoice: 'none',
+    previewCaption: '',
+    previewSpeed: 1.0,
+    previewing: false,
+    previewUrl: null,
+    savedFilename: '',
+
+    // 参照音声タブ
+    dragOver: false,
+    testingVoice: null,
+    testVoiceUrl: null,
+
+    emojiPalette: EMOJI_PALETTE,
+
+    async init() {
+      await Promise.all([this.checkHealth(), this.loadProjects(), this.loadVoices()]);
+    },
+
+    async checkHealth() {
+      try {
+        const r = await fetch('/health');
+        const d = await r.json();
+        this.engineOk = d.engine_reachable;
+      } catch { this.engineOk = false; }
+    },
+
+    async loadProjects() {
+      try {
+        const r = await fetch('/projects');
+        const d = await r.json();
+        this.projects = d.projects || [];
+      } catch { this.projects = []; }
+    },
+
+    async loadVoices() {
+      try {
+        const r = await fetch('/voices');
+        const d = await r.json();
+        this.voices = d.voices || [];
+      } catch { this.voices = []; }
+    },
+
+    async loadProjectDetail() {
+      if (!this.selectedProject) {
+        this.pSpeakers = []; this.projectAudioFiles = []; return;
+      }
+      try {
+        const full = this.projects.find(p => p.id === this.selectedProject);
+        // caption フィールドを保持（なければ空文字）
+        this.pSpeakers = (full?.speakers || []).map(sp => ({
+          ...sp,
+          voice: sp.voice || 'none',
+          caption: sp.caption || '',
+        }));
+        this.projectAudioFiles = full?.audio_files || [];
+      } catch(e) { }
+    },
+
+    async createSample() {
+      const r = await fetch('/projects/create_sample', {method:'POST'});
+      await this.loadProjects();
+      this.addLog('サンプルプロジェクトを作成しました', 'ok');
+    },
+
+    addLog(msg, type='info') {
+      this.logs.push({id: this.logId++, msg, type});
+      this.$nextTick(() => {
+        const el = document.querySelector('.log-area');
+        if (el) el.scrollTop = el.scrollHeight;
+      });
+    },
+
+    async runProject() {
+      if (!this.selectedProject || this.running) return;
+
+      // ① 話者設定（voice + caption）を先にプロジェクトに保存
+      await fetch(`/projects/${this.selectedProject}/speakers`, {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({speakers: this.pSpeakers}),
+      });
+
+      // ② 生成開始
+      this.running = true; this.logs = []; this.progress = 0;
+      this.addLog(`${this.selectedProject} の生成を開始...`, 'info');
+      await fetch(`/projects/${this.selectedProject}/run`, {method:'POST'});
+      this.pollStatus(this.selectedProject);
+    },
+
+    pollStatus(projectId) {
+      this.pollTimer = setInterval(async () => {
+        try {
+          const r = await fetch(`/projects/${projectId}/status`);
+          const d = await r.json();
+          const s = d.status?.tts;
+          if (s === 'done') {
+            this.progress = 100; this.progressLabel = '完了！';
+            this.addLog('✅ 全セリフ生成完了', 'ok');
+            this.running = false; clearInterval(this.pollTimer);
+            await this.loadProjects();
+            await this.loadProjectDetail();
+          } else if (s === 'error') {
+            this.addLog('❌ エラーが発生しました', 'err');
+            (d.errors||[]).forEach(e => this.addLog(`  ${e.code}: ${e.message}`, 'err'));
+            this.running = false; clearInterval(this.pollTimer);
+          } else if (s === 'running') {
+            this.progress = Math.min(this.progress + 5, 90);
+            this.progressLabel = '生成中...';
+          }
+        } catch {}
+      }, 2000);
+    },
+
+    async cancelProject() {
+      await fetch(`/projects/${this.selectedProject}/cancel`, {method:'POST'});
+      this.running = false; clearInterval(this.pollTimer);
+      this.addLog('中断しました', 'warn');
+    },
+
+    // ─── テキストモード ───────────────────────────────────────────
+    async parseSpeakers() {
+      if (!this.rawScript.trim()) { this.detectedSpeakers = []; return; }
+      try {
+        const r = await fetch('/parse/text', {
+          method:'POST', headers:{'Content-Type':'application/json'},
+          body: JSON.stringify({text: this.rawScript, format: this.textFmt, speakers: {}})
+        });
+        const d = await r.json();
+        this.detectedSpeakers = d.detected_speakers || [];
+        this.detectedSpeakers.forEach(sp => {
+          if (!this.speakerMap[sp]) this.speakerMap[sp] = {voice: 'none', caption: ''};
+        });
+      } catch {}
+    },
+
+    async runFromText() {
+      if (!this.rawScript.trim() || !this.selectedProject) return;
+      this.addLog('スクリプトを解析中...', 'info');
+
+      // テキストをスクリプトとしてプロジェクトに保存
+      const speakersForParse = {};
+      this.detectedSpeakers.forEach(sp => {
+        speakersForParse[sp] = {voice: this.speakerMap[sp]?.voice || 'none', emotion: 'neutral'};
+      });
+      const pr = await fetch('/parse/text', {
+        method:'POST', headers:{'Content-Type':'application/json'},
+        body: JSON.stringify({text: this.rawScript, format: this.textFmt, speakers: speakersForParse})
+      });
+      const pd = await pr.json();
+
+      // script.json として保存
+      const sr = await fetch(`/projects/${this.selectedProject}/script/text`, {
+        method:'POST', headers:{'Content-Type':'application/json'},
+        body: JSON.stringify({text: this.rawScript, speakers: [], style: 'dialogue'})
+      });
+
+      // 話者設定（voice + caption）を更新
+      const existingSprs = this.projects.find(p=>p.id===this.selectedProject)?.speakers || [];
+      const updatedSpeakers = existingSprs.map(sp => {
+        const match = Object.entries(this.speakerMap).find(([k]) => k === sp.name || k === sp.id);
+        return match ? {...sp, voice: match[1].voice, caption: match[1].caption} : sp;
+      });
+      await fetch(`/projects/${this.selectedProject}/speakers`, {
+        method:'POST', headers:{'Content-Type':'application/json'},
+        body: JSON.stringify({speakers: updatedSpeakers})
+      });
+
+      await this.loadProjects();
+      await this.loadProjectDetail();
+      this.pMode = 'folder';
+      this.addLog(`スクリプト保存完了 (${pd.script?.metadata?.line_count||0} セリフ)`, 'ok');
+      this.addLog('「全セリフ生成」ボタンで生成できます', 'info');
+    },
+
+    // ─── 直接入力タブ ─────────────────────────────────────────────
+    insertEmoji(emoji) {
+      const ta = document.getElementById('direct-text-input');
+      if (!ta) return;
+      const s = ta.selectionStart, e = ta.selectionEnd;
+      this.previewText = this.previewText.slice(0, s) + emoji + this.previewText.slice(e);
+      this.$nextTick(() => { ta.selectionStart = ta.selectionEnd = s + emoji.length; ta.focus(); });
+    },
+
+    async generatePreview() {
+      if (!this.previewText || this.previewing) return;
+      this.previewing = true;
+      this.previewUrl = null; this.savedFilename = '';
+      try {
+        const r = await fetch('/preview', {
+          method:'POST', headers:{'Content-Type':'application/json'},
+          body: JSON.stringify({
+            text: this.previewText,
+            voice: this.previewVoice || 'none',
+            caption: this.previewCaption || '',
+            emotion: 'neutral',
+            speed: this.previewSpeed,
+          }),
+        });
+        if (!r.ok) { alert('生成エラー: ' + r.status); return; }
+        const json = await r.json();
+        this.savedFilename = json.filename || 'output.wav';
+        this.previewUrl = json.audio_url || '';
+      } catch(e) {
+        alert('生成エラー: ' + e.message);
+      } finally {
+        this.previewing = false;
+      }
+    },
+
+    // ─── 参照音声タブ ─────────────────────────────────────────────
+    async onVoiceDrop(e) {
+      this.dragOver = false;
+      const file = e.dataTransfer.files[0];
+      if (file) await this.uploadVoiceFile(file);
+    },
+    async onVoiceFileSelect(e) {
+      const file = e.target.files[0];
+      if (file) await this.uploadVoiceFile(file);
+      e.target.value = '';
+    },
+    async uploadVoiceFile(file) {
+      const fd = new FormData();
+      fd.append('file', file, file.name);
+      const r = await fetch('/voices', {method:'POST', body: fd});
+      if (!r.ok) { alert('アップロード失敗: ' + r.status); return; }
+      const d = await r.json();
+      alert(`✅ ${d.voice_id} をアップロードしました`);
+      await this.loadVoices();
+    },
+    async deleteVoice(voiceId) {
+      if (!confirm(`「${voiceId}」を削除しますか？`)) return;
+      const r = await fetch(`/voices/${voiceId}`, {method:'DELETE'});
+      if (r.ok) await this.loadVoices();
+    },
+    async testVoice(voiceId) {
+      this.testingVoice = voiceId;
+      this.testVoiceUrl = null;
+      try {
+        const r = await fetch('/preview', {
+          method:'POST', headers:{'Content-Type':'application/json'},
+          body: JSON.stringify({
+            text: 'こんにちは！テストです。',
+            voice: voiceId,
+            caption: '',
+            emotion: 'neutral',
+            speed: 1.0,
+          })
+        });
+        if (!r.ok) { alert('テスト失敗: ' + r.status); return; }
+        const d = await r.json();
+        this.testVoiceUrl = d.audio_url;
+      } finally {
+        this.testingVoice = null;
+      }
+    },
+  };
+}
+</script>
+</body>
+</html>

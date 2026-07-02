@@ -1,0 +1,24 @@
+# tts-agent 単体起動用（Irodori-TTS-Server は別途起動が必要）
+# 全部まとめて起動する場合は docker-compose.full.yml を使う
+
+services:
+  tts-agent:
+    build: .
+    command: ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8004", "--reload"]
+    ports:
+      - "8004:8004"
+    env_file:
+      - ../.env
+    environment:
+      - SHARED_DIR=/shared
+      - IRODORI_SERVER_URL=${IRODORI_SERVER_URL:-http://irodori-tts-server:8088}
+      # 声カタログは shared/voices/{engine}/ へ移設（旧 ./voices）
+      - VOICES_DIR=/shared/voices/irodori
+    volumes:
+      - ${SHARED_DIR:-../shared}:/shared
+    restart: unless-stopped
+
+networks:
+  default:
+    name: youtube-auto-net
+    external: false

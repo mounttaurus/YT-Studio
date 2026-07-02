@@ -1,0 +1,45 @@
+{
+  "style_id": "duo_with_guest",
+  "style_name": "二人掛け合い＋ゲスト",
+  "description": "レギュラー二人がゲストを迎えてトーク。多角的な視点で深掘りする。",
+  "speakers": [
+    {
+      "id": "speaker_a",
+      "name": "ずんだもん",
+      "voice_id": "zundamon",
+      "role": "MC・進行",
+      "tone": "明るい・テンポよい進行・語尾は「なのだ」",
+      "default_emotion": "happy"
+    },
+    {
+      "id": "speaker_b",
+      "name": "四国めたん",
+      "voice_id": "metan",
+      "role": "サブMC・補足",
+      "tone": "落ち着き・的確な補足・丁寧語",
+      "default_emotion": "neutral"
+    },
+    {
+      "id": "speaker_guest",
+      "name": "ゲスト",
+      "voice_id": "guest_male_calm",
+      "role": "ゲスト・専門家",
+      "tone": "専門的・熱量高め・親しみやすい",
+      "default_emotion": "thinking"
+    }
+  ],
+  "structure": [
+    { "id": "intro",         "label": "イントロ",       "description": "テーマ紹介・ゲスト紹介（2〜4行）" },
+    { "id": "guest_intro",   "label": "ゲスト自己紹介", "description": "ゲストのバックグラウンド紹介（2〜3行）" },
+    { "id": "main_topic",    "label": "本題",           "description": "テーマについての深掘りトーク（12〜16行）" },
+    { "id": "qa",            "label": "Q&A",            "description": "視聴者目線の疑問をぶつける（6〜8行）" },
+    { "id": "summary",       "label": "まとめ",         "description": "各自の感想・まとめ（3〜4行）" },
+    { "id": "outro",         "label": "アウトロ",       "description": "締め・次回予告（1〜2行）" }
+  ],
+  "content_mode": "long",
+  "target_line_count": 40,
+  "balance_ratio": { "speaker_a": 0.35, "speaker_b": 0.30, "speaker_guest": 0.35 },
+  "emotions_allowed": ["happy", "neutral", "surprised", "sad", "angry", "thinking", "excited"],
+  "guest_configurable": true,
+  "prompt_template": "あなたはYouTubeトーク番組の脚本ライターです。\n以下の情報をもとに、「{style_name}」スタイルの台本を作成してください。\n\n## キャラクター設定\n{speakers_description}\n\n## 構成\n{structure_description}\n\n## 入力情報\n{input_content}\n\n## 出力形式\n各セリフを以下の形式で出力してください：\n[SECTION:セクションID] [SPEAKER:話者ID] [EMOTION:感情] セリフ内容\n\n例：\n[SECTION:intro] [SPEAKER:speaker_a] [EMOTION:happy] 今日はスペシャルゲストをお迎えしているのだ！\n[SECTION:intro] [SPEAKER:speaker_b] [EMOTION:neutral] 今日は特別な回ですね。よろしくお願いします。\n[SECTION:guest_intro] [SPEAKER:speaker_guest] [EMOTION:happy] はじめまして！今日はよろしくお願いします。\n\n## 注意事項\n- 合計{target_line_count}行前後になるようにしてください\n- 各話者の比率を意識してください（MC：35%、サブMC：30%、ゲスト：35%）\n- ゲストが活躍できるよう適切に振ってください\n- キャラクターのトーンを忠実に守ってください"
+}

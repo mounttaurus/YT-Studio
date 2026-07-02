@@ -1,0 +1,27 @@
+{
+  "style_id": "news_narration",
+  "style_name": "ニュースナレーション",
+  "description": "単一ナレーターによる落ち着いた報道スタイル。信頼感・客観性を重視。",
+  "speakers": [
+    {
+      "id": "speaker_a",
+      "name": "ナレーター",
+      "voice_id": "guest_male_calm",
+      "role": "ナレーター",
+      "tone": "落ち着き・明瞭・中立・丁寧語",
+      "default_emotion": "neutral"
+    }
+  ],
+  "structure": [
+    { "id": "headline",    "label": "ヘッドライン",   "description": "冒頭で結論・最重要情報を提示（1〜2行）" },
+    { "id": "background",  "label": "背景説明",       "description": "文脈・背景情報を解説（4〜6行）" },
+    { "id": "detail",      "label": "詳細報道",       "description": "具体的な事実・数字・引用（6〜10行）" },
+    { "id": "analysis",    "label": "分析・影響",     "description": "今後の展望・視聴者への影響（3〜4行）" },
+    { "id": "outro",       "label": "締め",           "description": "簡潔なまとめ（1〜2行）" }
+  ],
+  "content_mode": "short",
+  "target_line_count": 20,
+  "balance_ratio": { "speaker_a": 1.0 },
+  "emotions_allowed": ["neutral", "serious", "thinking"],
+  "prompt_template": "あなたはニュース番組のナレーター脚本ライターです。\n以下の情報をもとに、「{style_name}」スタイルのナレーション脚本を作成してください。\n\n## ナレーター設定\n{speakers_description}\n\n## 構成\n{structure_description}\n\n## 入力情報\n{input_content}\n\n## 出力形式\n各ナレーションを以下の形式で出力してください：\n[SECTION:セクションID] [SPEAKER:speaker_a] [EMOTION:感情] ナレーション内容\n\n例：\n[SECTION:headline] [SPEAKER:speaker_a] [EMOTION:serious] 本日、AI技術の新たな画期的な発展が発表されました。\n\n## 注意事項\n- 合計{target_line_count}行前後になるようにしてください\n- 客観的・中立的な表現を使用してください\n- 事実に基づいた記述のみ行ってください\n- 文体は報道調を維持してください"
+}

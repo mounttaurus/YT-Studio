@@ -1,0 +1,22 @@
+services:
+  editing-agent:
+    build: .
+    command: ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8006", "--reload"]
+    ports:
+      - "8006:8006"
+    volumes:
+      - ../shared:/shared
+      - ./app:/app/app
+      - ./tests:/app/tests
+    env_file:
+      - ../.env
+    environment:
+      - SHARED_DIR=/shared
+    networks:
+      - youtube-auto-net
+    restart: unless-stopped
+
+networks:
+  youtube-auto-net:
+    external: true
+    name: youtube-auto-net

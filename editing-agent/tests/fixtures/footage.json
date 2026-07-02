@@ -1,0 +1,519 @@
+{
+  "schema_version": "1.0.0",
+  "project_id": "ラリーの秘密",
+  "episode": 1,
+  "generated_at": "2026-06-12T08:32:56.952439+00:00",
+  "clips": [
+    {
+      "id": "clip_003",
+      "candidate_id": "pexels_video_5547440",
+      "section": "intro",
+      "line_ids": [
+        "line_001",
+        "line_002",
+        "line_003",
+        "line_004"
+      ],
+      "type": "stock",
+      "media_type": "video",
+      "source": "pexels",
+      "original_url": "https://www.pexels.com/video/water-fountain-near-the-buildings-5547440/",
+      "file_path": "footage/clip_003.mp4",
+      "duration_sec": 24.0,
+      "resolution": "1920x1080",
+      "keywords": [
+        "September 11"
+      ],
+      "license": "pexels-free",
+      "notes": ""
+    },
+    {
+      "id": "clip_004",
+      "candidate_id": "pixabay_photo_60569",
+      "section": "intro",
+      "line_ids": [
+        "line_001",
+        "line_002",
+        "line_003",
+        "line_004"
+      ],
+      "type": "stock",
+      "media_type": "photo",
+      "source": "pixabay",
+      "original_url": "https://pixabay.com/photos/pentagon-stop-september-11-9-11-60569/",
+      "file_path": "footage/clip_004.jpg",
+      "duration_sec": 0.0,
+      "resolution": "3008x1960",
+      "keywords": [
+        "September 11"
+      ],
+      "license": "pixabay-content-license",
+      "notes": ""
+    },
+    {
+      "id": "clip_005",
+      "candidate_id": "pexels_video_33421810",
+      "section": "main_topic",
+      "line_ids": [
+        "line_005",
+        "line_006",
+        "line_007",
+        "line_008",
+        "line_009",
+        "line_010",
+        "line_011",
+        "line_012",
+        "line_013",
+        "line_014",
+        "line_015",
+        "line_016"
+      ],
+      "type": "stock",
+      "media_type": "video",
+      "source": "pexels",
+      "original_url": "https://www.pexels.com/video/drone-view-of-los-angeles-at-dawn-33421810/",
+      "file_path": "footage/clip_005.mp4",
+      "duration_sec": 59.0,
+      "resolution": "540x960",
+      "keywords": [
+        "US Bank Tower"
+      ],
+      "license": "pexels-free",
+      "notes": ""
+    },
+    {
+      "id": "clip_006",
+      "candidate_id": "pexels_video_20426586",
+      "section": "main_topic",
+      "line_ids": [
+        "line_005",
+        "line_006",
+        "line_007",
+        "line_008",
+        "line_009",
+        "line_010",
+        "line_011",
+        "line_012",
+        "line_013",
+        "line_014",
+        "line_015",
+        "line_016"
+      ],
+      "type": "stock",
+      "media_type": "video",
+      "source": "pexels",
+      "original_url": "https://www.pexels.com/video/downtown-los-angeles-20426586/",
+      "file_path": "footage/clip_006.mp4",
+      "duration_sec": 110.0,
+      "resolution": "1920x1080",
+      "keywords": [
+        "Los Angeles skyline"
+      ],
+      "license": "pexels-free",
+      "notes": ""
+    },
+    {
+      "id": "clip_007",
+      "candidate_id": "pexels_video_7735497",
+      "section": "main_topic",
+      "line_ids": [
+        "line_005",
+        "line_006",
+        "line_007",
+        "line_008",
+        "line_009",
+        "line_010",
+        "line_011",
+        "line_012",
+        "line_013",
+        "line_014",
+        "line_015",
+        "line_016"
+      ],
+      "type": "stock",
+      "media_type": "video",
+      "source": "pexels",
+      "original_url": "https://www.pexels.com/video/a-person-giving-documents-to-a-couple-7735497/",
+      "file_path": "footage/clip_007.mp4",
+      "duration_sec": 22.0,
+      "resolution": "1920x1080",
+      "keywords": [
+        "insurance documents"
+      ],
+      "license": "pexels-free",
+      "notes": ""
+    },
+    {
+      "id": "clip_008",
+      "candidate_id": "pexels_video_1635382",
+      "section": "main_topic",
+      "line_ids": [
+        "line_005",
+        "line_006",
+        "line_007",
+        "line_008",
+        "line_009",
+        "line_010",
+        "line_011",
+        "line_012",
+        "line_013",
+        "line_014",
+        "line_015",
+        "line_016"
+      ],
+      "type": "stock",
+      "media_type": "video",
+      "source": "pexels",
+      "original_url": "https://www.pexels.com/video/aircraft-and-land-vehicles-ready-for-combat-1635382/",
+      "file_path": "footage/clip_008.mp4",
+      "duration_sec": 76.0,
+      "resolution": "1920x1080",
+      "keywords": [
+        "military drone"
+      ],
+      "license": "pexels-free",
+      "notes": ""
+    },
+    {
+      "id": "clip_009",
+      "candidate_id": "pixabay_video_170300",
+      "section": "main_topic",
+      "line_ids": [
+        "line_005",
+        "line_006",
+        "line_007",
+        "line_008",
+        "line_009",
+        "line_010",
+        "line_011",
+        "line_012",
+        "line_013",
+        "line_014",
+        "line_015",
+        "line_016"
+      ],
+      "type": "stock",
+      "media_type": "video",
+      "source": "pixabay",
+      "original_url": "https://pixabay.com/videos/id-170300/",
+      "file_path": "footage/clip_009.mp4",
+      "duration_sec": 24.0,
+      "resolution": "2048x1080",
+      "keywords": [
+        "Kentucky military base"
+      ],
+      "license": "pixabay-content-license",
+      "notes": ""
+    },
+    {
+      "id": "clip_010",
+      "candidate_id": "pexels_video_26976624",
+      "section": "main_topic",
+      "line_ids": [
+        "line_005",
+        "line_006",
+        "line_007",
+        "line_008",
+        "line_009",
+        "line_010",
+        "line_011",
+        "line_012",
+        "line_013",
+        "line_014",
+        "line_015",
+        "line_016"
+      ],
+      "type": "stock",
+      "media_type": "video",
+      "source": "pexels",
+      "original_url": "https://www.pexels.com/video/a-building-is-being-demolished-by-a-crane-26976624/",
+      "file_path": "footage/clip_010.mp4",
+      "duration_sec": 67.0,
+      "resolution": "540x960",
+      "keywords": [
+        "building demolition"
+      ],
+      "license": "pexels-free",
+      "notes": ""
+    },
+    {
+      "id": "clip_011",
+      "candidate_id": "pixabay_video_88225",
+      "section": "discussion",
+      "line_ids": [
+        "line_017",
+        "line_018",
+        "line_019",
+        "line_020",
+        "line_021",
+        "line_022",
+        "line_023",
+        "line_024",
+        "line_025"
+      ],
+      "type": "stock",
+      "media_type": "video",
+      "source": "pixabay",
+      "original_url": "https://pixabay.com/videos/id-88225/",
+      "file_path": "footage/clip_011.mp4",
+      "duration_sec": 35.0,
+      "resolution": "1920x1080",
+      "keywords": [
+        "business meeting"
+      ],
+      "license": "pixabay-content-license",
+      "notes": ""
+    },
+    {
+      "id": "clip_012",
+      "candidate_id": "pexels_video_34941081",
+      "section": "discussion",
+      "line_ids": [
+        "line_017",
+        "line_018",
+        "line_019",
+        "line_020",
+        "line_021",
+        "line_022",
+        "line_023",
+        "line_024",
+        "line_025"
+      ],
+      "type": "stock",
+      "media_type": "video",
+      "source": "pexels",
+      "original_url": "https://www.pexels.com/video/modern-high-rise-building-exterior-drone-view-34941081/",
+      "file_path": "footage/clip_012.mp4",
+      "duration_sec": 45.0,
+      "resolution": "540x960",
+      "keywords": [
+        "real estate"
+      ],
+      "license": "pexels-free",
+      "notes": ""
+    },
+    {
+      "id": "clip_013",
+      "candidate_id": "pexels_video_6994769",
+      "section": "discussion",
+      "line_ids": [
+        "line_017",
+        "line_018",
+        "line_019",
+        "line_020",
+        "line_021",
+        "line_022",
+        "line_023",
+        "line_024",
+        "line_025"
+      ],
+      "type": "stock",
+      "media_type": "video",
+      "source": "pexels",
+      "original_url": "https://www.pexels.com/video/a-couple-buying-online-6994769/",
+      "file_path": "footage/clip_013.mp4",
+      "duration_sec": 14.0,
+      "resolution": "1920x1080",
+      "keywords": [
+        "security camera"
+      ],
+      "license": "pexels-free",
+      "notes": ""
+    },
+    {
+      "id": "clip_014",
+      "candidate_id": "pixabay_video_161045",
+      "section": "discussion",
+      "line_ids": [
+        "line_017",
+        "line_018",
+        "line_019",
+        "line_020",
+        "line_021",
+        "line_022",
+        "line_023",
+        "line_024",
+        "line_025"
+      ],
+      "type": "stock",
+      "media_type": "video",
+      "source": "pixabay",
+      "original_url": "https://pixabay.com/videos/id-161045/",
+      "file_path": "footage/clip_014.mp4",
+      "duration_sec": 29.0,
+      "resolution": "1920x1080",
+      "keywords": [
+        "surveillance footage"
+      ],
+      "license": "pixabay-content-license",
+      "notes": ""
+    },
+    {
+      "id": "clip_015",
+      "candidate_id": "pexels_video_2398980",
+      "section": "discussion",
+      "line_ids": [
+        "line_017",
+        "line_018",
+        "line_019",
+        "line_020",
+        "line_021",
+        "line_022",
+        "line_023",
+        "line_024",
+        "line_025"
+      ],
+      "type": "stock",
+      "media_type": "video",
+      "source": "pexels",
+      "original_url": "https://www.pexels.com/video/drone-footage-of-a-modern-building-2398980/",
+      "file_path": "footage/clip_015.mp4",
+      "duration_sec": 59.0,
+      "resolution": "1920x1080",
+      "keywords": [
+        "office tower"
+      ],
+      "license": "pexels-free",
+      "notes": ""
+    },
+    {
+      "id": "clip_016",
+      "candidate_id": "pexels_video_6581277",
+      "section": "summary",
+      "line_ids": [
+        "line_026",
+        "line_027",
+        "line_028",
+        "line_029"
+      ],
+      "type": "stock",
+      "media_type": "video",
+      "source": "pexels",
+      "original_url": "https://www.pexels.com/video/moving-convoy-of-cars-6581277/",
+      "file_path": "footage/clip_016.mp4",
+      "duration_sec": 20.0,
+      "resolution": "1920x1080",
+      "keywords": [
+        "city surveillance"
+      ],
+      "license": "pexels-free",
+      "notes": ""
+    },
+    {
+      "id": "clip_017",
+      "candidate_id": "pexels_video_6397833",
+      "section": "summary",
+      "line_ids": [
+        "line_026",
+        "line_027",
+        "line_028",
+        "line_029"
+      ],
+      "type": "stock",
+      "media_type": "video",
+      "source": "pexels",
+      "original_url": "https://www.pexels.com/video/police-vehicles-on-the-road-6397833/",
+      "file_path": "footage/clip_017.mp4",
+      "duration_sec": 31.0,
+      "resolution": "2048x1080",
+      "keywords": [
+        "urban security"
+      ],
+      "license": "pexels-free",
+      "notes": ""
+    },
+    {
+      "id": "clip_018",
+      "candidate_id": "pixabay_video_173104",
+      "section": "summary",
+      "line_ids": [
+        "line_026",
+        "line_027",
+        "line_028",
+        "line_029"
+      ],
+      "type": "stock",
+      "media_type": "video",
+      "source": "pixabay",
+      "original_url": "https://pixabay.com/videos/id-173104/",
+      "file_path": "footage/clip_018.mp4",
+      "duration_sec": 18.0,
+      "resolution": "1920x1080",
+      "keywords": [
+        "city surveillance"
+      ],
+      "license": "pixabay-content-license",
+      "notes": ""
+    },
+    {
+      "id": "clip_019",
+      "candidate_id": "pexels_photo_19782580",
+      "section": "summary",
+      "line_ids": [
+        "line_026",
+        "line_027",
+        "line_028",
+        "line_029"
+      ],
+      "type": "stock",
+      "media_type": "photo",
+      "source": "pexels",
+      "original_url": "https://www.pexels.com/photo/surveillance-cameras-in-city-19782580/",
+      "file_path": "footage/clip_019.jpg",
+      "duration_sec": 0.0,
+      "resolution": "6016x4016",
+      "keywords": [
+        "city surveillance"
+      ],
+      "license": "pexels-free",
+      "notes": ""
+    },
+    {
+      "id": "clip_020",
+      "candidate_id": "pexels_video_34232317",
+      "section": "outro",
+      "line_ids": [
+        "line_030",
+        "line_031"
+      ],
+      "type": "stock",
+      "media_type": "video",
+      "source": "pexels",
+      "original_url": "https://www.pexels.com/video/stunning-nighttime-cityscape-of-skyscrapers-34232317/",
+      "file_path": "footage/clip_020.mp4",
+      "duration_sec": 14.0,
+      "resolution": "540x960",
+      "keywords": [
+        "city night"
+      ],
+      "license": "pexels-free",
+      "notes": ""
+    },
+    {
+      "id": "clip_021",
+      "candidate_id": "pixabay_video_23258",
+      "section": "outro",
+      "line_ids": [
+        "line_030",
+        "line_031"
+      ],
+      "type": "stock",
+      "media_type": "video",
+      "source": "pixabay",
+      "original_url": "https://pixabay.com/videos/id-23258/",
+      "file_path": "footage/clip_021.mp4",
+      "duration_sec": 18.0,
+      "resolution": "1920x1080",
+      "keywords": [
+        "city night"
+      ],
+      "license": "pixabay-content-license",
+      "notes": ""
+    }
+  ],
+  "metadata": {
+    "clip_count": 19,
+    "total_footage_duration_sec": 665.0,
+    "all_downloaded": true
+  }
+}

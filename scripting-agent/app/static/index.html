@@ -1,0 +1,2026 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>scripting-agent</title>
+  <script defer src="https://cdn.jsdelivr.net/npm/alpinejs@3.x.x/dist/cdn.min.js"></script>
+  <style>
+    [x-cloak] { display: none !important; }
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+    body { font-family: 'Segoe UI', system-ui, sans-serif; background: #0f1117; color: #e2e8f0; min-height: 100vh; }
+    .header { background: #1a1d2e; border-bottom: 1px solid #2d3748; padding: 12px 24px; display: flex; align-items: center; gap: 12px; }
+    .header h1 { font-size: 18px; font-weight: 600; color: #a78bfa; }
+    .header .badge { background: #2d2050; color: #a78bfa; border: 1px solid #4c1d95; padding: 2px 8px; border-radius: 9999px; font-size: 11px; }
+    .layout { display: grid; grid-template-columns: 280px 1fr; height: calc(100vh - 49px); }
+    .sidebar { background: #141622; border-right: 1px solid #2d3748; padding: 16px; overflow-y: auto; display: flex; flex-direction: column; gap: 16px; }
+    .main { overflow-y: auto; padding: 20px; display: flex; flex-direction: column; gap: 16px; }
+    .card { background: #1a1d2e; border: 1px solid #2d3748; border-radius: 8px; padding: 16px; }
+    .card h2 { font-size: 13px; font-weight: 600; color: #94a3b8; text-transform: uppercase; letter-spacing: 0.05em; margin-bottom: 12px; }
+    select, input[type="text"], textarea {
+      width: 100%; background: #0f1117; border: 1px solid #374151; border-radius: 6px;
+      color: #e2e8f0; padding: 8px 10px; font-size: 13px; outline: none;
+    }
+    select:focus, input:focus, textarea:focus { border-color: #7c3aed; }
+    textarea { resize: vertical; min-height: 80px; }
+    .dropzone { border: 2px dashed transparent; border-radius: 8px; transition: border-color .15s, background .15s; padding: 2px; }
+    .dropzone-active { border-color: #6366f1; background: rgba(99,102,241,.08); }
+    .btn { display: inline-flex; align-items: center; gap: 6px; padding: 8px 16px; border-radius: 6px; font-size: 13px; font-weight: 500; cursor: pointer; border: none; transition: opacity 0.15s; }
+    .btn:disabled { opacity: 0.4; cursor: not-allowed; }
+    .btn-primary { background: #7c3aed; color: white; }
+    .btn-primary:hover:not(:disabled) { background: #6d28d9; }
+    .btn-success { background: #059669; color: white; }
+    .btn-success:hover:not(:disabled) { background: #047857; }
+    .btn-danger { background: #dc2626; color: white; }
+    .btn-ghost { background: transparent; color: #94a3b8; border: 1px solid #374151; }
+    .btn-ghost:hover:not(:disabled) { background: #1e2233; }
+    .btn-sm { padding: 4px 10px; font-size: 12px; }
+    .style-cards { display: flex; flex-direction: column; gap: 8px; }
+    .style-card { background: #0f1117; border: 1px solid #374151; border-radius: 6px; padding: 10px 12px; cursor: pointer; transition: border-color 0.15s; }
+    .style-card:hover { border-color: #7c3aed; }
+    .style-card.selected { border-color: #7c3aed; background: #1e1040; }
+    .style-card .name { font-size: 13px; font-weight: 600; color: #c4b5fd; }
+    .style-card .desc { font-size: 11px; color: #64748b; margin-top: 2px; }
+    .style-meta { display: flex; gap: 6px; margin-top: 6px; flex-wrap: wrap; }
+    .style-meta-tag { font-size: 10px; background: #1a1d2e; border: 1px solid #2d3748; border-radius: 4px; color: #94a3b8; padding: 1px 6px; }
+    .style-detail { margin-top: 8px; border-top: 1px solid #1e2233; padding-top: 8px; display: flex; flex-direction: column; gap: 6px; }
+    .style-detail-section { font-size: 10px; font-weight: 600; color: #64748b; text-transform: uppercase; letter-spacing: 0.05em; margin-bottom: 3px; }
+    .style-speaker-row { display: flex; align-items: baseline; gap: 6px; }
+    .style-speaker-name { font-size: 11px; font-weight: 600; color: #e2e8f0; }
+    .style-speaker-role { font-size: 10px; color: #7c3aed; background: #2d2050; padding: 1px 5px; border-radius: 9999px; }
+    .style-speaker-tone { font-size: 10px; color: #64748b; line-height: 1.4; margin-top: 1px; }
+    .style-struct-item { font-size: 10px; color: #94a3b8; padding: 3px 0; border-bottom: 1px solid #1a1d2e; }
+    .style-struct-item:last-child { border-bottom: none; }
+    .style-struct-label { font-weight: 600; color: #c4b5fd; }
+    .expand-btn { font-size: 10px; color: #4b5563; background: none; border: none; cursor: pointer; padding: 0; margin-top: 4px; display: flex; align-items: center; gap: 3px; }
+    .expand-btn:hover { color: #94a3b8; }
+    .style-saved-badge { font-size: 9px; background: #064e3b; color: #34d399; border: 1px solid #065f46; padding: 1px 5px; border-radius: 9999px; margin-left: 4px; }
+    .mode-short { font-size: 9px; background: #1e3a5f; color: #38bdf8; border: 1px solid #0369a1; padding: 1px 5px; border-radius: 9999px; }
+    .mode-long  { font-size: 9px; background: #2d1a4a; color: #c084fc; border: 1px solid #6d28d9; padding: 1px 5px; border-radius: 9999px; }
+    .edit-style-btn { font-size: 10px; background: none; border: 1px solid #374151; border-radius: 4px; color: #64748b; padding: 2px 7px; cursor: pointer; }
+    .edit-style-btn:hover { border-color: #7c3aed; color: #c4b5fd; }
+    .voice-select-wrap { display: flex; flex-direction: column; gap: 4px; }
+    .voice-option { display: flex; align-items: center; gap: 8px; background: #0f1117; border: 1px solid #374151; border-radius: 5px; padding: 6px 10px; cursor: pointer; transition: border-color 0.12s; }
+    .voice-option:hover { border-color: #7c3aed; }
+    .voice-option.selected { border-color: #7c3aed; background: #1a1040; }
+    .voice-option .vname { font-size: 12px; color: #e2e8f0; font-weight: 600; }
+    .voice-option .vdesc { font-size: 10px; color: #64748b; }
+    .voice-option .vrole { font-size: 9px; padding: 1px 5px; border-radius: 9999px; }
+    .vrole-regular { background: #1e3a2f; color: #4ade80; }
+    .vrole-guest { background: #3b2a1e; color: #fb923c; }
+    .tts-offline-hint { font-size: 11px; color: #d97706; background: #2d1b00; border: 1px solid #92400e; border-radius: 4px; padding: 6px 8px; }
+    .voice-badge { font-size: 9px; background: #1a2d4a; color: #60a5fa; border: 1px solid #1e3a5f; padding: 1px 5px; border-radius: 9999px; margin-left: 4px; }
+    .project-list { display: flex; flex-direction: column; gap: 4px; max-height: 200px; overflow-y: auto; }
+    .project-item { background: #0f1117; border: 1px solid #374151; border-radius: 4px; padding: 6px 10px; cursor: pointer; font-size: 12px; color: #94a3b8; display: flex; justify-content: space-between; }
+    .project-item:hover { border-color: #4c1d95; color: #e2e8f0; }
+    .project-item.selected { border-color: #7c3aed; color: #c4b5fd; }
+    .script-lines { display: flex; flex-direction: column; gap: 2px; }
+    .script-line { display: grid; grid-template-columns: 36px 100px 90px 1fr auto; gap: 8px; align-items: start; padding: 8px; border-radius: 6px; border: 1px solid transparent; }
+    .script-line:hover { background: #1a1d2e; border-color: #374151; }
+    .script-line.editing { background: #1e1040; border-color: #7c3aed; }
+    .line-num { font-size: 11px; color: #4b5563; text-align: right; padding-top: 2px; }
+    .line-speaker { font-size: 11px; font-weight: 600; padding: 2px 6px; border-radius: 9999px; text-align: center; }
+    .line-emotion { font-size: 10px; color: #64748b; padding-top: 2px; }
+    .line-text { font-size: 13px; color: #e2e8f0; line-height: 1.6; }
+    .line-text-edit { width: 100%; background: #0f1117; border: 1px solid #7c3aed; border-radius: 4px; color: #e2e8f0; padding: 4px 8px; font-size: 13px; resize: vertical; min-height: 60px; }
+    .line-actions { display: flex; gap: 4px; }
+    .speaker-a { background: #1e3a5f; color: #60a5fa; }
+    .speaker-b { background: #1e3a2f; color: #4ade80; }
+    .speaker-guest { background: #3b2a1e; color: #fb923c; }
+    .speaker-default { background: #2d2050; color: #a78bfa; }
+    .warnings { background: #2d1b00; border: 1px solid #92400e; border-radius: 6px; padding: 12px; }
+    .warnings .title { font-size: 12px; font-weight: 600; color: #fbbf24; margin-bottom: 6px; }
+    .warnings ul { list-style: none; display: flex; flex-direction: column; gap: 3px; }
+    .warnings li { font-size: 12px; color: #d97706; }
+    .warnings li::before { content: "⚠ "; }
+    .chat-area { display: flex; flex-direction: column; gap: 8px; }
+    .chat-input-row { display: flex; gap: 8px; }
+    .chat-input-row textarea { flex: 1; min-height: 60px; }
+    .stats-row { display: flex; gap: 12px; flex-wrap: wrap; }
+    .stat { background: #0f1117; border: 1px solid #374151; border-radius: 6px; padding: 8px 14px; text-align: center; }
+    .stat .value { font-size: 22px; font-weight: 700; color: #a78bfa; }
+    .stat .label { font-size: 11px; color: #64748b; }
+    .loading { display: flex; align-items: center; gap: 8px; color: #94a3b8; font-size: 13px; }
+    .spinner { width: 16px; height: 16px; border: 2px solid #374151; border-top-color: #7c3aed; border-radius: 50%; animation: spin 0.7s linear infinite; }
+    @keyframes spin { to { transform: rotate(360deg); } }
+    .empty { text-align: center; padding: 40px; color: #4b5563; font-size: 13px; }
+    .section-badge { font-size: 10px; background: #1a1d2e; border: 1px solid #374151; color: #64748b; padding: 1px 6px; border-radius: 4px; margin-bottom: 4px; display: inline-block; }
+    .status-badge { font-size: 10px; padding: 2px 6px; border-radius: 9999px; }
+    .status-done { background: #064e3b; color: #34d399; }
+    .status-pending { background: #1e3a5f; color: #60a5fa; }
+    .status-running { background: #2d1b00; color: #fbbf24; }
+    .status-error { background: #450a0a; color: #f87171; }
+    .actions-bar { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
+    label { font-size: 12px; color: #94a3b8; display: block; margin-bottom: 4px; }
+    .form-group { display: flex; flex-direction: column; gap: 4px; }
+    .divider { border: none; border-top: 1px solid #2d3748; margin: 4px 0; }
+
+    /* プロジェクトパネル */
+    .search-input-wrap { position: relative; }
+    .search-input-wrap input { padding-left: 28px; }
+    .search-icon { position: absolute; left: 8px; top: 50%; transform: translateY(-50%); color: #4b5563; font-size: 13px; pointer-events: none; }
+    .channel-select { width: 100%; background: #0f1117; border: 1px solid #374151; border-radius: 5px; color: #94a3b8; padding: 5px 8px; font-size: 11px; margin-bottom: 6px; }
+    .project-count { font-size: 10px; color: #4b5563; text-align: right; margin-bottom: 4px; }
+    .show-more-btn { width: 100%; background: transparent; border: 1px dashed #374151; border-radius: 5px; color: #64748b; padding: 5px; font-size: 11px; cursor: pointer; margin-top: 4px; transition: all 0.15s; }
+    .show-more-btn:hover { border-color: #7c3aed; color: #c4b5fd; }
+    .new-project-section { border-top: 1px solid #2d3748; padding-top: 12px; margin-top: 4px; }
+    .new-project-section h3 { font-size: 11px; font-weight: 600; color: #64748b; text-transform: uppercase; letter-spacing: 0.05em; margin-bottom: 8px; }
+    .create-btn { width: 100%; background: #1e1040; border: 1px solid #4c1d95; border-radius: 6px; color: #c4b5fd; padding: 8px; font-size: 12px; font-weight: 500; cursor: pointer; display: flex; align-items: center; justify-content: center; gap: 6px; margin-top: 6px; transition: all 0.15s; }
+    .create-btn:hover:not(:disabled) { background: #2e1060; border-color: #7c3aed; }
+    .create-btn:disabled { opacity: 0.4; cursor: not-allowed; }
+    .channel-tag { font-size: 9px; padding: 1px 5px; background: #1a1d2e; border: 1px solid #374151; border-radius: 9999px; color: #64748b; }
+
+    /* 新規スタイル作成モーダル */
+    .modal-overlay { position: fixed; inset: 0; background: rgba(0,0,0,0.7); z-index: 100; display: flex; align-items: center; justify-content: center; }
+    .modal-box { background: #1a1d2e; border: 1px solid #4c1d95; border-radius: 10px; padding: 24px; width: 560px; max-width: 95vw; max-height: 85vh; overflow-y: auto; display: flex; flex-direction: column; gap: 16px; }
+    .modal-box h3 { font-size: 15px; font-weight: 700; color: #c4b5fd; }
+    .modal-section { display: flex; flex-direction: column; gap: 8px; }
+    .modal-section-title { font-size: 11px; font-weight: 700; color: #64748b; text-transform: uppercase; letter-spacing: 0.06em; }
+    .dynamic-row { display: flex; gap: 6px; align-items: flex-start; background: #0f1117; border: 1px solid #2d3748; border-radius: 6px; padding: 10px; }
+    .dynamic-row .fields { flex: 1; display: flex; flex-direction: column; gap: 6px; }
+    .dynamic-row .fields .row2 { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; }
+    .remove-btn { background: none; border: 1px solid #374151; border-radius: 4px; color: #64748b; padding: 4px 7px; cursor: pointer; font-size: 12px; flex-shrink: 0; }
+    .remove-btn:hover { border-color: #dc2626; color: #f87171; }
+    .add-row-btn { background: #0f1117; border: 1px dashed #374151; border-radius: 5px; color: #64748b; padding: 6px; font-size: 12px; cursor: pointer; width: 100%; transition: all 0.15s; }
+    .add-row-btn:hover { border-color: #7c3aed; color: #c4b5fd; }
+    .modal-footer { display: flex; gap: 8px; justify-content: flex-end; padding-top: 8px; border-top: 1px solid #2d3748; }
+    .new-style-btn { width: 100%; background: transparent; border: 1px dashed #4c1d95; border-radius: 6px; color: #7c3aed; padding: 7px; font-size: 12px; cursor: pointer; margin-top: 6px; transition: all 0.15s; }
+    .new-style-btn:hover { border-color: #7c3aed; background: #1e1040; color: #c4b5fd; }
+    .user-style-badge { font-size: 9px; background: #1e3a5f; color: #60a5fa; border: 1px solid #1e3a8a; padding: 1px 5px; border-radius: 9999px; margin-left: 4px; }
+    .default-badge { font-size: 9px; background: #064e3b; color: #34d399; border: 1px solid #065f46; padding: 1px 5px; border-radius: 9999px; }
+    .style-card-actions { display: flex; gap: 6px; margin-top: 6px; align-items: center; }
+    .toggle-default-btn { font-size: 10px; background: none; border: 1px solid #374151; border-radius: 4px; color: #64748b; padding: 2px 7px; cursor: pointer; }
+    .toggle-default-btn:hover { border-color: #059669; color: #34d399; }
+    .toggle-default-btn.active { border-color: #065f46; background: #064e3b; color: #34d399; }
+    .delete-style-btn { font-size: 10px; background: none; border: 1px solid #7f1d1d; border-radius: 4px; color: #f87171; padding: 2px 7px; cursor: pointer; }
+    .delete-style-btn:hover { border-color: #dc2626; color: #fca5a5; background: #2d0b0b; }
+    .style-empty-hint { font-size: 12px; color: #64748b; background: #0f1117; border: 1px dashed #374151; border-radius: 6px; padding: 12px; line-height: 1.5; }
+    /* テンプレート選択（新規作成モーダル上部） */
+    .template-cards { display: flex; gap: 8px; overflow-x: auto; padding-bottom: 4px; }
+    .template-card { flex: 0 0 auto; width: 168px; background: #0f1117; border: 1px solid #374151; border-radius: 7px; padding: 9px 10px; cursor: pointer; transition: all 0.15s; }
+    .template-card:hover { border-color: #7c3aed; }
+    .template-card.selected { border-color: #7c3aed; border-width: 2px; background: #1a1022; padding: 8px 9px; }
+    .template-card .tc-name { font-size: 12px; font-weight: 600; color: #e2e8f0; }
+    .template-card .tc-desc { font-size: 10px; color: #64748b; margin-top: 3px; line-height: 1.35; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+    .template-card .tc-meta { font-size: 9px; color: #475569; margin-top: 5px; }
+
+    /* LLM ピッカー */
+    .provider-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; }
+    .provider-btn {
+      background: #0f1117; border: 1px solid #374151; border-radius: 6px;
+      padding: 8px 6px; cursor: pointer; text-align: center; transition: all 0.15s;
+      position: relative; overflow: hidden;
+    }
+    .provider-btn:hover:not(.unavailable) { border-color: #7c3aed; }
+    .provider-btn.selected { border-width: 2px; background: #1a1022; }
+    .provider-btn.unavailable { opacity: 0.35; cursor: not-allowed; }
+    .provider-btn .pname { font-size: 12px; font-weight: 600; color: #e2e8f0; }
+    .provider-btn .pdesc { font-size: 10px; color: #64748b; margin-top: 2px; line-height: 1.3; }
+    .provider-btn .pkey-warn { font-size: 9px; color: #f87171; margin-top: 3px; }
+    .model-select-wrap { margin-top: 10px; }
+    .model-filter {
+      width: 100%; box-sizing: border-box; margin-bottom: 6px; padding: 6px 10px;
+      background: #0f0a24; border: 1px solid #2d2150; border-radius: 6px;
+      color: #e2e8f0; font-size: 12px;
+    }
+    .model-list { display: flex; flex-direction: column; gap: 4px; max-height: 280px; overflow-y: auto; }
+    .mprice { font-size: 10px; color: #8b7fb8; margin-left: auto; margin-right: 8px; white-space: nowrap; }
+    .model-group-label {
+      font-size: 11px; color: #8b7fb8; text-transform: uppercase; letter-spacing: 0.05em;
+      margin: 8px 0 2px; padding-left: 2px;
+    }
+    .model-group:first-child .model-group-label { margin-top: 0; }
+    .model-hint { font-size: 11px; color: #8b7fb8; margin: 4px 0 6px; line-height: 1.5; }
+    .provider-pending { margin-top: 10px; }
+    .provider-pending-toggle {
+      font-size: 12px; color: #8b7fb8; cursor: pointer; user-select: none;
+      padding: 4px 0;
+    }
+    .provider-pending-toggle:hover { color: #c4b5fd; }
+    .provider-pending-list { display: flex; flex-direction: column; gap: 4px; margin-top: 4px; }
+    .provider-pending-item {
+      display: flex; align-items: center; gap: 8px; padding: 6px 10px;
+      border: 1px solid #2d2150; border-radius: 6px; opacity: 0.6; font-size: 12px;
+    }
+    .provider-pending-item .pdesc { color: #8b7fb8; font-size: 11px; }
+    .provider-pending-item .pkey-warn { margin-left: auto; color: #f59e0b; font-size: 10px; }
+    .model-item {
+      display: flex; justify-content: space-between; align-items: center;
+      background: #0f1117; border: 1px solid #374151; border-radius: 5px;
+      padding: 7px 10px; cursor: pointer; transition: border-color 0.12s;
+    }
+    .model-item:hover { border-color: #7c3aed; }
+    .model-item.selected { border-color: #7c3aed; background: #1a1040; }
+    .model-item .mname { font-size: 12px; color: #e2e8f0; }
+    .tier-badge { font-size: 9px; padding: 1px 5px; border-radius: 9999px; white-space: nowrap; }
+    .llm-summary {
+      margin-top: 8px; background: #0f1117; border: 1px solid #374151;
+      border-radius: 5px; padding: 7px 10px; font-size: 11px; color: #94a3b8;
+      display: flex; align-items: center; gap: 6px; flex-wrap: wrap;
+    }
+    .llm-summary .lbl { color: #64748b; }
+    .llm-summary .val { color: #c4b5fd; font-weight: 600; }
+  </style>
+</head>
+<body x-data="app()" x-init="init()">
+
+<div class="header">
+  <h1>✍ scripting-agent</h1>
+  <span class="badge">:8002</span>
+  <span x-show="currentProject" class="badge" x-text="currentProject?.id || ''"></span>
+</div>
+
+<div class="layout">
+  <!-- サイドバー -->
+  <div class="sidebar">
+
+    <!-- プロジェクト選択 -->
+    <div class="card">
+      <h2>プロジェクト</h2>
+
+      <!-- チャンネルフィルター -->
+      <select class="channel-select" x-model="projectChannel" @change="resetAndLoadProjects()">
+        <option value="all">📺 すべてのチャンネル</option>
+        <template x-for="ch in channels" :key="ch">
+          <option :value="ch" x-text="ch"></option>
+        </template>
+      </select>
+
+      <!-- 選択中チャンネルの管理（リネーム / 削除） -->
+      <div x-show="projectChannel && projectChannel !== 'all'"
+           style="display:flex;gap:4px;margin:-2px 0 6px">
+        <button class="btn btn-ghost btn-sm" style="flex:1;padding:2px 6px;font-size:10px"
+                title="このチャンネルの名前を変更（属する全プロジェクトに反映）"
+                @click="renameChannel(projectChannel)">✏ 名称変更</button>
+        <button class="btn btn-ghost btn-sm" style="flex:1;padding:2px 6px;font-size:10px;color:#f87171"
+                :disabled="projectChannel === 'default'"
+                title="このチャンネルを削除（属するプロジェクトは default へ移動・データは消えません）"
+                @click="deleteChannel(projectChannel)">🗑 チャンネル削除</button>
+      </div>
+
+      <!-- インライン検索 -->
+      <div class="search-input-wrap" style="margin-bottom:6px">
+        <span class="search-icon">🔍</span>
+        <input type="text" x-model="projectSearch"
+               placeholder="プロジェクトを検索..."
+               @input.debounce.300ms="resetAndLoadProjects()">
+      </div>
+
+      <!-- 件数表示 -->
+      <div class="project-count" x-show="projectTotal > 0">
+        全 <span x-text="projectTotal"></span> 件
+        <span x-show="projectSearch || (projectChannel && projectChannel !== 'all')">（絞り込み中）</span>
+      </div>
+
+      <!-- プロジェクト一覧 -->
+      <div class="project-list">
+        <template x-if="projects.length === 0">
+          <div class="empty" style="padding:20px">プロジェクトなし</div>
+        </template>
+        <template x-for="pj in projects" :key="pj.id">
+          <div class="project-item"
+               :class="{ selected: currentProject?.id === pj.id }"
+               @click="selectProject(pj)">
+            <div style="min-width:0">
+              <div style="font-size:12px;color:#e2e8f0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis" x-text="pj.title || pj.id"></div>
+              <div style="display:flex;gap:4px;align-items:center;margin-top:2px">
+                <span class="channel-tag" x-text="pj.channel || 'default'"></span>
+                <span style="font-size:10px;color:#4b5563" x-text="pj.id.slice(0,13)"></span>
+              </div>
+            </div>
+            <span class="status-badge"
+                  :class="statusClass(pj.status?.scripting)"
+                  x-text="pj.status?.scripting || 'n/a'"
+                  style="white-space:nowrap"></span>
+            <button class="btn btn-ghost btn-sm" style="flex-shrink:0;padding:2px 6px"
+                    title="プロジェクト全体（素材・音声含む）をzipでエクスポート"
+                    @click.stop="exportProject(pj)">📤</button>
+            <button class="btn btn-ghost btn-sm" style="color:#f87171;flex-shrink:0;padding:2px 6px"
+                    title="プロジェクトを完全に削除（元に戻せません）"
+                    @click.stop="deleteProject(pj)">🗑</button>
+          </div>
+        </template>
+      </div>
+
+      <!-- もっと見る -->
+      <button class="show-more-btn"
+              x-show="projectHasMore"
+              @click="loadMoreProjects()"
+              x-text="`▼ もっと見る（残り ${projectTotal - projects.length} 件）`">
+      </button>
+
+      <!-- プロジェクトインポート -->
+      <button class="show-more-btn" @click="$refs.projectImportFile.click()"
+              :disabled="importingProject"
+              x-text="importingProject ? 'インポート中…' : '📥 プロジェクトインポート（zip）'">
+      </button>
+      <input type="file" x-ref="projectImportFile" accept=".zip" style="display:none"
+             @change="importProjectFile($event)">
+
+      <!-- 新規プロジェクト作成 -->
+      <div class="new-project-section">
+        <h3>＋ 新規プロジェクト</h3>
+        <div class="form-group">
+          <label>プロジェクト名</label>
+          <input type="text" x-model="newProjectTitle"
+                 placeholder="例：AIニュース 2026年6月"
+                 @keyup.enter="createProject()">
+        </div>
+        <div class="form-group" style="margin-top:6px">
+          <label>チャンネル</label>
+          <!-- 既存チャンネル選択 or 新規入力 の切り替え -->
+          <template x-if="!newChannelMode">
+            <div style="display:flex;gap:4px">
+              <select x-model="newProjectChannel"
+                      style="flex:1;background:#0f1117;border:1px solid #374151;border-radius:6px;color:#e2e8f0;padding:6px 8px;font-size:13px">
+                <template x-for="ch in channels" :key="ch">
+                  <option :value="ch" x-text="ch"></option>
+                </template>
+              </select>
+              <button class="btn btn-ghost btn-sm" @click="newChannelMode=true; newProjectChannel=''"
+                      title="新規チャンネルを作成" style="white-space:nowrap">＋ 新規</button>
+            </div>
+          </template>
+          <template x-if="newChannelMode">
+            <div style="display:flex;gap:4px">
+              <input type="text" x-model="newProjectChannel"
+                     placeholder="新しいチャンネル名"
+                     style="flex:1"
+                     @keyup.enter="createProject()"
+                     x-ref="newChannelInput">
+              <button class="btn btn-ghost btn-sm" @click="newChannelMode=false; newProjectChannel=effectiveChannel()"
+                      title="既存から選択に戻す">✕</button>
+            </div>
+          </template>
+          <div style="font-size:10px;color:#4b5563;margin-top:3px"
+               x-text="newChannelMode ? '新しいチャンネル名を入力してください' : `選択中のチャンネルに作成します`">
+          </div>
+        </div>
+        <button class="create-btn"
+                :disabled="!newProjectTitle.trim() || !newProjectChannel.trim() || creating"
+                @click="createProject()">
+          <template x-if="creating"><span class="spinner"></span></template>
+          <span x-text="creating ? '作成中...' : `📁 [${newProjectChannel}] に作成`"></span>
+        </button>
+      </div>
+    </div>
+
+    <!-- スタイル選択 -->
+    <div class="card">
+      <h2>
+        スタイル
+        <span x-show="currentProject && selectedStyleId && styleIsSaved"
+              class="style-saved-badge">保存済み</span>
+      </h2>
+      <div class="style-cards">
+        <template x-for="s in styles.filter(st => !st.is_builtin)" :key="s.style_id">
+          <div class="style-card"
+               :class="{ selected: selectedStyleId === s.style_id }"
+               @click="selectStyle(s.style_id)">
+            <!-- ヘッダー行 -->
+            <div style="display:flex;justify-content:space-between;align-items:flex-start">
+              <div style="display:flex;align-items:center;gap:4px;flex-wrap:wrap">
+                <span class="name" x-text="s.style_name"></span>
+                <span x-show="!s.is_builtin" class="user-style-badge">カスタム</span>
+                <span x-show="s.is_default" class="default-badge">デフォルト</span>
+              </div>
+              <button class="expand-btn" @click.stop="toggleStyleDetail(s.style_id)"
+                      x-text="expandedStyleId === s.style_id ? '▲ 閉じる' : '▼ 詳細'"></button>
+            </div>
+            <div class="desc" x-text="s.description"></div>
+
+            <!-- メタタグ -->
+            <div class="style-meta">
+              <span :class="s.content_mode === 'short' ? 'mode-short' : 'mode-long'"
+                    x-text="s.content_mode === 'short' ? '⚡ ショート' : '🎬 長尺'"></span>
+              <span class="style-meta-tag" x-text="`👥 ${s.speaker_count}人`"></span>
+              <span class="style-meta-tag" x-text="`📋 ${s.section_count}セクション`"></span>
+            </div>
+
+            <!-- 全スタイル共通操作 -->
+            <div class="style-card-actions" @click.stop>
+              <button class="edit-style-btn" @click="openEditStyleModal(s)">✏ 編集</button>
+              <template x-if="!s.is_builtin">
+                <button class="toggle-default-btn"
+                        :class="{ active: s.is_default }"
+                        @click="toggleDefault(s)"
+                        x-text="s.is_default ? '★ デフォルト解除' : '☆ デフォルトに設定'"></button>
+              </template>
+              <template x-if="!s.is_builtin">
+                <button class="delete-style-btn" @click="deleteStyle(s)">🗑 削除</button>
+              </template>
+              <button class="edit-style-btn" @click="exportStyle(s.style_id)">📤 エクスポート</button>
+            </div>
+
+            <!-- 展開詳細 -->
+            <div class="style-detail" x-show="expandedStyleId === s.style_id" @click.stop>
+              <!-- 話者 -->
+              <div>
+                <div class="style-detail-section">話者</div>
+                <template x-for="sp in s.speakers" :key="sp.id">
+                  <div style="margin-bottom:6px">
+                    <div class="style-speaker-row">
+                      <span class="style-speaker-name" x-text="sp.name"></span>
+                      <span class="style-speaker-role" x-text="sp.role"></span>
+                    </div>
+                    <div class="style-speaker-tone" x-text="sp.tone"></div>
+                  </div>
+                </template>
+              </div>
+              <!-- 構成 -->
+              <div>
+                <div class="style-detail-section">構成</div>
+                <template x-for="sec in s.structure" :key="sec.id">
+                  <div class="style-struct-item">
+                    <span class="style-struct-label" x-text="sec.label"></span>
+                    <span style="color:#4b5563"> — </span>
+                    <span x-text="sec.description"></span>
+                  </div>
+                </template>
+              </div>
+            </div>
+          </div>
+        </template>
+      </div>
+
+      <!-- カスタムスタイル未作成時の導線 -->
+      <div x-show="!styles.filter(st => !st.is_builtin).length" class="style-empty-hint">
+        まだカスタムスタイルがありません。<br>「＋ 新規スタイルを作成」からお手本テンプレートを選んで作りましょう。
+      </div>
+
+      <!-- 新規スタイル作成ボタン -->
+      <button class="new-style-btn" @click="openNewStyleModal()">＋ 新規スタイルを作成</button>
+      <button class="new-style-btn" @click="$refs.styleImportFile.click()">📥 スタイルインポート</button>
+      <input type="file" x-ref="styleImportFile" accept=".json" style="display:none"
+             @change="importStyleFile($event)">
+    </div>
+
+    <!-- LLM選択（2段階：プロバイダー → モデル） -->
+    <div class="card">
+      <h2>LLMモデル</h2>
+
+      <!-- プロバイダー選択グリッド（利用可能なもののみ表示） -->
+      <div class="provider-grid">
+        <template x-for="p in llmProviders.filter(p => p.available)" :key="p.id">
+          <div class="provider-btn"
+               :class="{ selected: selectedProvider === p.id }"
+               :style="selectedProvider === p.id ? `border-color: ${p.color}` : ''"
+               @click="selectProvider(p.id)">
+            <div class="pname" x-text="p.label"></div>
+            <div class="pdesc" x-text="p.description"></div>
+          </div>
+        </template>
+      </div>
+
+      <!-- 準備中プロバイダー（折りたたみ） -->
+      <template x-if="llmProviders.some(p => !p.available)">
+        <div class="provider-pending">
+          <div class="provider-pending-toggle" @click="showPendingProviders = !showPendingProviders">
+            <span x-text="showPendingProviders ? '▾' : '▸'"></span>
+            準備中のプロバイダー（<span x-text="llmProviders.filter(p => !p.available).length"></span>）
+          </div>
+          <div class="provider-pending-list" x-show="showPendingProviders">
+            <template x-for="p in llmProviders.filter(p => !p.available)" :key="p.id">
+              <div class="provider-pending-item">
+                <span class="pname" x-text="p.label"></span>
+                <span class="pdesc" x-text="p.description"></span>
+                <span class="pkey-warn">APIキー未設定 / 未対応</span>
+              </div>
+            </template>
+          </div>
+        </div>
+      </template>
+
+      <!-- モデル選択リスト -->
+      <div class="model-select-wrap" x-show="selectedProvider">
+        <div style="display:flex;align-items:center;gap:8px;margin-top:10px;margin-bottom:6px">
+          <label style="margin:0">モデル</label>
+          <button class="btn btn-ghost btn-sm" x-show="selectedProvider === 'openrouter'"
+                  style="padding:3px 8px;font-size:11px"
+                  :disabled="refreshingModels"
+                  @click="refreshModels()"
+                  title="OpenRouter公開APIから無料モデル一覧を再取得してCSVを更新">
+            <span x-text="refreshingModels ? '更新中…' : '🔄 モデル更新'"></span>
+          </button>
+        </div>
+        <input type="text" class="model-filter" x-show="currentProviderModels.length > 8"
+               x-model="modelFilter" placeholder="モデルを検索（例: free, claude, gemini）...">
+        <div class="model-hint" x-show="currentProviderModels.length > 40 && !modelFilter.trim()">
+          モデル数が多いため、上の検索欄にキーワードを入力して絞り込んでください（例: "free" で無料モデル、"claude" でAnthropic系）
+        </div>
+        <div class="model-list">
+          <template x-for="group in groupedProviderModels" :key="group.label">
+            <div class="model-group">
+              <div class="model-group-label" x-show="group.label" x-text="group.label"></div>
+              <template x-for="m in group.models" :key="m.id">
+                <div class="model-item"
+                     :class="{ selected: selectedModel === m.id }"
+                     @click="selectedModel = m.id">
+                  <span class="mname" x-text="m.label"></span>
+                  <span class="mprice" x-show="m.input_price" x-text="`入: ${m.input_price} / 出: ${m.output_price}`"></span>
+                  <span class="tier-badge"
+                        :style="`background:${m.tier_label.color}22; color:${m.tier_label.color}; border:1px solid ${m.tier_label.color}55`"
+                        x-text="m.tier_label.label"></span>
+                </div>
+              </template>
+            </div>
+          </template>
+        </div>
+      </div>
+
+      <!-- 現在の選択サマリー -->
+      <div class="llm-summary" x-show="selectedModel">
+        <span class="lbl">選択中：</span>
+        <span class="val" x-text="selectedProviderLabel"></span>
+        <span style="color:#374151">›</span>
+        <span class="val" x-text="selectedModelLabel"></span>
+      </div>
+    </div>
+
+    <!-- ラフ台本入力 -->
+    <div class="card">
+      <h2>ラフ台本（任意）</h2>
+      <div :class="fileDragOver ? 'dropzone dropzone-active' : 'dropzone'"
+           @dragover.prevent="fileDragOver = true"
+           @dragleave.prevent="fileDragOver = false"
+           @drop.prevent="fileDragOver = false; handleFileDrop($event)">
+        <textarea x-model="roughScript" placeholder="ラフ台本を貼り付け、またはファイルをドラッグ＆ドロップ（.md/.txt/.pdf/.docx/.json）省略可。research.jsonが自動読込されます"></textarea>
+        <div style="display:flex;align-items:center;gap:8px;margin-top:6px">
+          <label class="btn" style="font-size:12px;cursor:pointer">
+            ファイルを選択
+            <input type="file" accept=".md,.txt,.pdf,.docx,.json" style="display:none"
+                   @change="handleFileInput($event)">
+          </label>
+          <span x-show="fileImporting" style="font-size:12px;color:#6b7280">読込中...</span>
+          <span x-show="fileImportError" style="font-size:12px;color:#dc2626" x-text="fileImportError"></span>
+        </div>
+      </div>
+
+      <!-- JSON取込み確認ダイアログ -->
+      <div x-show="showJsonImportChoice" class="card" style="margin-top:8px;background:#f9fafb">
+        <div style="font-size:13px;margin-bottom:8px">
+          指示情報（話者・イントネーション・エモーション等）を含む台本JSONのようです。セリフ本文のみを抽出して取り込みますか？
+        </div>
+        <div style="display:flex;gap:8px">
+          <button class="btn btn-primary" style="font-size:12px" @click="confirmJsonImport(true)">本文のみ抽出して取込む</button>
+          <button class="btn" style="font-size:12px" @click="confirmJsonImport(false)">キャンセル</button>
+        </div>
+      </div>
+
+      <h2 style="margin-top:14px">追加指示（任意）</h2>
+      <textarea x-model="extraInstruction" rows="3"
+                placeholder="ラフ台本に対する追加の指示（例：『この部分を強調して』『〇〇についてはバイアスをつけて』）。空欄でOK"></textarea>
+    </div>
+
+    <!-- 生成ボタン（通常） -->
+    <button class="btn btn-primary"
+            x-show="!isSeriesStyle()"
+            :disabled="!currentProject || !selectedStyleId || generating"
+            @click="generateScript()"
+            style="width:100%">
+      <template x-if="generating">
+        <span class="spinner"></span>
+      </template>
+      <span x-text="generating ? '生成中...' : '台本を生成'"></span>
+    </button>
+
+    <!-- 生成ボタン（シリーズ） -->
+    <button class="btn btn-primary"
+            x-show="isSeriesStyle()"
+            :disabled="!currentProject || !selectedStyleId || generating"
+            @click="generateSeriesScript()"
+            style="width:100%">
+      <template x-if="seriesGenerating">
+        <span class="spinner"></span>
+      </template>
+      <span x-text="seriesGenerating ? 'シリーズ生成中...（複数話を順に生成・保存します。数分かかる場合があります）' : 'シリーズを生成'"></span>
+    </button>
+    <div x-show="isSeriesStyle()" style="font-size:11px;color:#6b7280;margin-top:4px">
+      ※ シリーズスタイルでは、複数話を一括生成し各話を個別ファイルとして保存します
+    </div>
+
+  </div>
+
+  <!-- メイン -->
+  <div class="main">
+
+    <!-- プロジェクト未選択 -->
+    <template x-if="!currentProject">
+      <div class="empty" style="margin-top:80px">
+        <div style="font-size:40px;margin-bottom:12px">✍</div>
+        <div>左のサイドバーでプロジェクトを選択してください</div>
+      </div>
+    </template>
+
+    <!-- スクリプトエリア -->
+    <template x-if="currentProject">
+      <div style="display:flex;flex-direction:column;gap:16px">
+
+        <!-- エピソード一覧（常時表示） -->
+        <div class="card" x-show="episodes.length > 0">
+          <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:10px">
+            <h2 style="margin:0">エピソード
+              <span style="font-size:11px;font-weight:400;color:#4b5563;text-transform:none">
+                (<span x-text="episodes.length"></span>話)
+              </span>
+            </h2>
+          </div>
+          <div style="display:flex;flex-wrap:wrap;gap:8px">
+            <template x-for="ep in episodes" :key="ep.number">
+              <button class="btn"
+                      :class="activeEpisodeNumber === ep.number ? 'btn-primary' : 'btn-ghost'"
+                      @click="loadEpisode(ep.number)"
+                      style="display:flex;flex-direction:column;align-items:flex-start;padding:6px 12px;gap:2px">
+                <span style="font-size:12px;font-weight:600" x-text="`第${ep.number}話`"></span>
+                <span style="font-size:10px;opacity:.7;max-width:140px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap"
+                      x-text="ep.title || ''"></span>
+                <div style="display:flex;gap:4px;margin-top:1px">
+                  <span x-show="ep.has_script"
+                        style="font-size:9px;background:#064e3b;color:#34d399;border-radius:9999px;padding:1px 5px">✓確定</span>
+                  <span x-show="ep.has_draft && !ep.has_script"
+                        style="font-size:9px;background:#1e3a5f;color:#60a5fa;border-radius:9999px;padding:1px 5px">草稿</span>
+                  <span x-show="ep.line_count > 0"
+                        style="font-size:9px;color:#4b5563" x-text="`${ep.line_count}行`"></span>
+                </div>
+              </button>
+            </template>
+          </div>
+        </div>
+
+        <!-- 統計 -->
+        <div class="stats-row" x-show="draft">
+          <div class="stat">
+            <div class="label">行数</div>
+            <div class="value" x-text="draft?.lines?.length || 0"></div>
+          </div>
+          <div class="stat" style="max-width:200px">
+            <div class="label">スタイル</div>
+            <div class="value" style="font-size:14px;word-break:break-all"
+                 x-text="draft?.metadata?.style_name || draft?.metadata?.style || '-'"></div>
+            <div style="font-size:9px;color:#4b5563;margin-top:2px"
+                 x-text="draft?.metadata?.style || ''"></div>
+          </div>
+          <div class="stat">
+            <div class="label">推定時間</div>
+            <div class="value" x-text="formatDuration(draft?.metadata?.estimated_duration_sec)"></div>
+          </div>
+          <div class="stat">
+            <div class="label">使用LLM</div>
+            <div class="value" x-text="draft?.metadata?.llm_model?.split('/').pop() || '-'"></div>
+          </div>
+        </div>
+
+        <!-- 警告 -->
+        <div class="warnings" x-show="warnings.length > 0">
+          <div class="title">⚠ 検証警告</div>
+          <ul>
+            <template x-for="w in warnings" :key="w">
+              <li x-text="w"></li>
+            </template>
+          </ul>
+        </div>
+
+        <!-- アクションバー（トップ） -->
+        <div class="actions-bar" x-show="draft">
+          <button class="btn btn-success" @click="approveScript()" :disabled="approving">
+            <span x-text="approving ? '確定中...' : `✓ 承認・確定（第${activeEpisodeNumber}話）`"></span>
+          </button>
+          <span style="font-size:12px;color:#64748b">← episodes/ep<span x-text="String(activeEpisodeNumber).padStart(2,'0')"></span>/script.json として出力</span>
+        </div>
+
+        <!-- 名前付きドラフト一覧 -->
+        <div class="card" x-show="namedDrafts.length > 0 || draft">
+          <h2>保存済みドラフト
+            <span style="font-weight:400;text-transform:none;color:#4b5563;font-size:11px">（クリックで読み込み）</span>
+          </h2>
+          <template x-if="namedDrafts.length === 0">
+            <div style="font-size:12px;color:#4b5563">まだ保存されていません</div>
+          </template>
+          <div style="display:flex;flex-wrap:wrap;gap:8px">
+            <template x-for="d in namedDrafts" :key="d.name">
+              <div style="display:flex;align-items:center;gap:0;background:#0f1117;border:1px solid #374151;border-radius:6px;overflow:hidden">
+                <button class="btn btn-ghost btn-sm"
+                        style="border:none;border-radius:0;padding:5px 10px;display:flex;flex-direction:column;align-items:flex-start;gap:1px"
+                        @click="loadNamedDraft(d.name)">
+                  <span style="font-size:12px;color:#c4b5fd;font-weight:600" x-text="d.name"></span>
+                  <span style="font-size:10px;color:#4b5563" x-text="`${d.line_count}行 · ${formatDuration(d.estimated_duration_sec)}`"></span>
+                </button>
+                <button class="btn btn-ghost btn-sm"
+                        style="border:none;border-left:1px solid #374151;border-radius:0;padding:5px 8px;color:#4b5563"
+                        title="削除"
+                        @click="deleteNamedDraft(d.name)">✕</button>
+              </div>
+            </template>
+          </div>
+        </div>
+
+        <!-- 台本プレビュー -->
+        <div class="card" x-show="draft">
+          <h2>台本プレビュー <span style="font-weight:400;text-transform:none;color:#4b5563;font-size:11px">（行をクリックで編集）</span></h2>
+          <div class="script-lines">
+            <template x-if="!draft?.lines?.length">
+              <div class="empty">台本がありません</div>
+            </template>
+            <template x-for="line in draft?.lines || []" :key="line.id">
+              <div class="script-line" :class="{ editing: editingLineOrder === line.order }" @click="toggleEdit(line)">
+                <div class="line-num" x-text="line.order"></div>
+                <div>
+                  <span class="line-speaker" :class="speakerClass(line.speaker_id)" x-text="line.speaker_name"></span>
+                  <div class="section-badge" x-text="line.section" style="margin-top:4px"></div>
+                </div>
+                <div class="line-emotion" x-text="line.emotion"></div>
+                <div>
+                  <template x-if="editingLineOrder !== line.order">
+                    <div class="line-text" x-text="line.text"></div>
+                  </template>
+                  <template x-if="editingLineOrder === line.order">
+                    <div style="display:flex;flex-direction:column;gap:6px" @click.stop>
+                      <textarea class="line-text-edit" x-model="editBuffer.text"></textarea>
+                      <div style="display:flex;gap:6px;flex-wrap:wrap">
+                        <div class="form-group" style="flex:1">
+                          <label>感情</label>
+                          <select x-model="editBuffer.emotion" style="padding:4px 8px;font-size:12px">
+                            <option>happy</option><option>neutral</option><option>surprised</option>
+                            <option>sad</option><option>angry</option><option>thinking</option>
+                            <option>serious</option><option>excited</option>
+                          </select>
+                        </div>
+                        <div class="form-group" style="flex:1">
+                          <label>速度</label>
+                          <input type="text" x-model="editBuffer.speed" style="padding:4px 8px;font-size:12px">
+                        </div>
+                        <div class="form-group" style="flex:1">
+                          <label>ポーズ(秒)</label>
+                          <input type="text" x-model="editBuffer.pause_after_sec" style="padding:4px 8px;font-size:12px">
+                        </div>
+                      </div>
+                      <div style="display:flex;gap:6px">
+                        <button class="btn btn-primary btn-sm" @click.stop="saveLine(line.order)">保存</button>
+                        <button class="btn btn-ghost btn-sm" @click.stop="cancelEdit()">キャンセル</button>
+                      </div>
+                    </div>
+                  </template>
+                </div>
+              </div>
+            </template>
+          </div>
+        </div>
+
+        <!-- ボトム アクションバー -->
+        <div class="actions-bar" x-show="draft">
+          <button class="btn btn-success" @click="approveScript()" :disabled="approving">
+            <span x-text="approving ? '確定中...' : `✓ 承認・確定（第${activeEpisodeNumber}話）`"></span>
+          </button>
+          <button class="btn btn-ghost" @click="exportText()" :disabled="exportingText"
+                  title="行番号＋話者名＋セリフの.txtを書き出す（吹き出し作成・Illustrator流し込み用）">
+            <span x-text="exportingText ? '書き出し中…' : '📄 テキスト書き出し'"></span>
+          </button>
+          <button class="btn btn-ghost" @click="exportScript()"
+                  title="他プロジェクトへ持ち込める台本JSONを書き出す">📤 台本エクスポート</button>
+          <button class="btn btn-ghost" @click="$refs.scriptImportFile.click()"
+                  title="エクスポートした台本JSONを読み込む（この話に既に確定済み台本があれば確認の上で上書き）">📥 台本インポート</button>
+          <input type="file" x-ref="scriptImportFile" accept=".json" style="display:none"
+                 @change="importScriptFile($event)">
+          <div style="display:flex;align-items:center;gap:6px">
+            <input type="text" x-model="saveNameInput" placeholder="名前をつけて保存…"
+                   style="width:180px;padding:6px 10px;font-size:13px"
+                   @keydown.enter="saveNamedDraft()"
+                   @keydown.escape="saveNameInput=''">
+            <button class="btn btn-ghost" @click="saveNamedDraft()"
+                    :disabled="!saveNameInput.trim()">💾 保存</button>
+          </div>
+        </div>
+
+        <!-- 再生成チャット -->
+        <div class="card">
+          <h2>フィードバック再生成</h2>
+          <div class="chat-area">
+            <div class="chat-input-row">
+              <textarea x-model="feedbackText" placeholder="修正指示を入力してください。例: 「もっとテンポを上げて」「ずんだもんのセリフを面白くして」「intro部分を短くして」"></textarea>
+            </div>
+            <div>
+              <button class="btn btn-primary"
+                      :disabled="!feedbackText.trim() || generating"
+                      @click="regenerateScript()">
+                <template x-if="generating">
+                  <span class="spinner"></span>
+                </template>
+                <span x-text="generating ? '再生成中...' : '↺ 再生成'"></span>
+              </button>
+            </div>
+          </div>
+        </div>
+
+      </div>
+    </template>
+
+  </div>
+</div>
+
+<!-- 新規スタイル作成モーダル -->
+<div class="modal-overlay" x-show="showNewStyleModal" x-cloak>
+  <div class="modal-box">
+    <h3 x-text="editingStyleId ? `✏ スタイルを編集${editingBuiltin ? '（複製して保存）' : ''}` : '＋ 新規スタイルを作成'"></h3>
+    <div x-show="editingBuiltin" style="font-size:11px;color:#fbbf24;background:#2d1b00;border:1px solid #92400e;border-radius:5px;padding:8px">
+      ⚠ 組み込みスタイルは直接編集できません。変更内容は<strong>カスタムスタイルとして新規保存</strong>されます。
+    </div>
+
+    <!-- テンプレートから始める（新規作成時のみ） -->
+    <div class="modal-section" x-show="!editingStyleId && !editingBuiltin">
+      <div class="modal-section-title">テンプレートから始める <span style="color:#475569;font-weight:400;text-transform:none;letter-spacing:0">（任意）</span></div>
+      <div style="font-size:11px;color:#64748b;margin:-2px 0 2px">お手本を選ぶと構成・話者枠・プロンプトが入ります。話者にキャラを割り当てて保存してください。</div>
+      <div class="template-cards">
+        <div class="template-card" :class="{ selected: selectedTemplateId === '__blank__' }" @click="applyBlank()">
+          <div class="tc-name">空白から作成</div>
+          <div class="tc-desc">ゼロから自分で構成・話者を組み立てます。</div>
+          <div class="tc-meta">— 自由設計 —</div>
+        </div>
+        <template x-for="t in styles.filter(st => st.is_builtin)" :key="t.style_id">
+          <div class="template-card" :class="{ selected: selectedTemplateId === t.style_id }" @click="applyTemplate(t)">
+            <div class="tc-name" x-text="t.style_name"></div>
+            <div class="tc-desc" x-text="t.description"></div>
+            <div class="tc-meta">
+              <span x-text="t.content_mode === 'short' ? '⚡ショート' : '🎬長尺'"></span> ·
+              <span x-text="`👥${t.speaker_count}`"></span> ·
+              <span x-text="`📋${t.section_count}`"></span>
+            </div>
+          </div>
+        </template>
+      </div>
+    </div>
+
+    <hr class="divider" x-show="!editingStyleId && !editingBuiltin">
+
+    <!-- 基本情報 -->
+    <div class="modal-section">
+      <div class="modal-section-title">基本情報</div>
+      <div class="form-group">
+        <label>スタイル名 <span style="color:#f87171">*</span></label>
+        <input type="text" x-model="newStyle.style_name" placeholder="例：対談深掘りスタイル">
+      </div>
+      <div class="form-group">
+        <label>説明</label>
+        <input type="text" x-model="newStyle.description" placeholder="例：専門家との深掘り対談形式">
+      </div>
+      <div class="form-group">
+        <label>コンテンツモード</label>
+        <div style="display:flex;gap:8px;margin-top:2px">
+          <label style="display:flex;align-items:center;gap:6px;cursor:pointer;margin:0;background:#0f1117;border:1px solid #374151;border-radius:6px;padding:6px 12px;flex:1;transition:border-color 0.15s"
+                 :style="newStyle.content_mode==='short' ? 'border-color:#0369a1;background:#0c1a2e' : ''">
+            <input type="radio" x-model="newStyle.content_mode" value="short" style="accent-color:#38bdf8">
+            <div>
+              <div style="font-size:12px;color:#38bdf8;font-weight:600">⚡ ショート</div>
+              <div style="font-size:10px;color:#4b5563">30〜40行 / 〜60秒</div>
+            </div>
+          </label>
+          <label style="display:flex;align-items:center;gap:6px;cursor:pointer;margin:0;background:#0f1117;border:1px solid #374151;border-radius:6px;padding:6px 12px;flex:1;transition:border-color 0.15s"
+                 :style="newStyle.content_mode==='long' ? 'border-color:#6d28d9;background:#160d2e' : ''">
+            <input type="radio" x-model="newStyle.content_mode" value="long" style="accent-color:#c084fc">
+            <div>
+              <div style="font-size:12px;color:#c084fc;font-weight:600">🎬 長尺</div>
+              <div style="font-size:10px;color:#4b5563">60行〜 / 5分以上</div>
+            </div>
+          </label>
+        </div>
+      </div>
+      <!-- 行数モード: LLM任せ（推奨）or 固定指定 -->
+      <div class="form-group">
+        <label>行数の決め方</label>
+        <div style="display:flex;gap:10px">
+          <label style="display:flex;align-items:center;gap:6px;cursor:pointer;margin:0;background:#0f1117;border:1px solid #374151;border-radius:6px;padding:6px 12px;flex:1"
+                 :style="newStyle.line_count_mode!=='fixed' ? 'border-color:#22c55e;background:#0d2014' : ''">
+            <input type="radio" x-model="newStyle.line_count_mode" value="auto" style="accent-color:#22c55e">
+            <div>
+              <div style="font-size:12px;color:#4ade80;font-weight:600">🤖 LLM任せ（推奨）</div>
+              <div style="font-size:10px;color:#4b5563">内容に応じて自然な長さで完結させる</div>
+            </div>
+          </label>
+          <label style="display:flex;align-items:center;gap:6px;cursor:pointer;margin:0;background:#0f1117;border:1px solid #374151;border-radius:6px;padding:6px 12px;flex:1"
+                 :style="newStyle.line_count_mode==='fixed' ? 'border-color:#6d28d9;background:#160d2e' : ''">
+            <input type="radio" x-model="newStyle.line_count_mode" value="fixed" style="accent-color:#c084fc">
+            <div>
+              <div style="font-size:12px;color:#c084fc;font-weight:600">📏 行数を指定する</div>
+              <div style="font-size:10px;color:#4b5563">目標行数を明示的に指定（上級者向け）</div>
+            </div>
+          </label>
+        </div>
+      </div>
+      <div class="form-group" x-show="newStyle.line_count_mode === 'fixed'">
+        <label>目標行数</label>
+        <input type="number" x-model.number="newStyle.target_line_count" min="10" max="300" style="width:120px">
+        <span style="font-size:11px;color:#64748b;margin-top:2px">ショート目安:30〜40 / 長尺目安:60〜150</span>
+      </div>
+    </div>
+
+    <hr class="divider">
+
+    <!-- 話者設定 -->
+    <div class="modal-section">
+      <div class="modal-section-title">話者設定</div>
+      <div style="font-size:11px;color:#4b5563;margin-bottom:4px">※ 役割・トーン空欄時はLLMが自動判断します。</div>
+
+      <!-- キャラ未作成の警告 -->
+      <div x-show="!charas.length" class="tts-offline-hint">
+        ⚠ キャラ（登場人物）がありません。先にキャラ（scrapping-agent）で作成してください。名前・声・字幕・性格はキャラから引き継がれます。
+      </div>
+
+      <template x-for="(sp, i) in newStyle.speakers" :key="i">
+        <div class="dynamic-row">
+          <div class="fields">
+
+            <!-- キャラ選択（話者＝登場人物。名前・声・字幕・性格はキャラ本籍から解決＝二重定義しない） -->
+            <div class="form-group" x-show="charas.length">
+              <label>キャラクター（登場人物）<span style="color:#f87171">*</span></label>
+              <p style="font-size:11px;color:#64748b;margin:2px 0 6px">
+                🎭 この役を演じるキャラを選びます。<b>名前・声・字幕・性格はキャラ設定をそのまま使用</b>。
+              </p>
+              <div class="voice-select-wrap">
+                <template x-for="c in charas" :key="c.char_id">
+                  <div class="voice-option"
+                       :class="{ selected: sp.character_id === c.char_id }"
+                       @click="sp.character_id = c.char_id; sp.name = c.name">
+                    <div style="flex:1">
+                      <div style="display:flex;align-items:center;gap:6px">
+                        <span class="vname" x-text="c.name || c.char_id"></span>
+                        <span class="vrole" :class="(c.voice && c.voice.voice_id) ? 'vrole-regular' : 'vrole-guest'"
+                              x-text="(c.voice && c.voice.voice_id) ? `🔊 ${c.voice.voice_id}` : '⚠ 声未割当'"></span>
+                      </div>
+                      <div class="vdesc" x-text="c.caption ? `字幕: ${c.caption}` : (c.description || '')"></div>
+                    </div>
+                    <div x-show="sp.character_id === c.char_id" style="color:#7c3aed;font-size:14px">✓</div>
+                  </div>
+                </template>
+              </div>
+              <div x-show="sp.character_id && !(((charas.find(c => c.char_id === sp.character_id)||{}).voice)||{}).voice_id"
+                   style="font-size:11px;color:#fbbf24;margin-top:4px">
+                ⚠ このキャラは声が未割当です。TTS生成前にキャラ設定で声を割り当ててください。
+              </div>
+            </div>
+
+            <div class="row2">
+              <div class="form-group">
+                <label>役割 <span style="color:#4b5563;font-weight:400">（空白可）</span></label>
+                <input type="text" x-model="sp.role" placeholder="例：進行・ツッコミ">
+              </div>
+              <div class="form-group">
+                <label>デフォルト感情</label>
+                <select x-model="sp.default_emotion" style="width:auto">
+                  <option>happy</option><option>neutral</option><option>surprised</option>
+                  <option>sad</option><option>angry</option><option>thinking</option>
+                </select>
+              </div>
+            </div>
+            <div class="form-group">
+              <label>トーン・口調 <span style="color:#4b5563;font-weight:400">（空白可 → LLM自動判断）</span></label>
+              <input type="text" x-model="sp.tone"
+                     placeholder="空白にするとLLMが適切に設定します">
+            </div>
+          </div>
+          <button class="remove-btn" @click="newStyle.speakers.splice(i,1)" x-show="newStyle.speakers.length > 1">✕</button>
+        </div>
+      </template>
+      <button class="add-row-btn" @click="newStyle.speakers.push({name:'',voice_id:'',character_id:'',role:'',tone:'',default_emotion:'neutral'})">＋ 話者を追加</button>
+    </div>
+
+    <hr class="divider">
+
+    <!-- 構成セクション -->
+    <div class="modal-section">
+      <div class="modal-section-title">構成セクション</div>
+      <div style="font-size:11px;color:#4b5563;margin-bottom:4px">※ 説明・行数目安はどちらも空白可 → 空白の場合LLMが自律判断します。</div>
+      <template x-for="(sec, i) in newStyle.structure" :key="i">
+        <div class="dynamic-row">
+          <div class="fields">
+            <div class="row2">
+              <div class="form-group">
+                <label>ラベル（表示名）</label>
+                <input type="text" x-model="sec.label" placeholder="例：イントロ">
+              </div>
+              <div class="form-group">
+                <label>ID（英数字）</label>
+                <input type="text" x-model="sec.id" placeholder="例：intro">
+              </div>
+            </div>
+            <div class="form-group">
+              <label>内容の説明 <span style="color:#4b5563;font-weight:400">（空白可）</span></label>
+              <input type="text" x-model="sec.desc_text"
+                     placeholder="例：テーマ紹介・視聴者への問いかけ。空白にするとLLMが判断します">
+            </div>
+            <div class="form-group">
+              <label>行数目安 <span style="color:#4b5563;font-weight:400">（空白可 → LLM任せ）</span></label>
+              <div style="display:flex;align-items:center;gap:8px">
+                <input type="number" x-model.number="sec.min_lines" min="0" max="50"
+                       placeholder="最小" style="width:72px"
+                       :disabled="sec.lines_free">
+                <span style="color:#4b5563;font-size:12px">〜</span>
+                <input type="number" x-model.number="sec.max_lines" min="0" max="50"
+                       placeholder="最大" style="width:72px"
+                       :disabled="sec.lines_free">
+                <label style="display:flex;align-items:center;gap:4px;cursor:pointer;margin:0">
+                  <input type="checkbox" x-model="sec.lines_free" style="accent-color:#7c3aed">
+                  <span style="font-size:11px;color:#64748b">LLM任せ</span>
+                </label>
+              </div>
+            </div>
+          </div>
+          <button class="remove-btn" @click="newStyle.structure.splice(i,1)" x-show="newStyle.structure.length > 1">✕</button>
+        </div>
+      </template>
+      <button class="add-row-btn" @click="newStyle.structure.push({id:'',label:'',desc_text:'',min_lines:null,max_lines:null,lines_free:true})">＋ セクションを追加</button>
+    </div>
+
+    <hr class="divider">
+
+    <!-- オプション -->
+    <div class="modal-section">
+      <label style="display:flex;align-items:center;gap:8px;cursor:pointer">
+        <input type="checkbox" x-model="newStyle.is_default" style="width:14px;height:14px;accent-color:#7c3aed">
+        <span style="font-size:12px;color:#e2e8f0">デフォルトスタイルとして登録する</span>
+      </label>
+      <div style="font-size:11px;color:#4b5563">チェックを入れると、スタイル一覧で「デフォルト」バッジが表示されます</div>
+    </div>
+
+    <!-- フッター -->
+    <div class="modal-footer">
+      <button class="btn btn-ghost" @click="showNewStyleModal = false">キャンセル</button>
+      <button class="btn btn-primary" :disabled="!newStyle.style_name.trim() || savingStyle" @click="saveNewStyle()">
+        <template x-if="savingStyle"><span class="spinner"></span></template>
+        <span x-text="savingStyle ? '保存中...' : (editingStyleId && !editingBuiltin ? '✓ 更新して保存' : '✓ 作成して保存')"></span>
+      </button>
+    </div>
+  </div>
+</div>
+
+<script>
+function app() {
+  return {
+    // プロジェクト一覧
+    projects: [],
+    projectTotal: 0,
+    projectHasMore: false,
+    projectSearch: '',
+    projectChannel: 'all',
+    projectOffset: 0,
+    projectLimit: 10,
+    channels: [],
+    // 新規プロジェクト
+    newProjectTitle: '',
+    newProjectChannel: 'default',
+    newChannelMode: false,
+    creating: false,
+    // その他
+    styles: [],
+    llmProviders: [],
+    selectedProvider: '',
+    selectedModel: '',
+    currentProject: null,
+    selectedStyleId: '',
+    expandedStyleId: '',
+    styleIsSaved: false,
+    roughScript: '',
+    extraInstruction: '',
+    fileDragOver: false,
+    fileImporting: false,
+    fileImportError: '',
+    pendingJsonFile: null,
+    showJsonImportChoice: false,
+    // エピソード管理（標準・シリーズ統合）
+    episodes: [],
+    seriesGenerating: false,
+    seriesGenError: '',
+    activeEpisodeNumber: 1,
+    // 新規/編集スタイルモーダル
+    showNewStyleModal: false,
+    savingStyle: false,
+    editingStyleId: null,
+    editingBuiltin: false,
+    selectedTemplateId: '',
+    ttsVoices: [],
+    newStyle: {
+      style_name: '', description: '', target_line_count: 60, line_count_mode: 'auto', is_default: false,
+      speakers: [{ name: '', voice_id: '', character_id: '', role: '', tone: '', default_emotion: 'neutral' }],
+      structure: [
+        { id: 'intro',  label: 'イントロ', desc_text: 'テーマ紹介・視聴者への問いかけ', min_lines: 2, max_lines: 4,  lines_free: false },
+        { id: 'main',   label: '本題',     desc_text: 'メインの情報・詳細解説',         min_lines: 8, max_lines: 14, lines_free: false },
+        { id: 'outro',  label: 'アウトロ', desc_text: '締め・チャンネル登録促し',       min_lines: 1, max_lines: 2,  lines_free: false },
+      ],
+    },
+    charas: [],
+    draft: null,
+    warnings: [],
+    generating: false,
+    approving: false,
+    importingProject: false,
+    feedbackText: '',
+    editingLineOrder: null,
+    editBuffer: {},
+    modelFilter: '',
+    showPendingProviders: false,
+    refreshingModels: false,
+    exportingText: false,
+    // 名前付きドラフト
+    namedDrafts: [],
+    saveNameInput: '',
+
+    // 算出プロパティ相当
+    get currentProviderModels() {
+      const p = this.llmProviders.find(p => p.id === this.selectedProvider);
+      return p ? p.models : [];
+    },
+    get groupedProviderModels() {
+      const filter = this.modelFilter.trim().toLowerCase();
+      let models = this.currentProviderModels.filter(m =>
+        !filter || m.label.toLowerCase().includes(filter) || m.id.toLowerCase().includes(filter)
+      );
+      // 検索語が無い巨大リストは描画負荷軽減のため先頭のみ表示（検索を促す）
+      if (!filter && models.length > 40) models = models.slice(0, 40);
+      const groups = [];
+      const byLabel = {};
+      for (const m of models) {
+        const label = m.category_label || '';
+        if (!byLabel[label]) {
+          byLabel[label] = { label, models: [] };
+          groups.push(byLabel[label]);
+        }
+        byLabel[label].models.push(m);
+      }
+      return groups;
+    },
+    get selectedProviderLabel() {
+      const p = this.llmProviders.find(p => p.id === this.selectedProvider);
+      return p ? p.label : '';
+    },
+    get selectedModelLabel() {
+      for (const p of this.llmProviders) {
+        const m = p.models.find(m => m.id === this.selectedModel);
+        if (m) return m.label;
+      }
+      return this.selectedModel;
+    },
+
+    async init() {
+      await Promise.all([this.loadChannels(), this.loadStyles(), this.loadProviders()]);
+      await this.loadProjects();
+      this.$watch('selectedModel', (val) => { if (val) localStorage.setItem('llm_last_model', val); });
+    },
+
+    async loadChannels() {
+      const r = await fetch('/projects/channels').then(r => r.json()).catch(() => ({ channels: ['default'] }));
+      this.channels = r.channels || ['default'];
+      if (!this.newChannelMode) {
+        this.newProjectChannel = this.effectiveChannel();
+      }
+    },
+
+    async loadProjects(append = false) {
+      const params = new URLSearchParams({
+        limit: this.projectLimit,
+        offset: this.projectOffset,
+      });
+      if (this.projectSearch.trim()) params.set('search', this.projectSearch.trim());
+      if (this.projectChannel && this.projectChannel !== 'all') params.set('channel', this.projectChannel);
+
+      const r = await fetch(`/projects?${params}`).then(r => r.json()).catch(() => ({ projects: [], total: 0, has_more: false }));
+      if (append) {
+        this.projects = [...this.projects, ...(r.projects || [])];
+      } else {
+        this.projects = r.projects || [];
+      }
+      this.projectTotal = r.total ?? 0;
+      this.projectHasMore = r.has_more ?? false;
+    },
+
+    async deleteProject(pj) {
+      if (!confirm(`プロジェクト「${pj.title || pj.id}」(${pj.id}) を完全に削除しますか？\n台本・素材・音声・編集情報を含む全データが消え、元に戻せません。`)) return;
+      const r = await fetch(`/projects/${pj.id}`, { method: 'DELETE' });
+      const data = await r.json().catch(() => ({}));
+      if (!r.ok) { alert('削除エラー: ' + (data.detail || r.status)); return; }
+      if (this.currentProject?.id === pj.id) {
+        this.currentProject = null;
+        this.draft = null;
+      }
+      // チャンネルは「プロジェクトの集計値」なので、削除でゼロ件になったチャンネルは消える。
+      // channels を取り直してドロップダウンの幽霊チャンネルを除去する。
+      await this.loadChannels();
+      if (this.projectChannel !== 'all' && !this.channels.includes(this.projectChannel)) {
+        this.projectChannel = 'all';
+      }
+      await this.loadProjects(false);
+    },
+
+    async renameChannel(ch) {
+      const next = prompt(`チャンネル「${ch}」の新しい名前を入力してください。\n（このチャンネルに属する全プロジェクトに反映されます）`, ch);
+      if (next === null) return;
+      const newName = next.trim();
+      if (!newName || newName === ch) return;
+      const r = await fetch('/projects/channels/rename', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ old: ch, new: newName }),
+      });
+      const data = await r.json().catch(() => ({}));
+      if (!r.ok) { alert('名称変更エラー: ' + (data.detail || r.status)); return; }
+      await this.loadChannels();
+      this.projectChannel = (data.channels || []).includes(newName) ? newName : 'all';
+      await this.resetAndLoadProjects();
+    },
+
+    async deleteChannel(ch) {
+      if (ch === 'default') return;
+      if (!confirm(`チャンネル「${ch}」を削除しますか？\n属するプロジェクトは default チャンネルへ移動します（台本・素材・音声などのデータは消えません）。`)) return;
+      const r = await fetch(`/projects/channels/${encodeURIComponent(ch)}`, { method: 'DELETE' });
+      const data = await r.json().catch(() => ({}));
+      if (!r.ok) { alert('削除エラー: ' + (data.detail || r.status)); return; }
+      await this.loadChannels();
+      this.projectChannel = 'all';
+      await this.resetAndLoadProjects();
+    },
+
+    async exportProject(pj) {
+      try {
+        const r = await fetch(`/projects/${pj.id}/export`);
+        if (!r.ok) { const d = await r.json().catch(() => ({})); alert('エクスポートに失敗しました: ' + (d.detail || r.status)); return; }
+        const blob = await r.blob();
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url; a.download = `${pj.id}.project.zip`; a.click();
+        URL.revokeObjectURL(url);
+      } catch (e) {
+        alert('エクスポートに失敗しました: ' + e);
+      }
+    },
+
+    async importProjectFile(event) {
+      const file = event.target.files[0];
+      event.target.value = '';
+      if (!file) return;
+      this.importingProject = true;
+      const doImport = async (newProjectId) => {
+        const fd = new FormData();
+        fd.append('file', file);
+        if (newProjectId) fd.append('new_project_id', newProjectId);
+        const r = await fetch(`/projects/import`, { method: 'POST', body: fd });
+        const data = await r.json();
+        if (r.status === 409) {
+          const proposed = prompt(`${data.detail}\n\n別の project_id で取り込む場合は入力してください（キャンセルで中止）`, '');
+          if (proposed && proposed.trim()) return doImport(proposed.trim());
+          return;
+        }
+        if (!r.ok) { alert('インポートに失敗しました: ' + (data.detail || JSON.stringify(data))); return; }
+        alert(`プロジェクト「${data.project_id}」をインポートしました`);
+        await this.loadProjects(false);
+      };
+      try {
+        await doImport(null);
+      } finally {
+        this.importingProject = false;
+      }
+    },
+
+    resetAndLoadProjects() {
+      this.projectOffset = 0;
+      this.loadProjects(false);
+      // フィルターと新規作成フォームのチャンネルを連動（新規入力モード中は変えない）
+      if (!this.newChannelMode) {
+        this.newProjectChannel = this.effectiveChannel();
+      }
+    },
+
+    effectiveChannel() {
+      // フィルターで「すべて」が選ばれている場合は channels[0] か 'default' にフォールバック
+      if (this.projectChannel && this.projectChannel !== 'all') return this.projectChannel;
+      return this.channels[0] || 'default';
+    },
+
+    async loadMoreProjects() {
+      this.projectOffset += this.projectLimit;
+      await this.loadProjects(true);
+    },
+
+    async createProject() {
+      if (!this.newProjectTitle.trim()) return;
+      this.creating = true;
+      try {
+        const r = await fetch('/projects/new', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            title: this.newProjectTitle.trim(),
+            channel: this.newProjectChannel.trim() || 'default',
+          }),
+        });
+        const data = await r.json();
+        if (!r.ok) { alert('作成エラー: ' + (data.detail || JSON.stringify(data))); return; }
+        this.newProjectTitle = '';
+        this.newChannelMode = false;
+        // チャンネルリスト更新 → プロジェクト一覧更新 → 新規を選択
+        await this.loadChannels();
+        // 作成したプロジェクトのチャンネルにフィルターを合わせる
+        this.projectChannel = data.project.channel || 'default';
+        this.newProjectChannel = this.projectChannel;
+        this.resetAndLoadProjects();
+        await this.selectProject(data.project);
+      } finally {
+        this.creating = false;
+      }
+    },
+
+    async loadStyles() {
+      const r = await fetch('/styles', { cache: 'no-store' }).then(r => r.json()).catch(() => ({ styles: [] }));
+      this.styles = r.styles || [];
+      // 日常リストはカスタムのみ表示するため、自動選択もカスタム優先（組み込みはテンプレ専用）
+      if (!this.selectedStyleId) {
+        const firstCustom = this.styles.find(s => !s.is_builtin);
+        if (firstCustom) this.selectedStyleId = firstCustom.style_id;
+      }
+    },
+
+    toggleStyleDetail(styleId) {
+      this.expandedStyleId = this.expandedStyleId === styleId ? '' : styleId;
+    },
+
+    _defaultNewStyle() {
+      return {
+        style_name: '', description: '', target_line_count: 60, line_count_mode: 'auto',
+        content_mode: 'long', is_default: false,
+        speakers: [{ name: '', voice_id: '', character_id: '', role: '', tone: '', default_emotion: 'neutral' }],
+        structure: [
+          { id: 'intro',  label: 'イントロ', desc_text: 'テーマ紹介・視聴者への問いかけ', min_lines: 2, max_lines: 4,  lines_free: false },
+          { id: 'main',   label: '本題',     desc_text: 'メインの情報・詳細解説',         min_lines: 8, max_lines: 14, lines_free: false },
+          { id: 'outro',  label: 'アウトロ', desc_text: '締め・チャンネル登録促し',       min_lines: 1, max_lines: 2,  lines_free: false },
+        ],
+      };
+    },
+
+    async loadTtsVoices() {
+      try {
+        const res = await fetch('/tts-voices');
+        const data = await res.json();
+        this.ttsVoices = data.profiles || [];
+      } catch(e) {
+        this.ttsVoices = [];
+      }
+    },
+
+    // キャラ（登場人物）一覧。話者ピッカーの選択肢。読み取り専用・ディスク直読みエンドポイント。
+    async loadCharas() {
+      try {
+        const res = await fetch('/characters');
+        const data = await res.json();
+        this.charas = data.characters || [];
+      } catch(e) {
+        this.charas = [];
+      }
+    },
+
+    openNewStyleModal() {
+      this.editingStyleId = null;
+      this.editingBuiltin = false;
+      this.selectedTemplateId = '';
+      this.newStyle = this._defaultNewStyle();
+      this.showNewStyleModal = true;
+      this.loadCharas();  // 話者ピッカーはキャラから構成
+    },
+
+    openEditStyleModal(s) {
+      this.editingStyleId = s.is_builtin ? null : s.style_id;
+      this.editingBuiltin = s.is_builtin;
+      this.selectedTemplateId = '';
+      // 既存データをフォームに注入（character_id を引き継ぎ。旧スタイルは空）
+      this.newStyle = this._styleToForm(s, s.is_builtin ? s.style_name + '（カスタム）' : s.style_name);
+      this.newStyle.is_default = s.is_default;
+      this.showNewStyleModal = true;
+      this.loadCharas();  // 話者ピッカーはキャラから構成
+    },
+
+    // テンプレート（組み込みスタイル）を雛形に新規スタイルを作成する
+    applyTemplate(t) {
+      this.editingStyleId = null;
+      this.editingBuiltin = false;
+      this.selectedTemplateId = t.style_id;
+      this.newStyle = this._styleToForm(t, t.style_name);
+    },
+
+    // 空白から作成（テンプレ未使用）
+    applyBlank() {
+      this.editingStyleId = null;
+      this.editingBuiltin = false;
+      this.selectedTemplateId = '__blank__';
+      this.newStyle = this._defaultNewStyle();
+    },
+
+    // スタイル定義をモーダルのフォーム形式へ変換（編集・テンプレ複製で共用）
+    _styleToForm(s, name) {
+      return {
+        style_name: name,
+        description: s.description,
+        target_line_count: s.target_line_count,
+        line_count_mode: s.line_count_mode || 'auto',
+        content_mode: s.content_mode || 'long',
+        is_default: false,
+        speakers: s.speakers.map(sp => ({
+          name: sp.name, voice_id: sp.voice_id || '', character_id: sp.character_id || '',
+          role: sp.role, tone: sp.tone || '', default_emotion: sp.default_emotion || 'neutral'
+        })),
+        structure: s.structure.map(sec => ({
+          id: sec.id, label: sec.label,
+          desc_text: sec.description || '',
+          min_lines: null, max_lines: null, lines_free: true,
+        })),
+      };
+    },
+
+    // 構成セクションのフォームフィールドを description 文字列に変換
+    _buildSectionDescription(sec) {
+      const parts = [];
+      if (sec.desc_text && sec.desc_text.trim()) parts.push(sec.desc_text.trim());
+      if (!sec.lines_free && (sec.min_lines || sec.max_lines)) {
+        const mn = sec.min_lines || '';
+        const mx = sec.max_lines || '';
+        if (mn && mx) parts.push(`（${mn}〜${mx}行）`);
+        else if (mn) parts.push(`（${mn}行以上）`);
+        else if (mx) parts.push(`（〜${mx}行）`);
+      }
+      return parts.join('');
+    },
+
+    async saveNewStyle() {
+      if (!this.newStyle.style_name.trim()) return;
+      this.savingStyle = true;
+      try {
+        const payload = {
+          ...this.newStyle,
+          structure: this.newStyle.structure.map(sec => ({
+            id: sec.id,
+            label: sec.label,
+            description: this._buildSectionDescription(sec),
+          })),
+        };
+
+        let url = '/styles';
+        let method = 'POST';
+
+        if (this.editingStyleId && !this.editingBuiltin) {
+          // カスタムスタイルの更新
+          url = `/styles/${this.editingStyleId}`;
+          method = 'PUT';
+        } else if (this.editingBuiltin) {
+          // 組み込みスタイルは新規作成（複製）
+          method = 'POST';
+        }
+
+        const r = await fetch(url, {
+          method,
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(payload),
+        });
+        const data = await r.json();
+        if (!r.ok) { alert('エラー: ' + (data.detail || JSON.stringify(data))); return; }
+        this.showNewStyleModal = false;
+        await this.loadStyles();
+        this.selectedStyleId = data.style.style_id;
+        if (this.currentProject) {
+          await fetch(`/projects/${this.currentProject.id}/style`, {
+            method: 'PATCH',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ style_id: data.style.style_id }),
+          });
+          this.styleIsSaved = true;
+        }
+      } finally {
+        this.savingStyle = false;
+      }
+    },
+
+    async toggleDefault(style) {
+      const newVal = !style.is_default;
+      const r = await fetch(`/styles/${style.style_id}/default`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ is_default: newVal }),
+      }).catch(() => null);
+      if (r && r.ok) {
+        style.is_default = newVal;
+      }
+    },
+
+    async deleteStyle(style) {
+      if (!confirm(`「${style.style_name}」を削除しますか？`)) return;
+      const r = await fetch(`/styles/${style.style_id}`, { method: 'DELETE' }).catch(() => null);
+      if (r && r.ok) {
+        if (this.selectedStyleId === style.style_id) this.selectedStyleId = '';
+        await this.loadStyles();
+      } else {
+        alert('削除できません（組み込みスタイルは削除不可）');
+      }
+    },
+
+    async exportStyle(styleId) {
+      try {
+        const r = await fetch(`/styles/${styleId}/export`);
+        const data = await r.json();
+        if (!r.ok) { alert('エクスポートに失敗しました: ' + (data.detail || JSON.stringify(data))); return; }
+        const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json;charset=utf-8' });
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url; a.download = `${styleId}.style.json`; a.click();
+        URL.revokeObjectURL(url);
+      } catch (e) {
+        alert('エクスポートに失敗しました: ' + e);
+      }
+    },
+
+    async importStyleFile(event) {
+      const file = event.target.files[0];
+      event.target.value = '';
+      if (!file) return;
+      let parsed;
+      try {
+        parsed = JSON.parse(await file.text());
+      } catch (e) {
+        alert('JSONとして読み込めませんでした: ' + e);
+        return;
+      }
+      const r = await fetch(`/styles/import`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ style: parsed }),
+      });
+      const data = await r.json();
+      if (!r.ok) { alert('インポートに失敗しました: ' + (data.detail || JSON.stringify(data))); return; }
+      alert(`スタイル「${data.style.style_name}」を取り込みました（ID: ${data.style.style_id}）`);
+      await this.loadStyles();
+    },
+
+    async selectStyle(styleId) {
+      this.selectedStyleId = styleId;
+      this.styleIsSaved = false;
+      if (!this.currentProject) return;
+      const r = await fetch(`/projects/${this.currentProject.id}/style`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ style_id: styleId }),
+      }).catch(() => null);
+      if (r && r.ok) {
+        this.styleIsSaved = true;
+      }
+    },
+
+    async loadProviders() {
+      const r = await fetch('/llm-providers').then(r => r.json()).catch(() => ({ providers: [], default_model: '', default_provider: '' }));
+      this.llmProviders = r.providers || [];
+
+      // 前回選択したプロバイダー/モデルを復元（無ければサーバーのデフォルト）
+      const lastProvider = localStorage.getItem('llm_last_provider');
+      const lastModel = localStorage.getItem('llm_last_model');
+      const lastProviderObj = lastProvider && this.llmProviders.find(p => p.id === lastProvider && p.available);
+      const lastModelExists = lastProviderObj && lastModel && lastProviderObj.models.some(m => m.id === lastModel);
+
+      if (lastProviderObj) {
+        this.selectProvider(lastProvider);
+        if (lastModelExists) this.selectedModel = lastModel;
+      } else {
+        const defProvider = r.default_provider || (this.llmProviders.find(p => p.available)?.id || '');
+        this.selectProvider(defProvider);
+        if (r.default_model) this.selectedModel = r.default_model;
+      }
+    },
+
+    selectProvider(providerId) {
+      this.selectedProvider = providerId;
+      this.modelFilter = '';
+      localStorage.setItem('llm_last_provider', providerId);
+      // プロバイダーが切り替わったら、そのプロバイダーの最初のモデルを自動選択
+      const p = this.llmProviders.find(p => p.id === providerId);
+      if (p && p.models.length > 0) {
+        // 現在選択中のモデルがこのプロバイダーに存在しなければ先頭モデルに切り替え
+        const exists = p.models.some(m => m.id === this.selectedModel);
+        if (!exists) this.selectedModel = p.models[0].id;
+      }
+    },
+
+    async selectProject(pj) {
+      this.currentProject = pj;
+      this.draft = null;
+      this.warnings = [];
+      this.styleIsSaved = false;
+      this.episodes = [];
+      this.activeEpisodeNumber = 1;
+      this.namedDrafts = [];
+      this.saveNameInput = '';
+
+      // プロジェクトに保存済みのスタイルを復元
+      const sr = await fetch(`/projects/${pj.id}/style`).then(r => r.json()).catch(() => null);
+      if (sr && sr.style_id) {
+        this.selectedStyleId = sr.style_id;
+        this.styleIsSaved = true;
+      }
+
+      // エピソード一覧を読み込み、ep01のdraftを表示
+      await this.loadEpisodes();
+      if (this.episodes.length > 0) {
+        await this.loadEpisode(this.episodes[0].number);
+      }
+      await this.loadNamedDrafts();
+    },
+
+    selectedStyleObj() {
+      return this.styles.find(s => s.style_id === this.selectedStyleId) || null;
+    },
+    isSeriesStyle() {
+      const s = this.selectedStyleObj();
+      return !!(s && s.series_mode);
+    },
+
+    // ─── ラフ台本ファイル取込み ───────────────────────────────────
+    handleFileDrop(ev) {
+      const files = ev.dataTransfer?.files;
+      if (files && files.length) this.importRoughScriptFile(files[0]);
+    },
+    handleFileInput(ev) {
+      const files = ev.target.files;
+      if (files && files.length) this.importRoughScriptFile(files[0]);
+      ev.target.value = '';
+    },
+    async importRoughScriptFile(file) {
+      this.fileImportError = '';
+      const name = (file.name || '').toLowerCase();
+
+      // テキスト系はクライアント側でそのまま読み込む
+      if (name.endsWith('.md') || name.endsWith('.txt')) {
+        const text = await file.text();
+        this.roughScript = text;
+        return;
+      }
+
+      // JSON は中身を見て、台本（指示情報含む）かどうか確認する
+      if (name.endsWith('.json')) {
+        const text = await file.text();
+        try {
+          const data = JSON.parse(text);
+          if (data && Array.isArray(data.lines) && data.lines.length) {
+            this.pendingJsonFile = file;
+            this.showJsonImportChoice = true;
+            return;
+          }
+        } catch (e) { /* パース失敗時はサーバーに任せる */ }
+        this.roughScript = text;
+        return;
+      }
+
+      // PDF / Word はサーバー側で抽出
+      if (name.endsWith('.pdf') || name.endsWith('.docx')) {
+        await this.extractTextOnServer(file);
+        return;
+      }
+
+      this.fileImportError = '未対応のファイル形式です（.md/.txt/.pdf/.docx/.json に対応）';
+    },
+    async confirmJsonImport(extractTextOnly) {
+      const file = this.pendingJsonFile;
+      this.showJsonImportChoice = false;
+      this.pendingJsonFile = null;
+      if (!file) return;
+      if (extractTextOnly) {
+        await this.extractTextOnServer(file);
+      }
+    },
+    async extractTextOnServer(file) {
+      this.fileImporting = true;
+      this.fileImportError = '';
+      try {
+        const fd = new FormData();
+        fd.append('file', file);
+        const r = await fetch('/extract-text', { method: 'POST', body: fd });
+        const data = await r.json();
+        if (!r.ok) { this.fileImportError = data.detail || 'ファイルの読込に失敗しました'; return; }
+        this.roughScript = data.text || '';
+      } catch (e) {
+        this.fileImportError = 'ファイルの読込に失敗しました: ' + e;
+      } finally {
+        this.fileImporting = false;
+      }
+    },
+
+    async generateSeriesScript() {
+      if (!this.currentProject || !this.selectedStyleId) return;
+      this.generating = true;
+      this.seriesGenerating = true;
+      this.seriesGenError = '';
+      this.warnings = [];
+      try {
+        const body = {
+          style_id: this.selectedStyleId,
+          llm_model: this.selectedModel || null,
+          rough_script: this.roughScript || null,
+          extra_instruction: this.extraInstruction || null,
+        };
+        const r = await fetch(`/projects/${this.currentProject.id}/generate-series`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(body),
+        });
+        const data = await r.json();
+        if (!r.ok) { this.seriesGenError = data.detail || JSON.stringify(data); alert('エラー: ' + this.seriesGenError); return; }
+        await this.loadEpisodes();
+        if (this.episodes.length > 0) {
+          await this.loadEpisode(this.episodes[0].number);
+        }
+        await this.loadProjects();
+      } catch (e) {
+        this.seriesGenError = String(e);
+        alert('エラー: ' + this.seriesGenError);
+      } finally {
+        this.generating = false;
+        this.seriesGenerating = false;
+      }
+    },
+
+    async loadEpisodes() {
+      if (!this.currentProject) { this.episodes = []; return; }
+      try {
+        const r = await fetch(`/projects/${this.currentProject.id}/episodes`);
+        if (!r.ok) { this.episodes = []; return; }
+        const data = await r.json();
+        this.episodes = data.episodes || [];
+      } catch (e) {
+        this.episodes = [];
+      }
+    },
+
+    async loadEpisode(episodeNumber) {
+      if (!this.currentProject) return;
+      const r = await fetch(`/projects/${this.currentProject.id}/episodes/${episodeNumber}/script?draft=true`);
+      if (!r.ok) { this.draft = null; return; }
+      this.draft = await r.json();
+      this.activeEpisodeNumber = episodeNumber;
+      this.warnings = [];
+    },
+
+    async generateScript() {
+      if (!this.currentProject || !this.selectedStyleId) return;
+      this.generating = true;
+      this.warnings = [];
+      try {
+        const body = {
+          style_id: this.selectedStyleId,
+          llm_model: this.selectedModel || null,
+          rough_script: this.roughScript || null,
+          extra_instruction: this.extraInstruction || null,
+          episode_number: this.activeEpisodeNumber || 1,
+        };
+        const r = await fetch(`/projects/${this.currentProject.id}/generate`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(body),
+        });
+        const data = await r.json();
+        if (!r.ok) { alert('エラー: ' + (data.detail || JSON.stringify(data))); return; }
+        this.draft = data.script;
+        this.warnings = data.warnings || [];
+        await this.loadEpisodes();
+        await this.loadProjects();
+      } finally {
+        this.generating = false;
+      }
+    },
+
+    async regenerateScript() {
+      if (!this.currentProject || !this.feedbackText.trim()) return;
+      this.generating = true;
+      this.warnings = [];
+      try {
+        const r = await fetch(`/projects/${this.currentProject.id}/regenerate`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            feedback: this.feedbackText,
+            llm_model: this.selectedModel || null,
+            episode_number: this.activeEpisodeNumber || 1,
+          }),
+        });
+        const data = await r.json();
+        if (!r.ok) { alert('エラー: ' + (data.detail || JSON.stringify(data))); return; }
+        this.draft = data.script;
+        this.warnings = data.warnings || [];
+        this.feedbackText = '';
+        await this.loadEpisodes();
+        await this.loadProjects();
+      } finally {
+        this.generating = false;
+      }
+    },
+
+    async approveScript() {
+      if (!this.currentProject) return;
+      const ep = this.activeEpisodeNumber || 1;
+      if (!confirm(`第${ep}話を承認してscript.jsonとして確定しますか？`)) return;
+      this.approving = true;
+      try {
+        const r = await fetch(`/projects/${this.currentProject.id}/approve?episode_number=${ep}`, { method: 'POST' });
+        const data = await r.json();
+        if (!r.ok) { alert('エラー: ' + (data.detail || JSON.stringify(data))); return; }
+        alert(`第${ep}話 承認完了！\n${data.script_path}`);
+        await this.loadEpisodes();
+        await this.loadProjects();
+      } finally {
+        this.approving = false;
+      }
+    },
+
+    async refreshModels() {
+      this.refreshingModels = true;
+      try {
+        const r = await fetch('/llm-models/refresh', { method: 'POST' });
+        const data = await r.json();
+        if (!r.ok) { alert('モデル更新に失敗しました: ' + (data.detail || JSON.stringify(data))); return; }
+        await this.loadProviders();
+        alert(`無料モデル一覧を更新しました（${data.count}件）`);
+      } catch (e) {
+        alert('モデル更新に失敗しました: ' + e);
+      } finally {
+        this.refreshingModels = false;
+      }
+    },
+
+    async exportText() {
+      if (!this.currentProject) return;
+      if (!this.draft || !(this.draft.lines || []).length) { alert('書き出す台本がありません'); return; }
+      this.exportingText = true;
+      try {
+        const r = await fetch(`/projects/${this.currentProject.id}/export-text`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ script: this.draft, episode_number: this.activeEpisodeNumber }),
+        });
+        const data = await r.json();
+        if (!r.ok) { alert('書き出しに失敗しました: ' + (data.detail || JSON.stringify(data))); return; }
+        // ブラウザにダウンロード
+        const blob = new Blob([data.text], { type: 'text/plain;charset=utf-8' });
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url; a.download = data.filename; a.click();
+        URL.revokeObjectURL(url);
+        if (data.saved_path) {
+          alert(`保存しました：episodes/ep${String(this.activeEpisodeNumber).padStart(2,'0')}/script_lines.txt\n（同時に.txtをダウンロードしました）`);
+        }
+      } catch (e) {
+        alert('書き出しに失敗しました: ' + e);
+      } finally {
+        this.exportingText = false;
+      }
+    },
+
+    async loadNamedDrafts() {
+      if (!this.currentProject) { this.namedDrafts = []; return; }
+      try {
+        const r = await fetch(`/projects/${this.currentProject.id}/drafts`);
+        if (!r.ok) { this.namedDrafts = []; return; }
+        const data = await r.json();
+        this.namedDrafts = data.drafts || [];
+      } catch (e) {
+        this.namedDrafts = [];
+      }
+    },
+
+    async saveNamedDraft() {
+      if (!this.currentProject || !this.saveNameInput.trim()) return;
+      if (!this.draft) { alert('保存するドラフトがありません'); return; }
+      const r = await fetch(`/projects/${this.currentProject.id}/drafts`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name: this.saveNameInput.trim(), script: this.draft }),
+      });
+      const data = await r.json();
+      if (!r.ok) { alert('保存エラー: ' + (data.detail || JSON.stringify(data))); return; }
+      this.saveNameInput = '';
+      await this.loadNamedDrafts();
+    },
+
+    async exportScript() {
+      if (!this.currentProject) return;
+      const ep = this.activeEpisodeNumber || 1;
+      try {
+        const r = await fetch(`/projects/${this.currentProject.id}/episodes/${ep}/export`);
+        const data = await r.json();
+        if (!r.ok) { alert('エクスポートに失敗しました: ' + (data.detail || JSON.stringify(data))); return; }
+        const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json;charset=utf-8' });
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url; a.download = `${this.currentProject.id}_ep${String(ep).padStart(2,'0')}_script.json`; a.click();
+        URL.revokeObjectURL(url);
+      } catch (e) {
+        alert('エクスポートに失敗しました: ' + e);
+      }
+    },
+
+    async importScriptFile(event) {
+      const file = event.target.files[0];
+      event.target.value = '';
+      if (!file || !this.currentProject) return;
+      let parsed;
+      try {
+        parsed = JSON.parse(await file.text());
+      } catch (e) {
+        alert('JSONとして読み込めませんでした: ' + e);
+        return;
+      }
+      const ep = this.activeEpisodeNumber || 1;
+      const doImport = async (force) => {
+        const r = await fetch(
+          `/projects/${this.currentProject.id}/episodes/${ep}/import${force ? '?force=true' : ''}`,
+          { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ script: parsed }) },
+        );
+        const data = await r.json();
+        if (r.status === 409 && !force) {
+          if (confirm(`${data.detail}\n\n上書きしますか？`)) return doImport(true);
+          return;
+        }
+        if (!r.ok) { alert('インポートに失敗しました: ' + (data.detail || JSON.stringify(data))); return; }
+        alert(`第${ep}話に台本をインポートしました（${data.line_count}行）`);
+        await this.loadEpisode(ep);
+        await this.loadEpisodes();
+      };
+      await doImport(false);
+    },
+
+    async loadNamedDraft(name) {
+      if (!this.currentProject) return;
+      const r = await fetch(`/projects/${this.currentProject.id}/drafts/${encodeURIComponent(name)}`);
+      if (!r.ok) { alert('読み込みエラー'); return; }
+      this.draft = await r.json();
+      this.warnings = [];
+      this.activeEpisodeNumber = null;
+    },
+
+    async deleteNamedDraft(name) {
+      if (!confirm(`「${name}」を削除しますか？`)) return;
+      const r = await fetch(`/projects/${this.currentProject.id}/drafts/${encodeURIComponent(name)}`, { method: 'DELETE' });
+      if (!r.ok) { alert('削除エラー'); return; }
+      await this.loadNamedDrafts();
+    },
+
+    toggleEdit(line) {
+      if (this.editingLineOrder === line.order) {
+        this.cancelEdit();
+      } else {
+        this.editingLineOrder = line.order;
+        this.editBuffer = {
+          text: line.text,
+          emotion: line.emotion,
+          speed: String(line.speed),
+          pause_after_sec: String(line.pause_after_sec),
+        };
+      }
+    },
+
+    cancelEdit() {
+      this.editingLineOrder = null;
+      this.editBuffer = {};
+    },
+
+    async saveLine(order) {
+      if (!this.currentProject) return;
+      const ep = this.activeEpisodeNumber || 1;
+      const r = await fetch(`/projects/${this.currentProject.id}/script/line/${order}?episode=${ep}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          text: this.editBuffer.text,
+          emotion: this.editBuffer.emotion,
+          speed: parseFloat(this.editBuffer.speed) || 1.0,
+          pause_after_sec: parseFloat(this.editBuffer.pause_after_sec) || 0.4,
+        }),
+      });
+      const data = await r.json();
+      if (!r.ok) { alert('保存エラー: ' + (data.detail || JSON.stringify(data))); return; }
+      // ローカルのドラフトも更新
+      const line = this.draft.lines.find(l => l.order === order);
+      if (line) Object.assign(line, data.updated_line);
+      this.cancelEdit();
+    },
+
+    speakerClass(speaker_id) {
+      if (speaker_id === 'speaker_a') return 'speaker-a';
+      if (speaker_id === 'speaker_b') return 'speaker-b';
+      if (speaker_id === 'speaker_guest') return 'speaker-guest';
+      return 'speaker-default';
+    },
+
+    statusClass(status) {
+      if (status === 'done') return 'status-done';
+      if (status === 'pending') return 'status-pending';
+      if (status === 'running') return 'status-running';
+      if (status === 'error') return 'status-error';
+      return '';
+    },
+
+    formatDuration(sec) {
+      if (!sec) return '-';
+      const m = Math.floor(sec / 60);
+      const s = sec % 60;
+      return `${m}:${String(s).padStart(2, '0')}`;
+    },
+  };
+}
+</script>
+</body>
+</html>

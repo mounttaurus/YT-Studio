@@ -1,0 +1,26 @@
+services:
+  imagegen-agent:
+    build: .
+    ports:
+      - "8188:8188"
+    volumes:
+      - ./models/checkpoints:/comfyui/models/checkpoints
+      - ./models/vae:/comfyui/models/vae
+      - ./models/loras:/comfyui/models/loras
+      - ./models/controlnet:/comfyui/models/controlnet
+      - ./output:/comfyui/output
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+    networks:
+      - youtube-auto-net
+    restart: unless-stopped
+
+networks:
+  youtube-auto-net:
+    external: true
+    name: youtube-auto-net

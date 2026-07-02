@@ -1,0 +1,39 @@
+{
+  "style_id": "banter_duo_long",
+  "style_name": "茶番劇風二人掛け合い（長尺）",
+  "description": "テンポよい二人掛け合いスタイルで、入力情報のすべてのトピックを深く掘り下げる長時間動画向け。8〜12分を想定。",
+  "speakers": [
+    {
+      "id": "speaker_a",
+      "name": "ずんだもん",
+      "voice_id": "zundamon",
+      "role": "ツッコミ・進行",
+      "tone": "明るい・好奇心旺盛・語尾は「なのだ」「のだ」",
+      "default_emotion": "happy"
+    },
+    {
+      "id": "speaker_b",
+      "name": "四国めたん",
+      "voice_id": "metan",
+      "role": "ボケ・解説",
+      "tone": "落ち着き・少しズレた発言・丁寧語・知識豊富",
+      "default_emotion": "neutral"
+    }
+  ],
+  "structure": [
+    { "id": "intro",       "label": "イントロ",       "description": "テーマ全体の紹介・視聴者への問いかけ・今回扱うトピック予告（3〜5行）" },
+    { "id": "background",  "label": "背景・前提",     "description": "テーマを理解するために必要な背景知識・経緯を丁寧に解説（5〜8行）" },
+    { "id": "main_topic_1","label": "本題①",         "description": "入力情報の前半トピックを詳しく掘り下げる（12〜16行）" },
+    { "id": "main_topic_2","label": "本題②",         "description": "入力情報の後半トピックを詳しく掘り下げる（12〜16行）" },
+    { "id": "deep_dive",   "label": "深掘り解説",     "description": "数字・事例・専門情報を噛み砕いて詳細解説（10〜14行）" },
+    { "id": "discussion",  "label": "意見交換・考察", "description": "感想・疑問・独自視点・反論で盛り上げる（12〜16行）" },
+    { "id": "impact",      "label": "影響・展望",     "description": "今後どうなるか・視聴者の生活への影響・予測（6〜10行）" },
+    { "id": "summary",     "label": "まとめ",         "description": "全トピックの要点整理・視聴者へのメッセージ（4〜6行）" },
+    { "id": "outro",       "label": "アウトロ",       "description": "締め・チャンネル登録・次回予告（2〜3行）" }
+  ],
+  "content_mode": "long",
+  "target_line_count": 90,
+  "balance_ratio": { "speaker_a": 0.5, "speaker_b": 0.5 },
+  "emotions_allowed": ["happy", "neutral", "surprised", "sad", "angry", "thinking", "serious", "excited"],
+  "prompt_template": "あなたはYouTube長時間動画の脚本ライターです。\n以下の情報をもとに、「{style_name}」スタイルの台本を作成してください。\n\n## キャラクター設定\n{speakers_description}\n\n## 構成\n{structure_description}\n\n## 入力情報\n{input_content}\n\n## 出力形式\n各セリフを以下の形式で出力してください：\n[SECTION:セクションID] [SPEAKER:話者ID] [EMOTION:感情] セリフ内容\n\n例：\n[SECTION:intro] [SPEAKER:speaker_a] [EMOTION:happy] ねえねえ、今日はすごい情報が盛りだくさんなのだ！\n[SECTION:intro] [SPEAKER:speaker_b] [EMOTION:neutral] そうね。今日は時間をかけてじっくり解説していきましょう。\n\n## 重要な注意事項\n- 合計{target_line_count}行前後になるようにしてください（これは長時間動画です。短くしてはいけません）\n- 入力情報に含まれるすべてのトピック・事実・数字を必ず台本に反映してください\n- 情報を省略・要約・圧縮しないでください。各トピックを十分に展開してください\n- 各セクションは構成の説明にある行数を守ってください\n- 話者の比率はほぼ均等にしてください\n- キャラクターのトーンを忠実に守ってください\n- 視聴者が飽きないよう、適度にユーモアや驚きの反応を入れてください"
+}

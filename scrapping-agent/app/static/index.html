@@ -1,0 +1,28 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8">
+  <title>scrapping-agent</title>
+  <style>
+    body { font-family: system-ui, sans-serif; background: #18181b; color: #e4e4e7; display: grid; place-items: center; min-height: 100vh; margin: 0; }
+    .card { background: #27272a; border: 1px solid #3f3f46; border-radius: 12px; padding: 32px 40px; max-width: 520px; }
+    h1 { font-size: 20px; margin: 0 0 12px; }
+    p { font-size: 14px; color: #a1a1aa; line-height: 1.7; }
+    code { background: #18181b; padding: 2px 6px; border-radius: 4px; font-size: 13px; }
+    .ok { color: #4ade80; }
+  </style>
+</head>
+<body>
+  <div class="card">
+    <h1>📦 scrapping-agent <span class="ok" id="status">…</span></h1>
+    <p>映像素材の収集・管理コンテナ（port 8003）。<br>
+       操作UIは director-agent（<a href="http://localhost:8005" style="color:#60a5fa">:8005</a>）の📦素材タブから利用してください。</p>
+    <p>API ドキュメント: <code><a href="/docs" style="color:#60a5fa">/docs</a></code></p>
+  </div>
+  <script>
+    fetch('/health').then(r => r.json()).then(d => {
+      document.getElementById('status').textContent = d.status === 'ok' ? '● 稼働中' : '● 異常';
+    }).catch(() => { document.getElementById('status').textContent = '● 接続不可'; });
+  </script>
+</body>
+</html>

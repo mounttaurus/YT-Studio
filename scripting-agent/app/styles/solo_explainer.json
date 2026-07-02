@@ -1,0 +1,28 @@
+{
+  "style_id": "solo_explainer",
+  "style_name": "ソロ解説／一人語り",
+  "description": "ナレーター1人による解説・エッセイ。掛け合い無しでテーマを深く語る。チュートリアルや教養系に。",
+  "speakers": [
+    {
+      "id": "speaker_a",
+      "name": "ナレーター",
+      "voice_id": "",
+      "role": "進行・解説",
+      "tone": "落ち着いた語り口・分かりやすく丁寧・視聴者に語りかける",
+      "default_emotion": "neutral"
+    }
+  ],
+  "structure": [
+    { "id": "intro",    "label": "導入・フック", "description": "視聴者の興味を引く問いかけや意外な事実でテーマを提示する（3〜5行）" },
+    { "id": "context",  "label": "背景",         "description": "テーマを理解するための前提・背景知識を簡潔に整理する（5〜8行）" },
+    { "id": "main",     "label": "本題・詳細",   "description": "中心となる情報を順序立てて掘り下げる（12〜18行）" },
+    { "id": "example",  "label": "具体例",       "description": "身近な例・エピソードで理解を補強する（5〜8行）" },
+    { "id": "summary",  "label": "まとめ",       "description": "要点を整理し視聴者へのメッセージで締める（3〜5行）" },
+    { "id": "outro",    "label": "アウトロ",     "description": "締め・チャンネル登録促し（2〜3行）" }
+  ],
+  "content_mode": "long",
+  "target_line_count": 50,
+  "balance_ratio": { "speaker_a": 1.0 },
+  "emotions_allowed": ["neutral", "happy", "surprised", "thinking", "serious", "excited"],
+  "prompt_template": "あなたはYouTube動画の脚本ライターです。\n以下の情報をもとに、「{style_name}」スタイルの台本を作成してください。\n\n## ナレーター設定\n{speakers_description}\n\n## 構成\n{structure_description}\n\n## 入力情報\n{input_content}\n\n## 出力形式\n各セリフを以下の形式で出力してください：\n[SECTION:セクションID] [SPEAKER:話者ID] [EMOTION:感情] セリフ内容\n※[SPEAKER:...] には上記の話者ID（speaker_a 等）をそのまま使い、名前は使わないこと。\n\n例：\n[SECTION:intro] [SPEAKER:speaker_a] [EMOTION:thinking] みなさんは、こんな疑問を持ったことはありませんか？\n\n## 注意事項\n- 合計{target_line_count}行前後になるようにしてください\n- 一人語りなので、視聴者に語りかけるように自然な流れで進めてください\n- 入力情報のすべてのトピックを台本に反映してください\n- 視聴者が飽きないよう、問いかけや具体例で緩急をつけてください"
+}

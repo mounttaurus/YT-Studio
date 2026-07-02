@@ -1,0 +1,28 @@
+{
+  "style_id": "story_narrative",
+  "style_name": "ストーリー／怪談・実話",
+  "description": "語り手1人による物語形式。掴み→展開→山場→真相→余韻で引き込む。怪談・実話・体験談に。",
+  "speakers": [
+    {
+      "id": "speaker_a",
+      "name": "語り手",
+      "voice_id": "",
+      "role": "ナレーション",
+      "tone": "情景が浮かぶ語り口・間と緩急で緊張感を作る・聞き手を物語に没入させる",
+      "default_emotion": "serious"
+    }
+  ],
+  "structure": [
+    { "id": "hook",    "label": "掴み",       "description": "不穏さや謎を提示して一気に引き込む導入（3〜5行）" },
+    { "id": "setup",   "label": "状況設定",   "description": "登場人物・場所・日常を描き、物語の土台を作る（6〜10行）" },
+    { "id": "rising",  "label": "展開",       "description": "違和感や出来事が積み重なり緊張が高まる（10〜16行）" },
+    { "id": "climax",  "label": "山場",       "description": "物語が最大の緊張に達する決定的な場面（6〜10行）" },
+    { "id": "twist",   "label": "真相・転",   "description": "真相の判明やどんでん返しで意味が反転する（5〜8行）" },
+    { "id": "ending",  "label": "オチ・余韻", "description": "結末と余韻を残す締め・視聴者への問いかけ（3〜5行）" }
+  ],
+  "content_mode": "long",
+  "target_line_count": 60,
+  "balance_ratio": { "speaker_a": 1.0 },
+  "emotions_allowed": ["serious", "neutral", "surprised", "sad", "thinking", "angry"],
+  "prompt_template": "あなたはYouTube動画の脚本ライターです。\n以下の情報をもとに、「{style_name}」スタイルの台本を作成してください。\n\n## 語り手設定\n{speakers_description}\n\n## 構成\n{structure_description}\n\n## 入力情報\n{input_content}\n\n## 出力形式\n各セリフを以下の形式で出力してください：\n[SECTION:セクションID] [SPEAKER:話者ID] [EMOTION:感情] セリフ内容\n※[SPEAKER:...] には上記の話者ID（speaker_a 等）をそのまま使い、名前は使わないこと。\n\n例：\n[SECTION:hook] [SPEAKER:speaker_a] [EMOTION:serious] それは、誰にも話したことのない出来事です。\n\n## 注意事項\n- 合計{target_line_count}行前後になるようにしてください\n- 物語として一貫した時系列で、掴み→展開→山場→真相→余韻の流れを守ってください\n- 入力情報の事実・要素を物語の各場面に織り込んでください\n- 説明調になりすぎず、情景や心情の描写で没入感を高めてください"
+}

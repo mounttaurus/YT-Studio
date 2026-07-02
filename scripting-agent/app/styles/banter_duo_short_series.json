@@ -1,0 +1,37 @@
+{
+  "style_id": "banter_duo_short_series",
+  "style_name": "茶番劇風二人掛け合い（ショートシリーズ）",
+  "description": "情報量の多い長尺ネタを、複数話の完結型ショート動画に分割するシリーズスタイル。各話は単体で楽しめつつ、全体で1つのテーマを掘り下げる。",
+  "speakers": [
+    {
+      "id": "speaker_a",
+      "name": "ずんだもん",
+      "voice_id": "zundamon",
+      "role": "ツッコミ・進行",
+      "tone": "明るい・好奇心旺盛・語尾は「なのだ」「のだ」",
+      "default_emotion": "happy"
+    },
+    {
+      "id": "speaker_b",
+      "name": "四国めたん",
+      "voice_id": "metan",
+      "role": "ボケ・解説",
+      "tone": "落ち着き・少しズレた発言・丁寧語・知識豊富",
+      "default_emotion": "neutral"
+    }
+  ],
+  "structure": [
+    { "id": "intro",       "label": "イントロ",     "description": "今回のテーマ紹介・視聴者への問いかけ（4〜6行）" },
+    { "id": "main_topic",  "label": "本題",         "description": "この話で扱うトピックを掘り下げる（12〜16行）" },
+    { "id": "discussion",  "label": "掛け合い討論", "description": "感想・疑問・ユニークな視点で盛り上げる（8〜12行）" },
+    { "id": "summary",     "label": "まとめ",       "description": "要点整理・視聴者へのメッセージ（3〜5行）" },
+    { "id": "outro",       "label": "アウトロ",     "description": "締め・チャンネル登録促し（2〜3行）" }
+  ],
+  "content_mode": "short",
+  "line_count_mode": "auto",
+  "target_line_count": 30,
+  "series_mode": true,
+  "balance_ratio": { "speaker_a": 0.5, "speaker_b": 0.5 },
+  "emotions_allowed": ["happy", "neutral", "surprised", "sad", "angry", "thinking", "serious", "excited"],
+  "prompt_template": "あなたはYouTube動画の脚本ライターです。\n以下の情報をもとに、「{style_name}」スタイルの台本を作成してください。\n\n## キャラクター設定\n{speakers_description}\n\n## 構成\n{structure_description}\n\n## 入力情報\n{input_content}\n\n## 出力形式\n各セリフを以下の形式で出力してください：\n[SECTION:セクションID] [SPEAKER:話者ID] [EMOTION:感情] セリフ内容\n\n例：\n[SECTION:intro] [SPEAKER:speaker_a] [EMOTION:happy] ねえねえ、今日はすごいニュースがあるのだ！\n[SECTION:intro] [SPEAKER:speaker_b] [EMOTION:neutral] まあまあ、落ち着いて。何のことかしら？\n\n## 注意事項\n- 合計{target_line_count}行前後になるようにしてください\n- 話者の比率はほぼ均等にしてください\n- キャラクターのトーンを忠実に守ってください\n- 視聴者が飽きないようテンポよく進めてください"
+}

@@ -1,0 +1,180 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>research-agent — ラフ台本ダイジェスト</title>
+  <script defer src="https://cdn.jsdelivr.net/npm/alpinejs@3.x.x/dist/cdn.min.js"></script>
+  <style>
+    :root { --bg:#0f172a; --panel:#1e293b; --line:#334155; --text:#e2e8f0; --muted:#94a3b8; --accent:#d97706; --accent2:#6d28d9; }
+    * { box-sizing:border-box; }
+    body { margin:0; background:var(--bg); color:var(--text); font-family:system-ui,"Segoe UI",sans-serif; line-height:1.6; }
+    header { padding:14px 20px; border-bottom:1px solid var(--line); display:flex; align-items:center; gap:12px; flex-wrap:wrap; }
+    header h1 { font-size:18px; margin:0; }
+    .badge { font-size:11px; padding:2px 8px; border-radius:10px; }
+    .ok { background:#14532d; color:#bbf7d0; } .ng { background:#3f1d1d; color:#fecaca; }
+    main { display:grid; grid-template-columns:1fr 1fr; gap:16px; padding:16px 20px; max-width:1280px; margin:0 auto; }
+    .card { background:var(--panel); border:1px solid var(--line); border-radius:10px; padding:14px; }
+    .card h2 { font-size:14px; margin:0 0 10px; color:var(--muted); text-transform:uppercase; letter-spacing:.5px; }
+    label { display:block; font-size:12px; color:var(--muted); margin:8px 0 3px; }
+    input,select,textarea { width:100%; background:#0b1220; border:1px solid var(--line); color:var(--text); border-radius:6px; padding:8px; font-size:13px; }
+    textarea { min-height:70px; resize:vertical; font-family:inherit; }
+    button { background:var(--accent); color:#fff; border:none; border-radius:6px; padding:8px 14px; font-size:13px; cursor:pointer; }
+    button.sub { background:var(--accent2); } button.ghost { background:transparent; border:1px solid var(--line); color:var(--muted); }
+    button:disabled { opacity:.5; cursor:not-allowed; }
+    .row { display:flex; gap:8px; align-items:center; }
+    .src { border:1px solid var(--line); border-radius:6px; padding:8px; margin-bottom:6px; font-size:12px; }
+    .src .t { font-weight:600; } .src .meta { color:var(--muted); font-size:11px; }
+    .kind { font-size:10px; padding:1px 6px; border-radius:8px; background:#0b1220; border:1px solid var(--line); }
+    pre.out { white-space:pre-wrap; word-break:break-word; background:#0b1220; border:1px solid var(--line); border-radius:6px; padding:12px; font-size:13px; max-height:520px; overflow:auto; }
+    .full { grid-column:1/3; }
+    .hint { font-size:11px; color:var(--muted); }
+    .err { color:#fecaca; font-size:12px; }
+  </style>
+</head>
+<body x-data="app()" x-init="init()">
+  <header>
+    <h1>🔎 research-agent</h1>
+    <span class="hint">持ち込み素材 → ラフ台本 → scripting へ</span>
+    <span class="badge" :class="health.gemini_configured?'ok':'ng'" x-text="'Gemini '+(health.gemini_configured?(health.research_key_dedicated?'専用キー':'共有キー'):'未設定')"></span>
+    <span class="badge" :class="health.cloudflare_configured?'ok':'ng'" x-text="'Cloudflare '+(health.cloudflare_configured?'有効':'未設定')"></span>
+  </header>
+
+  <main>
+    <!-- 左：プロジェクト & ソース投入 -->
+    <div>
+      <div class="card">
+        <h2>プロジェクト</h2>
+        <select x-model="projectId" @change="loadSources()">
+          <option value="">— 選択 —</option>
+          <template x-for="p in projects" :key="p.dir">
+            <option :value="p.id" x-text="p.title + (p.has_rough_script?' ✓ラフ台本あり':'')"></option>
+          </template>
+        </select>
+      </div>
+
+      <div class="card" style="margin-top:12px;">
+        <h2>素材を取り込む</h2>
+        <label>ファイル（PDF / docx / txt / json / 音声）</label>
+        <input type="file" @change="upload($event)" :disabled="!projectId||busy" />
+
+        <label>テキストを貼り付け</label>
+        <textarea x-model="pasteText" placeholder="リサーチ結果・メモなど"></textarea>
+        <div class="row"><button class="ghost" @click="addText()" :disabled="!projectId||!pasteText||busy">テキスト追加</button></div>
+
+        <label>関連URL（本文を取得）</label>
+        <div class="row">
+          <input x-model="url" placeholder="https://..." />
+          <button class="ghost" @click="addUrl()" :disabled="!projectId||!url||busy">取得</button>
+        </div>
+
+        <label>補助検索（Gemini検索グラウンディング）</label>
+        <div class="row">
+          <input x-model="query" placeholder="関連記事/言及を探す検索語" />
+          <button class="sub" @click="search()" :disabled="!projectId||!query||busy">検索</button>
+        </div>
+        <p class="err" x-text="error"></p>
+      </div>
+
+      <div class="card" style="margin-top:12px;">
+        <h2 x-text="'取り込み済みソース ('+sources.length+')'"></h2>
+        <template x-if="sources.length===0"><p class="hint">まだありません。</p></template>
+        <template x-for="s in sources" :key="s.id">
+          <div class="src">
+            <div class="row" style="justify-content:space-between;">
+              <span class="t" x-text="s.id+'. '+s.title"></span>
+              <span class="row">
+                <span class="kind" x-text="s.kind"></span>
+                <button class="ghost" style="padding:2px 8px;" @click="del(s.id)">×</button>
+              </span>
+            </div>
+            <div class="meta" x-text="(s.chars||0)+'字 '+(s.url||'')"></div>
+            <div class="meta" x-text="s.preview"></div>
+          </div>
+        </template>
+      </div>
+    </div>
+
+    <!-- 右：蒸留 -->
+    <div>
+      <div class="card">
+        <h2>ラフ台本を作る</h2>
+        <label>目標尺（秒） — 長尺/短尺で構成が変わる</label>
+        <div class="row">
+          <input type="number" x-model.number="targetSec" min="15" step="15" style="max-width:120px;" />
+          <button class="ghost" @click="targetSec=60">短尺60</button>
+          <button class="ghost" @click="targetSec=300">標準300</button>
+          <button class="ghost" @click="targetSec=900">長尺900</button>
+        </div>
+        <label>モデル</label>
+        <select x-model="model">
+          <template x-for="m in models" :key="m.id">
+            <option :value="m.id" :disabled="!m.available" x-text="m.label+(m.available?'':'（未設定）')"></option>
+          </template>
+        </select>
+        <label>追加指示（任意）</label>
+        <textarea x-model="extra" placeholder="例: 初心者向けに / 結論先出しで"></textarea>
+        <div class="row" style="margin-top:10px;">
+          <button @click="digest()" :disabled="!projectId||sources.length===0||busy" x-text="busy?'生成中…':'🪄 ラフ台本を生成'"></button>
+        </div>
+        <p class="hint">出力は <code>rough_script.txt</code> に保存され、scripting-agent がそのまま台本生成の入力にできます。</p>
+      </div>
+
+      <div class="card full" style="margin-top:12px;" x-show="rough">
+        <h2>生成結果（rough_script.txt）<span class="hint" x-show="fallbackUsed">※Cloudflareにフォールバック</span></h2>
+        <pre class="out" x-text="rough"></pre>
+      </div>
+    </div>
+  </main>
+
+  <script>
+    function app() {
+      return {
+        health: {}, projects: [], models: [], sources: [],
+        projectId: '', pasteText: '', url: '', query: '',
+        targetSec: 300, model: '', extra: '', rough: '', fallbackUsed: false,
+        busy: false, error: '',
+        async init() {
+          this.health = await (await fetch('/health')).json();
+          this.projects = (await (await fetch('/projects')).json()).projects;
+          const md = await (await fetch('/models')).json();
+          this.models = md.models; this.model = md.default;
+        },
+        async loadSources() {
+          this.rough=''; this.error='';
+          if (!this.projectId) { this.sources=[]; return; }
+          this.sources = (await (await fetch(`/projects/${this.projectId}/sources`)).json()).sources;
+          try { const d = await (await fetch(`/projects/${this.projectId}/digest`)).json();
+                if (d.rough_script) this.rough = d.rough_script; } catch(e){}
+        },
+        async upload(ev) {
+          const f = ev.target.files[0]; if (!f) return;
+          this.busy=true; this.error='';
+          const fd = new FormData(); fd.append('file', f);
+          const r = await fetch(`/projects/${this.projectId}/sources/upload`, {method:'POST', body:fd});
+          if (!r.ok) this.error = (await r.json()).detail; else await this.loadSources();
+          ev.target.value=''; this.busy=false;
+        },
+        async post(path, body) {
+          this.busy=true; this.error='';
+          const r = await fetch(path, {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(body)});
+          const j = await r.json(); this.busy=false;
+          if (!r.ok) { this.error = j.detail || 'エラー'; return null; }
+          return j;
+        },
+        async addText() { if (await this.post(`/projects/${this.projectId}/sources/text`, {text:this.pasteText})) { this.pasteText=''; await this.loadSources(); } },
+        async addUrl()  { if (await this.post(`/projects/${this.projectId}/sources/text`, {url:this.url}))        { this.url='';       await this.loadSources(); } },
+        async search()  { if (await this.post(`/projects/${this.projectId}/sources/search`, {query:this.query}))  { this.query='';     await this.loadSources(); } },
+        async del(id) {
+          await fetch(`/projects/${this.projectId}/sources/${id}`, {method:'DELETE'});
+          await this.loadSources();
+        },
+        async digest() {
+          const j = await this.post(`/projects/${this.projectId}/digest`, {target_duration_sec:this.targetSec, model:this.model, extra_instruction:this.extra});
+          if (j) { this.rough = j.rough_script; this.fallbackUsed = j.fallback_used; await this.loadSources(); }
+        },
+      };
+    }
+  </script>
+</body>
+</html>

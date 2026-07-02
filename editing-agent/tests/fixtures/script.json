@@ -1,0 +1,452 @@
+{
+  "schema_version": "1.0.0",
+  "project_id": "ラリーの秘密",
+  "generated_at": "2026-06-06T06:38:21.405440+00:00",
+  "total_duration_sec": 240,
+  "lines": [
+    {
+      "id": "line_001",
+      "order": 1,
+      "speaker_id": "speaker_a",
+      "speaker_name": "ずんだもん",
+      "text": "みんな！ラリー・シルバースタインって名前、覚えてるのだ？",
+      "emotion": "excited",
+      "speed": 1.0,
+      "pause_after_sec": 0.4,
+      "section": "intro",
+      "notes": ""
+    },
+    {
+      "id": "line_002",
+      "order": 2,
+      "speaker_id": "speaker_b",
+      "speaker_name": "四国めたん",
+      "text": "ええ、2001年9月11日...ワールドトレードセンターのオーナーだった方ですわね。",
+      "emotion": "neutral",
+      "speed": 1.0,
+      "pause_after_sec": 0.4,
+      "section": "intro",
+      "notes": ""
+    },
+    {
+      "id": "line_003",
+      "order": 3,
+      "speaker_id": "speaker_a",
+      "speaker_name": "ずんだもん",
+      "text": "そうなのだ！その彼が再び動き出したのだ！これは偶然なのか、それとも...？",
+      "emotion": "serious",
+      "speed": 1.0,
+      "pause_after_sec": 0.4,
+      "section": "intro",
+      "notes": ""
+    },
+    {
+      "id": "line_004",
+      "order": 4,
+      "speaker_id": "speaker_b",
+      "speaker_name": "四国めたん",
+      "text": "まあ...歴史は繰り返すのでしょうか？今日はその謎に迫りますわ。",
+      "emotion": "neutral",
+      "speed": 1.0,
+      "pause_after_sec": 0.4,
+      "section": "intro",
+      "notes": ""
+    },
+    {
+      "id": "line_005",
+      "order": 5,
+      "speaker_id": "speaker_a",
+      "speaker_name": "ずんだもん",
+      "text": "まず2001年の出来事を振り返るのだ。ラリーは7月にワールドトレードセンタービルを購入したんだけど...",
+      "emotion": "neutral",
+      "speed": 1.0,
+      "pause_after_sec": 0.4,
+      "section": "main_topic",
+      "notes": ""
+    },
+    {
+      "id": "line_006",
+      "order": 6,
+      "speaker_id": "speaker_b",
+      "speaker_name": "四国めたん",
+      "text": "そのビル、実はアスベスト問題を抱えた「事故物件」でしたの。撤去費用が資産価値を上回るほどの。",
+      "emotion": "neutral",
+      "speed": 1.0,
+      "pause_after_sec": 0.4,
+      "section": "main_topic",
+      "notes": ""
+    },
+    {
+      "id": "line_007",
+      "order": 7,
+      "speaker_id": "speaker_a",
+      "speaker_name": "ずんだもん",
+      "text": "他の企業が競争入札から降りるレベルだったのに、ラリーは買ったのだ！",
+      "emotion": "surprised",
+      "speed": 1.0,
+      "pause_after_sec": 0.4,
+      "section": "main_topic",
+      "notes": ""
+    },
+    {
+      "id": "line_008",
+      "order": 8,
+      "speaker_id": "speaker_b",
+      "speaker_name": "四国めたん",
+      "text": "さらに不可解なのは、保険会社の見積もりの3倍もの保険金を設定したことですわ。",
+      "emotion": "serious",
+      "speed": 1.0,
+      "pause_after_sec": 0.4,
+      "section": "main_topic",
+      "notes": ""
+    },
+    {
+      "id": "line_009",
+      "order": 9,
+      "speaker_id": "speaker_a",
+      "speaker_name": "ずんだもん",
+      "text": "そして2ヶ月後に9.11が起きて、裁判で巨額の保険金を手にしたのだ...",
+      "emotion": "neutral",
+      "speed": 1.0,
+      "pause_after_sec": 0.4,
+      "section": "main_topic",
+      "notes": ""
+    },
+    {
+      "id": "line_010",
+      "order": 10,
+      "speaker_id": "speaker_b",
+      "speaker_name": "四国めたん",
+      "text": "その額、数千億円とも言われていますわね。",
+      "emotion": "neutral",
+      "speed": 1.0,
+      "pause_after_sec": 0.4,
+      "section": "main_topic",
+      "notes": ""
+    },
+    {
+      "id": "line_011",
+      "order": 11,
+      "speaker_id": "speaker_a",
+      "speaker_name": "ずんだもん",
+      "text": "で、2026年の今！ラリーがロサンゼルスのU.S.バンクタワーを数十億ドルで買収したのだ！",
+      "emotion": "serious",
+      "speed": 1.0,
+      "pause_after_sec": 0.4,
+      "section": "main_topic",
+      "notes": ""
+    },
+    {
+      "id": "line_012",
+      "order": 12,
+      "speaker_id": "speaker_b",
+      "speaker_name": "四国めたん",
+      "text": "しかも今、世界はイランとの紛争で緊張状態。米国の主要都市には警戒警報が出ていますわ。",
+      "emotion": "neutral",
+      "speed": 1.0,
+      "pause_after_sec": 0.4,
+      "section": "main_topic",
+      "notes": ""
+    },
+    {
+      "id": "line_013",
+      "order": 13,
+      "speaker_id": "speaker_a",
+      "speaker_name": "ずんだもん",
+      "text": "さらにだ！ケンタッキーの軍事基地から4機の偵察ドローンが盗まれたニュースがあったのだ！",
+      "emotion": "neutral",
+      "speed": 1.0,
+      "pause_after_sec": 0.4,
+      "section": "main_topic",
+      "notes": ""
+    },
+    {
+      "id": "line_014",
+      "order": 14,
+      "speaker_id": "speaker_b",
+      "speaker_name": "四国めたん",
+      "text": "Skydio X10Dという小型偵察機ですが、厳重な軍事施設からの盗難は前代未聞ですわね。",
+      "emotion": "neutral",
+      "speed": 1.0,
+      "pause_after_sec": 0.4,
+      "section": "main_topic",
+      "notes": ""
+    },
+    {
+      "id": "line_015",
+      "order": 15,
+      "speaker_id": "speaker_a",
+      "speaker_name": "ずんだもん",
+      "text": "この2つのニュースが同時期に起きるなんて...偶然にしては出来すぎてるのだ！",
+      "emotion": "neutral",
+      "speed": 1.0,
+      "pause_after_sec": 0.4,
+      "section": "main_topic",
+      "notes": ""
+    },
+    {
+      "id": "line_016",
+      "order": 16,
+      "speaker_id": "speaker_b",
+      "speaker_name": "四国めたん",
+      "text": "タワー周辺の警備は大幅に強化され、当局は「具体的な脅威はない」と発表していますが...",
+      "emotion": "neutral",
+      "speed": 1.0,
+      "pause_after_sec": 0.4,
+      "section": "main_topic",
+      "notes": ""
+    },
+    {
+      "id": "line_017",
+      "order": 17,
+      "speaker_id": "speaker_a",
+      "speaker_name": "ずんだもん",
+      "text": "めたん、これって本当にただの不動産投資なのだ？",
+      "emotion": "neutral",
+      "speed": 1.0,
+      "pause_after_sec": 0.4,
+      "section": "discussion",
+      "notes": ""
+    },
+    {
+      "id": "line_018",
+      "order": 18,
+      "speaker_id": "speaker_b",
+      "speaker_name": "四国めたん",
+      "text": "シルバースタイン・プロパティーズは「通常の戦略的投資」と主張していますわね。",
+      "emotion": "thinking",
+      "speed": 1.0,
+      "pause_after_sec": 0.4,
+      "section": "discussion",
+      "notes": ""
+    },
+    {
+      "id": "line_019",
+      "order": 19,
+      "speaker_id": "speaker_a",
+      "speaker_name": "ずんだもん",
+      "text": "でも2001年のパターンと似すぎてるのだ！問題物件→高額保険→事件発生...",
+      "emotion": "neutral",
+      "speed": 1.0,
+      "pause_after_sec": 0.4,
+      "section": "discussion",
+      "notes": ""
+    },
+    {
+      "id": "line_020",
+      "order": 20,
+      "speaker_id": "speaker_b",
+      "speaker_name": "四国めたん",
+      "text": "まあまあ。ただU.S.バンクタワーは健全な物件ですし、状況は異なりますわ。",
+      "emotion": "neutral",
+      "speed": 1.0,
+      "pause_after_sec": 0.4,
+      "section": "discussion",
+      "notes": ""
+    },
+    {
+      "id": "line_021",
+      "order": 21,
+      "speaker_id": "speaker_a",
+      "speaker_name": "ずんだもん",
+      "text": "じゃあ盗まれたドローンは？軍事基地からの盗難なんて普通じゃないのだ！",
+      "emotion": "serious",
+      "speed": 1.0,
+      "pause_after_sec": 0.4,
+      "section": "discussion",
+      "notes": ""
+    },
+    {
+      "id": "line_022",
+      "order": 22,
+      "speaker_id": "speaker_b",
+      "speaker_name": "四国めたん",
+      "text": "確かに不穏ですわね...小型偵察機とはいえ、何かの下見に使われる可能性も...",
+      "emotion": "neutral",
+      "speed": 1.0,
+      "pause_after_sec": 0.4,
+      "section": "discussion",
+      "notes": ""
+    },
+    {
+      "id": "line_023",
+      "order": 23,
+      "speaker_id": "speaker_a",
+      "speaker_name": "ずんだもん",
+      "text": "海外の陰謀論界隈では「歴史は繰り返すのか」って大騒ぎなのだ！",
+      "emotion": "neutral",
+      "speed": 1.0,
+      "pause_after_sec": 0.4,
+      "section": "discussion",
+      "notes": ""
+    },
+    {
+      "id": "line_024",
+      "order": 24,
+      "speaker_id": "speaker_b",
+      "speaker_name": "四国めたん",
+      "text": "でも冷静に考えれば、これは2026年最大級の不動産取引。経済への賭けとも言えますわ。",
+      "emotion": "neutral",
+      "speed": 1.0,
+      "pause_after_sec": 0.4,
+      "section": "discussion",
+      "notes": ""
+    },
+    {
+      "id": "line_025",
+      "order": 25,
+      "speaker_id": "speaker_a",
+      "speaker_name": "ずんだもん",
+      "text": "うーん...でもタイミングが怖すぎるのだ。彼らは何か知ってるんじゃないのだ？",
+      "emotion": "neutral",
+      "speed": 1.0,
+      "pause_after_sec": 0.4,
+      "section": "discussion",
+      "notes": ""
+    },
+    {
+      "id": "line_026",
+      "order": 26,
+      "speaker_id": "speaker_b",
+      "speaker_name": "四国めたん",
+      "text": "整理しますと、過去に疑惑のあった人物が、緊張状態の今、重要施設を購入。同時期に軍事ドローンが盗難。",
+      "emotion": "serious",
+      "speed": 1.0,
+      "pause_after_sec": 0.4,
+      "section": "summary",
+      "notes": ""
+    },
+    {
+      "id": "line_027",
+      "order": 27,
+      "speaker_id": "speaker_a",
+      "speaker_name": "ずんだもん",
+      "text": "これが偶然なのか計画なのか...真実は誰にもわからないのだ。ただ言えるのは、、、。",
+      "emotion": "neutral",
+      "speed": 1.0,
+      "pause_after_sec": 0.4,
+      "section": "summary",
+      "notes": ""
+    },
+    {
+      "id": "line_028",
+      "order": 28,
+      "speaker_id": "speaker_b",
+      "speaker_name": "四国めたん",
+      "text": "ただ言えるのは、私たちは注意深く見守る必要があるということですわね。",
+      "emotion": "neutral",
+      "speed": 1.0,
+      "pause_after_sec": 0.4,
+      "section": "summary",
+      "notes": ""
+    },
+    {
+      "id": "line_029",
+      "order": 29,
+      "speaker_id": "speaker_a",
+      "speaker_name": "ずんだもん",
+      "text": "信じるか信じないかは...みんな次第なのだ！",
+      "emotion": "serious",
+      "speed": 1.0,
+      "pause_after_sec": 0.4,
+      "section": "summary",
+      "notes": ""
+    },
+    {
+      "id": "line_030",
+      "order": 30,
+      "speaker_id": "speaker_b",
+      "speaker_name": "四国めたん",
+      "text": "この話題、続報があればまたお伝えしますわ。チャンネル登録もよろしくお願いいたします。",
+      "emotion": "neutral",
+      "speed": 1.0,
+      "pause_after_sec": 0.4,
+      "section": "outro",
+      "notes": ""
+    },
+    {
+      "id": "line_031",
+      "order": 31,
+      "speaker_id": "speaker_a",
+      "speaker_name": "ずんだもん",
+      "text": "それじゃあまたね！みんなも気をつけて過ごすのだ！",
+      "emotion": "happy",
+      "speed": 1.0,
+      "pause_after_sec": 0.4,
+      "section": "outro",
+      "notes": ""
+    }
+  ],
+  "sections": [
+    {
+      "id": "intro",
+      "label": "イントロ",
+      "line_ids": [
+        "line_001",
+        "line_002",
+        "line_003",
+        "line_004"
+      ]
+    },
+    {
+      "id": "main_topic",
+      "label": "本題",
+      "line_ids": [
+        "line_005",
+        "line_006",
+        "line_007",
+        "line_008",
+        "line_009",
+        "line_010",
+        "line_011",
+        "line_012",
+        "line_013",
+        "line_014",
+        "line_015",
+        "line_016"
+      ]
+    },
+    {
+      "id": "discussion",
+      "label": "掛け合い討論",
+      "line_ids": [
+        "line_017",
+        "line_018",
+        "line_019",
+        "line_020",
+        "line_021",
+        "line_022",
+        "line_023",
+        "line_024",
+        "line_025"
+      ]
+    },
+    {
+      "id": "summary",
+      "label": "まとめ",
+      "line_ids": [
+        "line_026",
+        "line_027",
+        "line_028",
+        "line_029"
+      ]
+    },
+    {
+      "id": "outro",
+      "label": "アウトロ",
+      "line_ids": [
+        "line_030",
+        "line_031"
+      ]
+    }
+  ],
+  "metadata": {
+    "line_count": 31,
+    "estimated_duration_sec": 240,
+    "style": "banter_duo",
+    "llm_model": "openrouter/anthropic/claude-sonnet-4-5",
+    "checked_by_director": true,
+    "check_passed": true,
+    "check_notes": ""
+  }
+}

@@ -1,0 +1,28 @@
+{
+  "style_id": "ranking_countdown",
+  "style_name": "ランキング／カウントダウン",
+  "description": "Top5形式のカウントダウン解説。下位から第1位へ盛り上げる。比較・紹介系の鉄板構成。",
+  "speakers": [
+    {
+      "id": "speaker_a",
+      "name": "ナレーター",
+      "voice_id": "",
+      "role": "進行・紹介",
+      "tone": "テンポよく明るい・期待を煽る・各位の見どころを端的に伝える",
+      "default_emotion": "excited"
+    }
+  ],
+  "structure": [
+    { "id": "intro",   "label": "導入・予告",   "description": "ランキングのテーマと選定基準を提示し、期待を煽る（3〜5行）" },
+    { "id": "lower",   "label": "第5〜4位",     "description": "下位ランクを順に紹介・理由を添える（8〜12行）" },
+    { "id": "middle",  "label": "第3〜2位",     "description": "中位ランクを紹介し、徐々に盛り上げる（8〜12行）" },
+    { "id": "number1", "label": "第1位発表",    "description": "第1位を発表し、なぜ1位なのかを熱量を持って語る（6〜10行）" },
+    { "id": "summary", "label": "総括",         "description": "ランキング全体を振り返り視聴者に問いかける（3〜5行）" },
+    { "id": "outro",   "label": "アウトロ",     "description": "締め・チャンネル登録促し（2〜3行）" }
+  ],
+  "content_mode": "long",
+  "target_line_count": 55,
+  "balance_ratio": { "speaker_a": 1.0 },
+  "emotions_allowed": ["excited", "happy", "surprised", "neutral", "thinking"],
+  "prompt_template": "あなたはYouTube動画の脚本ライターです。\n以下の情報をもとに、「{style_name}」スタイルの台本を作成してください。\n\n## ナレーター設定\n{speakers_description}\n\n## 構成\n{structure_description}\n\n## 入力情報\n{input_content}\n\n## 出力形式\n各セリフを以下の形式で出力してください：\n[SECTION:セクションID] [SPEAKER:話者ID] [EMOTION:感情] セリフ内容\n※[SPEAKER:...] には上記の話者ID（speaker_a 等）をそのまま使い、名前は使わないこと。\n\n例：\n[SECTION:lower] [SPEAKER:speaker_a] [EMOTION:excited] それでは第5位！意外なあれがランクインです！\n\n## 注意事項\n- 合計{target_line_count}行前後になるようにしてください\n- 下位から上位へ順にカウントダウンし、第1位に向けて盛り上がりを作ってください\n- 入力情報の項目をランキングの各順位に割り当ててください\n- 各順位で「選ばれた理由・見どころ」を必ず添えてください"
+}

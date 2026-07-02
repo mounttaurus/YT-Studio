@@ -1,0 +1,11 @@
+{
+  "mcpServers": {
+    "yt-studio": {
+      "command": "{{PYTHON_EXE}}",
+      "args": ["{{SERVER_PY}}"],
+      "env": {
+        "DIRECTOR_URL": "http://localhost:8005"
+      }
+    }
+  }
+}

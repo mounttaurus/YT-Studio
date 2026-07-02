@@ -1,0 +1,23 @@
+services:
+  scrapping-agent:
+    build: .
+    command: ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8003", "--reload"]
+    ports:
+      - "8003:8003"
+    volumes:
+      - ../shared:/shared
+      - ./app:/app/app
+      - ../imagegen-agent/models:/imagegen_models
+    env_file:
+      - ../.env
+    environment:
+      - SHARED_DIR=/shared
+      - MODELS_DIR=/imagegen_models
+    networks:
+      - youtube-auto-net
+    restart: unless-stopped
+
+networks:
+  youtube-auto-net:
+    external: true
+    name: youtube-auto-net

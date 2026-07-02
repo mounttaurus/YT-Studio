@@ -1,0 +1,43 @@
+# ===================================================
+# 開発用オーバーライド（`docker compose up` で自動適用される）
+#
+# base(docker-compose.yml)は本番相当（コードCOPY済み・--reloadなし）。
+# このファイルが開発の便宜を上乗せする:
+#   - ソースをホストからマウント（./<agent>/app:/app/app）
+#   - uvicorn を --reload 付きで起動（コード変更を即反映）
+#
+# クリーン/本番相当で動かしたいときは override を外す:
+#   docker compose -f docker-compose.yml up -d
+# ===================================================
+
+services:
+  research-agent:
+    command: ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8001", "--reload"]
+    volumes:
+      - ./research-agent/app:/app/app
+
+  scripting-agent:
+    command: ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8002", "--reload"]
+    volumes:
+      - ./scripting-agent/app:/app/app
+
+  director-agent:
+    command: ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8005", "--reload"]
+    volumes:
+      - ./director-agent/app:/app/app
+
+  scrapping-agent:
+    command: ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8003", "--reload"]
+    volumes:
+      - ./scrapping-agent/app:/app/app
+
+  editing-agent:
+    command: ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8006", "--reload"]
+    volumes:
+      - ./editing-agent/app:/app/app
+      - ./editing-agent/tests:/app/tests
+
+  tts-agent:
+    command: ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8004", "--reload"]
+    volumes:
+      - ./tts-agent/app:/app/app
