@@ -18,6 +18,8 @@ from fastapi.responses import FileResponse, StreamingResponse
 from pydantic import BaseModel
 
 from app.core import (
+    aroll_manager,
+    aroll_prompt_generator,
     auto_selector,
     character_manager,
     cloudflare_client,
@@ -1479,6 +1481,183 @@ async def get_character_file(char_id: str, kind: str, filename: str):
     if kind not in ("generated", "reference"):
         raise HTTPException(status_code=404, detail="kind must be generated or reference")
     base = (character_manager.char_dir(char_id) / kind).resolve()
+    f = (base / filename).resolve()
+    if not f.is_relative_to(base) or not f.is_file():
+        raise HTTPException(status_code=404, detail=f"file not found: {filename}")
+    return FileResponse(f, media_type=_IMAGE_MEDIA_TYPES.get(f.suffix.lower(), "image/png"))
+
+
+# ===========================================================================
+# Aロール（マンガ形式パネル）: 台本セリフ行ごとにキャラ画像を生成する
+# 正本: episodes/epNN/a_roll/aroll.json（詳細は aroll_manager 参照）
+# ===========================================================================
+
+class ArollPromptsRequest(BaseModel):
+    sections: Optional[list[str]] = None   # 指定章のみ生成（未指定=全章）
+    extra_prompt: Optional[str] = None
+    model: Optional[str] = None            # プロンプト生成LLMの上書き
+    overwrite: bool = False                # 既存プロンプトを置き換える（user編集は保持）
+    aspect: str = "16:9"
+    style: str = "kamishibai"
+
+
+class ArollLineUpdateRequest(BaseModel):
+    prompt: Optional[str] = None
+    characters: Optional[list[str]] = None
+
+
+class ArollGenerateRequest(BaseModel):
+    line_ids: Optional[list[str]] = None
+    only_missing: bool = True              # done行スキップ（レジューム/失敗のみ再試行）
+    allow_paid_fallback: bool = False      # OpenRouter課金退避（既定OFF）
+    aspect: Optional[str] = None
+    style: Optional[str] = None
+
+
+def _group_line_objs_by_section(script: dict) -> list[tuple[str, list[dict]]]:
+    """lines を section 出現順に（行オブジェクトのまま）グルーピングする。"""
+    groups: dict[str, list[dict]] = {}
+    order: list[str] = []
+    for ln in script.get("lines", []):
+        if not (ln.get("text") or "").strip():
+            continue  # 空セリフ行はパネル対象外
+        sec = ln.get("section") or "main"
+        if sec not in groups:
+            groups[sec] = []
+            order.append(sec)
+        groups[sec].append(ln)
+    return [(s, groups[s]) for s in order]
+
+
+@router.post("/projects/{project_id}/episodes/{episode_number}/aroll/prompts")
+async def aroll_generate_prompts(project_id: str, episode_number: int, req: ArollPromptsRequest):
+    """全行（or指定章）のパネルプロンプトをLLMで生成し、aroll.jsonに保存する。"""
+    script = project_manager.get_episode_script(project_id, episode_number)
+    if script is None:
+        raise HTTPException(status_code=404, detail="approved script.json not found")
+
+    speaker_map = aroll_manager.get_speaker_map(project_id)
+    known_chars = aroll_manager.get_cast_characters(project_id)
+
+    warnings: list[str] = []
+    # 配役未割当の話者を警告（そのキャラは参照画像なしで生成される）
+    used_speakers = {ln.get("speaker_id") for ln in script.get("lines", [])}
+    for sid in sorted(s for s in used_speakers if s):
+        if not speaker_map.get(sid, {}).get("character_id"):
+            warnings.append(f"話者 {sid} にキャラが割り当てられていません（TTS配役を確認）")
+
+    prompts_by_line: dict[str, dict] = {}
+    for section, lines in _group_line_objs_by_section(script):
+        if req.sections and section not in req.sections:
+            continue
+        try:
+            result, warns = await aroll_prompt_generator.generate_section_prompts(
+                section, lines, speaker_map, known_chars,
+                extra_prompt=req.extra_prompt, model=req.model,
+            )
+        except Exception as e:
+            project_manager.append_error(project_id, f"aroll prompt generation failed: {e}")
+            raise HTTPException(status_code=502, detail=f"prompt generation failed ({section}): {e}")
+        prompts_by_line.update(result)
+        warnings.extend(warns)
+
+    manifest = aroll_manager.build_or_update_manifest(
+        project_id, episode_number, script, prompts_by_line,
+        aspect=req.aspect, style=req.style, overwrite=req.overwrite,
+    )
+    return {"manifest": manifest, "warnings": warnings}
+
+
+@router.get("/projects/{project_id}/episodes/{episode_number}/aroll")
+async def aroll_get_manifest(project_id: str, episode_number: int):
+    manifest = aroll_manager.load_manifest(project_id, episode_number)
+    if manifest is None:
+        raise HTTPException(status_code=404, detail="aroll.json not found (run /aroll/prompts first)")
+    return manifest
+
+
+@router.put("/projects/{project_id}/episodes/{episode_number}/aroll/lines/{line_id}")
+async def aroll_update_line(project_id: str, episode_number: int, line_id: str, req: ArollLineUpdateRequest):
+    """プロンプト/登場キャラのユーザー編集（promptを書くと prompt_source="user"）。"""
+    panel = aroll_manager.update_line(
+        project_id, episode_number, line_id,
+        prompt=req.prompt, characters=req.characters,
+    )
+    if panel is None:
+        raise HTTPException(status_code=404, detail=f"line not found: {line_id}")
+    return panel
+
+
+@router.post("/projects/{project_id}/episodes/{episode_number}/aroll/generate")
+async def aroll_start_batch(project_id: str, episode_number: int, req: ArollGenerateRequest):
+    """バッチ生成を開始する（バックグラウンド実行、進捗は /aroll/status でポーリング）。"""
+    if not nanobanana_client.is_configured():
+        raise HTTPException(status_code=400, detail="NanoBanana (GEMINI/OPENROUTER key) is not configured")
+    if aroll_manager.is_running(project_id, episode_number):
+        raise HTTPException(status_code=409, detail="batch already running")
+    manifest = aroll_manager.load_manifest(project_id, episode_number)
+    if manifest is None:
+        raise HTTPException(status_code=404, detail="aroll.json not found (run /aroll/prompts first)")
+
+    # アスペクト/スタイルの上書き（バッチごとに変更可）
+    if req.aspect or req.style:
+        if req.aspect:
+            manifest["aspect"] = req.aspect
+        if req.style:
+            if style_manager.get_style(req.style) is None:
+                raise HTTPException(status_code=400, detail=f"unknown style: {req.style}")
+            manifest["style"] = req.style
+        aroll_manager.save_manifest(project_id, episode_number, manifest)
+
+    targets = aroll_manager.select_targets(manifest, req.line_ids, req.only_missing)
+    if not targets:
+        raise HTTPException(status_code=400, detail="対象行がありません（プロンプト未生成 or 全行生成済み）")
+
+    asyncio.create_task(aroll_manager.run_batch(
+        project_id, episode_number,
+        line_ids=req.line_ids, only_missing=req.only_missing,
+        allow_paid_fallback=req.allow_paid_fallback,
+    ))
+    return {"started": True, "target_count": len(targets)}
+
+
+@router.post("/projects/{project_id}/episodes/{episode_number}/aroll/generate/line/{line_id}")
+async def aroll_generate_line(project_id: str, episode_number: int, line_id: str, req: ArollGenerateRequest):
+    """1行だけ生成/再生成する（同期実行）。"""
+    if not nanobanana_client.is_configured():
+        raise HTTPException(status_code=400, detail="NanoBanana (GEMINI/OPENROUTER key) is not configured")
+    if aroll_manager.is_running(project_id, episode_number):
+        raise HTTPException(status_code=409, detail="batch is running — 終了後に再試行してください")
+    try:
+        panel = await aroll_manager.generate_line_image(
+            project_id, episode_number, line_id,
+            allow_paid_fallback=req.allow_paid_fallback,
+        )
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    except Exception as e:
+        raise HTTPException(status_code=502, detail=f"panel generation failed: {e}")
+    return panel
+
+
+@router.get("/projects/{project_id}/episodes/{episode_number}/aroll/status")
+async def aroll_status(project_id: str, episode_number: int):
+    return aroll_manager.status(project_id, episode_number)
+
+
+@router.post("/projects/{project_id}/episodes/{episode_number}/aroll/stop")
+async def aroll_stop(project_id: str, episode_number: int):
+    stopped = aroll_manager.request_stop(project_id, episode_number)
+    return {"stopping": stopped}
+
+
+@router.get("/projects/{project_id}/episodes/{episode_number}/aroll/image/{filename}")
+async def aroll_get_image(project_id: str, episode_number: int, filename: str):
+    """Aロールパネル画像の配信（a_roll/直下限定、パストラバーサル防止）。"""
+    d = aroll_manager.aroll_dir(project_id, episode_number)
+    if d is None:
+        raise HTTPException(status_code=404, detail="episode not found")
+    base = d.resolve()
     f = (base / filename).resolve()
     if not f.is_relative_to(base) or not f.is_file():
         raise HTTPException(status_code=404, detail=f"file not found: {filename}")

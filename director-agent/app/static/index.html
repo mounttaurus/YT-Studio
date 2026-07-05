@@ -479,6 +479,7 @@
       <button class="tab-btn" :class="{ active: tab === 'script' }" @click="setTab('script')">📝 台本</button>
       <button class="tab-btn" :class="{ active: tab === 'tts' }" @click="setTab('tts')">🎙️ TTS</button>
       <button class="tab-btn" :class="{ active: tab === 'footage' }" @click="setTab('footage')">📦 素材</button>
+      <button class="tab-btn" :class="{ active: tab === 'aroll' }" @click="setTab('aroll')">🖼️ Aロール</button>
       <button class="tab-btn" :class="{ active: tab === 'chara' }" @click="setTab('chara')">🎭 キャラ</button>
       <button class="tab-btn" :class="{ active: tab === 'studio' }" @click="setTab('studio')">🎬 紙芝居</button>
       <button class="tab-btn" :class="{ active: tab === 'free' }" @click="setTab('free')">🎨 自由生成</button>
@@ -1529,6 +1530,172 @@
                 </template>
               </tbody>
             </table>
+          </div>
+        </template>
+      </div>
+    </template>
+
+    <!-- ════════ 🖼️ Aロールタブ（台本セリフ行→マンガ形式パネル一括生成） ════════ -->
+    <template x-if="tab === 'aroll'">
+      <div>
+        <template x-if="!currentProject">
+          <div class="card"><div class="empty" style="padding:24px">← プロジェクトを選択してください</div></div>
+        </template>
+
+        <template x-if="currentProject">
+          <div style="display:flex;flex-direction:column;gap:16px">
+
+            <!-- ① プロンプト生成 -->
+            <div class="card">
+              <h2>🖼️ Aロール（マンガ形式）
+                <span style="font-weight:400;text-transform:none;color:#4b5563;font-size:11px"
+                      x-text="`第${activeEpisodeNumber}話 — セリフ1行＝1コマ。吹き出しは編集時に手作業で載せます`"></span>
+              </h2>
+              <p class="info-note" style="margin:8px 0 12px">
+                承認済み台本のセリフをLLM（Gemini無料枠→OpenRouter無料）が解釈してコマごとの演出プロンプトを作り、
+                NanoBananaでキャラ画像を生成します。スタイル・キャラ外見は生成時に自動合成されるため、
+                プロンプト欄には<b>演出（表情・ポーズ・構図）だけ</b>が入ります。
+              </p>
+              <div style="display:flex;gap:14px;align-items:flex-end;flex-wrap:wrap">
+                <div>
+                  <label>スタイル</label>
+                  <select x-model="arollStyle">
+                    <template x-for="s in freeStyles" :key="s"><option :value="s" x-text="s"></option></template>
+                  </select>
+                </div>
+                <div>
+                  <label>アスペクト比</label>
+                  <select x-model="arollAspect">
+                    <option value="16:9">16:9（横・既定）</option>
+                    <option value="1:1">1:1（正方形）</option>
+                    <option value="9:16">9:16（縦）</option>
+                    <option value="4:3">4:3</option>
+                  </select>
+                </div>
+                <div style="flex:1;min-width:200px">
+                  <label>追加指示（任意・プロンプト生成LLMへ）</label>
+                  <input type="text" x-model="arollExtraPrompt" placeholder="例: 全体的にコミカルに、背景は教室で統一">
+                </div>
+                <label style="display:flex;align-items:center;gap:6px;cursor:pointer;font-size:12px;color:#94a3b8">
+                  <input type="checkbox" x-model="arollOverwrite" style="width:13px;height:13px;accent-color:#7c3aed">
+                  既存プロンプトを作り直す（手編集した行は保持）
+                </label>
+                <button class="btn btn-primary" @click="arollGeneratePrompts()" :disabled="arollBusy || arollRunning">
+                  <template x-if="arollBusy === 'prompts'"><span class="spinner"></span></template>
+                  <span x-text="arollBusy === 'prompts' ? 'LLMがプロンプト生成中...' : '✍ ① プロンプト一括生成'"></span>
+                </button>
+              </div>
+              <div x-show="arollWarnings.length" style="margin-top:10px">
+                <template x-for="(w, i) in arollWarnings" :key="i">
+                  <div class="log-line warn" style="font-size:11px" x-text="'⚠ ' + w"></div>
+                </template>
+              </div>
+              <div x-show="arollMsg" style="margin-top:8px;font-size:12px" :style="arollMsg.startsWith('✔') ? 'color:#4ade80' : 'color:#f87171'" x-text="arollMsg"></div>
+            </div>
+
+            <!-- ② 画像バッチ生成 -->
+            <div class="card" x-show="arollManifest">
+              <h2>② 画像一括生成
+                <span style="font-weight:400;text-transform:none;color:#4b5563;font-size:11px"
+                      x-text="`生成済み ${arollCounts.done} / 全 ${arollCounts.total} コマ（失敗 ${arollCounts.failed}）`"></span>
+              </h2>
+              <div style="display:flex;gap:14px;align-items:flex-end;flex-wrap:wrap;margin-top:8px">
+                <div>
+                  <label>対象</label>
+                  <select x-model="arollTarget">
+                    <option value="missing">未生成のみ（失敗含む・レジューム）</option>
+                    <option value="failed">失敗した行のみ</option>
+                    <option value="all">全行（生成済みも作り直す）</option>
+                  </select>
+                </div>
+                <label style="display:flex;align-items:center;gap:6px;cursor:pointer;font-size:12px;color:#94a3b8"
+                       title="OpenRouter経由のNanoBananaはFree表示でも実際は課金されます。OFFなら失敗行は失敗マークで続行し、後からまとめて再試行できます">
+                  <input type="checkbox" x-model="arollPaidFallback" style="width:13px;height:13px;accent-color:#f59e0b"
+                         @change="arollPaidFallback && arollLoadCredits()">
+                  Gemini失敗時にOpenRouterへ課金退避する
+                </label>
+                <span x-show="arollPaidFallback" style="font-size:11px;color:#fbbf24"
+                      x-text="arollOrCredits !== null ? `OpenRouter残高: $${arollOrCredits.toFixed(2)}` : '残高取得中...'"></span>
+                <button class="btn btn-primary" @click="arollStartBatch()" :disabled="arollRunning || arollBusy || arollBatchTargetCount === 0">
+                  <template x-if="arollRunning"><span class="spinner"></span></template>
+                  <span x-text="arollRunning ? '生成中...' : `🎬 ② 画像一括生成（${arollBatchTargetCount}枚 ≈ $${(arollBatchTargetCount * 0.04).toFixed(2)}）`"></span>
+                </button>
+                <button class="btn btn-danger" @click="arollStop()" :disabled="!arollRunning">⏸ 中断</button>
+              </div>
+              <div class="progress-bar" x-show="arollRunning || (arollJob.total > 0)">
+                <div class="progress-fill" :style="`width:${arollJob.total ? Math.round(((arollJob.done + arollJob.failed) / arollJob.total) * 100) : 0}%`"></div>
+              </div>
+              <div x-show="arollJob.total > 0" style="font-size:11px;color:#64748b"
+                   x-text="`${arollJob.done + arollJob.failed} / ${arollJob.total}（成功 ${arollJob.done}・失敗 ${arollJob.failed}）` + (arollJob.current_line ? ` — ${arollJob.current_line} を生成中` : '')"></div>
+              <div class="log-area" x-show="(arollJob.log || []).length">
+                <template x-for="(l, i) in arollJob.log || []" :key="i">
+                  <div class="log-line" :class="l.startsWith('✔') ? 'ok' : (l.startsWith('✘') ? 'err' : 'info')" x-text="l"></div>
+                </template>
+              </div>
+            </div>
+
+            <!-- パネル一覧 -->
+            <div class="card" x-show="arollManifest">
+              <h2>コマ一覧</h2>
+              <div style="display:flex;flex-direction:column;gap:8px;margin-top:8px">
+                <template x-for="p in (arollManifest?.panels || [])" :key="p.line_id">
+                  <div class="audio-line-row" style="align-items:flex-start;cursor:default">
+                    <!-- 左: 行情報 -->
+                    <div style="min-width:150px;max-width:150px">
+                      <div style="display:flex;align-items:center;gap:6px;flex-wrap:wrap">
+                        <span style="font-size:11px;color:#4b5563" x-text="p.order"></span>
+                        <span style="font-size:11px;color:#60a5fa" x-text="p.speaker_name || p.speaker_id"></span>
+                        <span class="status-badge"
+                              :style="p.status === 'done' ? 'background:#14532d;color:#bbf7d0' : (p.status === 'failed' ? 'background:#7f1d1d;color:#fecaca' : 'background:#1e293b;color:#94a3b8')"
+                              x-text="p.status === 'done' ? '✔ 生成済' : (p.status === 'failed' ? '✘ 失敗' : '未生成')"></span>
+                      </div>
+                      <div style="font-size:10px;color:#4b5563;margin-top:2px" x-text="p.section"></div>
+                      <div style="font-size:11px;color:#cbd5e1;margin-top:4px;line-height:1.5" x-text="p.text"></div>
+                      <div style="margin-top:6px;display:flex;gap:4px;flex-wrap:wrap;align-items:center">
+                        <template x-for="cid in p.characters" :key="cid">
+                          <span style="font-size:10px;background:#1e1040;color:#c4b5fd;border-radius:99px;padding:2px 8px;cursor:pointer"
+                                :title="'クリックで外す: ' + cid"
+                                @click="arollRemoveChar(p, cid)"
+                                x-text="(charas.find(c => c.char_id === cid)?.name || cid) + ' ×'"></span>
+                        </template>
+                        <select x-show="p.characters.length < 2" style="font-size:10px;padding:2px;width:auto"
+                                @change="arollAddChar(p, $event.target.value); $event.target.value = ''">
+                          <option value="">＋キャラ</option>
+                          <template x-for="c in charas.filter(c => !p.characters.includes(c.char_id))" :key="c.char_id">
+                            <option :value="c.char_id" x-text="c.name"></option>
+                          </template>
+                        </select>
+                      </div>
+                    </div>
+                    <!-- 中: プロンプト編集 -->
+                    <div style="flex:1">
+                      <textarea rows="3" style="width:100%;font-size:11px;font-family:monospace"
+                                :value="p.prompt" :placeholder="'（プロンプト未生成 — ①を実行するか手入力）'"
+                                @change="arollSavePrompt(p, $event.target.value)"></textarea>
+                      <div style="display:flex;gap:8px;align-items:center;margin-top:2px">
+                        <span style="font-size:10px;color:#4b5563" x-text="p.prompt_source === 'user' ? '手編集済み（①作り直しでも保持）' : (p.prompt ? 'LLM生成' : '')"></span>
+                        <span x-show="p.error" style="font-size:10px;color:#f87171" x-text="p.error"></span>
+                      </div>
+                    </div>
+                    <!-- 右: サムネ＋行生成 -->
+                    <div style="min-width:170px;max-width:170px;display:flex;flex-direction:column;gap:6px;align-items:center">
+                      <template x-if="p.image">
+                        <img :src="arollImageUrl(p)" loading="lazy"
+                             style="width:160px;border-radius:6px;border:1px solid #334155;cursor:zoom-in"
+                             @click="window.open(arollImageUrl(p), '_blank')">
+                      </template>
+                      <div x-show="arollLineBusy === p.line_id" class="progress-indeterminate" style="width:160px"></div>
+                      <button class="btn btn-sm" style="width:160px"
+                              @click="arollGenerateLine(p)"
+                              :disabled="arollRunning || arollLineBusy || !p.prompt">
+                        <span x-text="arollLineBusy === p.line_id ? '生成中...' : (p.status === 'done' ? '↻ この行を作り直す' : '▶ この行だけ生成')"></span>
+                      </button>
+                    </div>
+                  </div>
+                </template>
+              </div>
+            </div>
+
           </div>
         </template>
       </div>
@@ -2942,6 +3109,24 @@ function app() {
     footageSelected: {},          // { section: [candidate_id, ...] }
     footageDragSection: null,     // DnDハイライト中のセクション名
 
+    // 🖼️ Aロールタブ（マンガ形式パネル）
+    arollManifest: null,          // aroll.json（コマの正本）
+    arollStatus: null,            // /aroll/status のポーリング結果
+    arollRunning: false,
+    arollPollTimer: null,
+    arollBusy: null,              // null | 'prompts'
+    arollLineBusy: null,          // 行単位生成中の line_id
+    arollMsg: '',
+    arollWarnings: [],
+    arollStyle: 'kamishibai',
+    arollAspect: '16:9',
+    arollExtraPrompt: '',
+    arollOverwrite: false,
+    arollTarget: 'missing',       // missing | failed | all
+    arollPaidFallback: false,     // OpenRouter課金退避（既定OFF）
+    arollOrCredits: null,         // OpenRouter残高（課金退避ON時に表示）
+    arollImgVersion: 0,           // サムネのキャッシュバスター
+
     // 🎞️ 編集情報タブ
     editOk: false,
     editHostMediaRoot: '',
@@ -3931,6 +4116,7 @@ function app() {
       if (t === 'research') await this.refreshResearchTab();
       if (t === 'tts') await this.refreshTtsTab();
       if (t === 'footage') await this.refreshFootageTab();
+      if (t === 'aroll') await this.refreshArollTab();
       if (t === 'chara') await this.refreshCharaTab();
       if (t === 'studio') await this.refreshStudioTab();
       if (t === 'free') { await this.loadFreeStyles(); await this.loadFreeControlnets(); await this.loadFreeOutputs(); }
@@ -4819,6 +5005,164 @@ function app() {
         this.loadFootageDraft(),
         this.loadFootageFinal(),
       ]);
+    },
+
+    // ─── 🖼️ Aロールタブ（マンガ形式パネル） ────────────────────────
+    get arollApiBase() {
+      return `${FAPI}/projects/${this.currentProject?.id}/episodes/${this.activeEpisodeNumber}/aroll`;
+    },
+    get arollCounts() {
+      const c = { total: 0, done: 0, failed: 0, pending: 0 };
+      for (const p of this.arollManifest?.panels || []) {
+        c.total++;
+        if (p.status === 'done') c.done++;
+        else if (p.status === 'failed') c.failed++;
+        else c.pending++;
+      }
+      return c;
+    },
+    get arollJob() { return this.arollStatus?.job || {}; },
+    // 対象セレクトに応じたバッチ対象枚数（概算コスト表示用。プロンプトの無い行は対象外）
+    get arollBatchTargetCount() {
+      const panels = (this.arollManifest?.panels || []).filter(p => (p.prompt || '').trim());
+      if (this.arollTarget === 'all') return panels.length;
+      if (this.arollTarget === 'failed') return panels.filter(p => p.status === 'failed').length;
+      return panels.filter(p => p.status !== 'done').length;
+    },
+    arollImageUrl(p) {
+      return `${this.arollApiBase}/image/${p.image}?v=${this.arollImgVersion}`;
+    },
+    async refreshArollTab() {
+      if (!this.currentProject) return;
+      this.arollMsg = '';
+      await Promise.all([this.loadFreeStyles(), this.charas.length ? Promise.resolve() : this.loadCharas()]);
+      await this.loadArollManifest();
+      await this.pollArollStatus();
+    },
+    async loadArollManifest() {
+      if (!this.currentProject || !this.activeEpisodeNumber) { this.arollManifest = null; return; }
+      try {
+        const r = await fetch(this.arollApiBase);
+        this.arollManifest = r.ok ? await r.json() : null;
+      } catch { this.arollManifest = null; }
+      if (this.arollManifest) {
+        this.arollAspect = this.arollManifest.aspect || this.arollAspect;
+        this.arollStyle = this.arollManifest.style || this.arollStyle;
+      }
+      this.arollImgVersion++;
+    },
+    async arollGeneratePrompts() {
+      this.arollBusy = 'prompts';
+      this.arollMsg = '';
+      this.arollWarnings = [];
+      try {
+        const r = await fetch(`${this.arollApiBase}/prompts`, {
+          method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            extra_prompt: this.arollExtraPrompt || null,
+            overwrite: this.arollOverwrite,
+            aspect: this.arollAspect, style: this.arollStyle,
+          }),
+        });
+        const d = await r.json();
+        if (!r.ok) throw new Error(d.detail || 'プロンプト生成に失敗しました');
+        this.arollManifest = d.manifest;
+        this.arollWarnings = d.warnings || [];
+        this.arollMsg = `✔ ${(d.manifest.panels || []).filter(p => p.prompt).length}行のプロンプトを用意しました`;
+      } catch (e) {
+        this.arollMsg = `プロンプト生成に失敗: ${e.message}`;
+      } finally { this.arollBusy = null; }
+    },
+    async arollSavePrompt(p, value) {
+      await this.arollUpdateLine(p, { prompt: value });
+    },
+    arollAddChar(p, cid) {
+      if (!cid || p.characters.includes(cid) || p.characters.length >= 2) return;
+      this.arollUpdateLine(p, { characters: [...p.characters, cid] });
+    },
+    arollRemoveChar(p, cid) {
+      this.arollUpdateLine(p, { characters: p.characters.filter(c => c !== cid) });
+    },
+    async arollUpdateLine(p, patch) {
+      try {
+        const r = await fetch(`${this.arollApiBase}/lines/${p.line_id}`, {
+          method: 'PUT', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(patch),
+        });
+        const d = await r.json();
+        if (!r.ok) throw new Error(d.detail || '保存に失敗しました');
+        Object.assign(p, d);
+      } catch (e) { this.arollMsg = `行の保存に失敗: ${e.message}`; }
+    },
+    async arollGenerateLine(p) {
+      this.arollLineBusy = p.line_id;
+      this.arollMsg = '';
+      try {
+        const r = await fetch(`${this.arollApiBase}/generate/line/${p.line_id}`, {
+          method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ allow_paid_fallback: this.arollPaidFallback }),
+        });
+        const d = await r.json();
+        if (!r.ok) throw new Error(d.detail || '生成に失敗しました');
+        Object.assign(p, d);
+        this.arollImgVersion++;
+      } catch (e) {
+        this.arollMsg = `${p.line_id} の生成に失敗: ${e.message}`;
+        await this.loadArollManifest();  // failedステータスを反映
+      } finally { this.arollLineBusy = null; }
+    },
+    async arollStartBatch() {
+      const n = this.arollBatchTargetCount;
+      if (n === 0) return;
+      if (!confirm(`${n}枚 生成します（概算 $${(n * 0.04).toFixed(2)}・NanoBanana実課金）。続行しますか？`)) return;
+      const body = { allow_paid_fallback: this.arollPaidFallback, aspect: this.arollAspect, style: this.arollStyle };
+      if (this.arollTarget === 'failed') {
+        body.line_ids = (this.arollManifest?.panels || []).filter(p => p.status === 'failed').map(p => p.line_id);
+        body.only_missing = true;
+      } else {
+        body.only_missing = this.arollTarget !== 'all';
+      }
+      this.arollMsg = '';
+      try {
+        const r = await fetch(`${this.arollApiBase}/generate`, {
+          method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(body),
+        });
+        const d = await r.json();
+        if (!r.ok) throw new Error(d.detail || 'バッチ開始に失敗しました');
+        this.arollRunning = true;
+        this.schedulePollAroll();
+      } catch (e) { this.arollMsg = `バッチ開始に失敗: ${e.message}`; }
+    },
+    async arollStop() {
+      try { await fetch(`${this.arollApiBase}/stop`, { method: 'POST' }); } catch { /* 次のポーリングで反映 */ }
+    },
+    schedulePollAroll() {
+      clearTimeout(this.arollPollTimer);
+      this.arollPollTimer = setTimeout(() => this.pollArollStatus(), 2500);
+    },
+    async pollArollStatus() {
+      if (!this.currentProject || !this.activeEpisodeNumber) return;
+      const wasRunning = this.arollRunning;
+      try {
+        const st = await (await fetch(`${this.arollApiBase}/status`)).json();
+        this.arollStatus = st;
+        this.arollRunning = !!st.running;
+      } catch { this.arollRunning = false; }
+      if (this.arollRunning) {
+        this.schedulePollAroll();
+        // 生成中もサムネ・状態を逐次反映する（1行終わるごとにマニフェストが更新される）
+        await this.loadArollManifest();
+      } else if (wasRunning) {
+        await this.loadArollManifest();  // バッチ完了 → 最終状態を反映
+      }
+    },
+    async arollLoadCredits() {
+      this.arollOrCredits = null;
+      try {
+        const d = await (await fetch(`${SAPI}/llm-usage`)).json();
+        this.arollOrCredits = (typeof d.remaining === 'number') ? d.remaining : null;
+      } catch { this.arollOrCredits = null; }
     },
 
     async checkScrapHealth() {

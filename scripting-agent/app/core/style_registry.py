@@ -125,6 +125,7 @@ def create_user_style(
     target_line_count: int,
     content_mode: str = "long",
     line_count_mode: str = "auto",
+    series_mode: bool = False,
     is_default: bool = False,
     style_id: Optional[str] = None,
 ) -> dict:
@@ -172,6 +173,7 @@ def create_user_style(
         "structure": normalized_structure,
         "content_mode": content_mode if content_mode in ("short", "long") else "long",
         "line_count_mode": line_count_mode if line_count_mode in ("auto", "fixed") else "auto",
+        "series_mode": series_mode,
         "target_line_count": target_line_count,
         "balance_ratio": balance,
         "emotions_allowed": ["happy", "neutral", "surprised", "sad", "angry", "thinking", "serious", "excited"],
@@ -220,6 +222,7 @@ def update_user_style(
     target_line_count: int,
     content_mode: str = "long",
     line_count_mode: str = "auto",
+    series_mode: bool = False,
     is_default: bool = False,
 ) -> Optional[dict]:
     """ユーザースタイルを上書き更新する。組み込みスタイルは不可（None を返す）。"""
@@ -235,6 +238,7 @@ def update_user_style(
         target_line_count=target_line_count,
         content_mode=content_mode,
         line_count_mode=line_count_mode,
+        series_mode=series_mode,
         is_default=is_default,
         style_id=style_id,
     )

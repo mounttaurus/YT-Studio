@@ -130,6 +130,8 @@ async def proxy_research(path: str, request: Request):
 # scripting-agentのREST APIをそのまま中継する。director-agent自身は
 # 台本生成・編集のロジックを持たない（疎結合維持）。
 # 更新系リクエストは project ごとの director_log.json に監査ログとして記録する。
+# シリーズ一括生成(generate-series)はプラン+全話ぶんのLLM呼び出しで数分かかるため
+# タイムアウトは600秒（120秒では途中でReadTimeout→502になる実測バグ）。
 
 @router.api_route("/api/scripting/{path:path}", methods=["GET", "POST", "PUT", "PATCH", "DELETE"])
 async def proxy_scripting(path: str, request: Request):
@@ -139,7 +141,7 @@ async def proxy_scripting(path: str, request: Request):
     if "content-type" in request.headers:
         headers["content-type"] = request.headers["content-type"]
 
-    async with httpx.AsyncClient(timeout=120.0) as client:
+    async with httpx.AsyncClient(timeout=600.0) as client:
         try:
             res = await client.request(
                 request.method,

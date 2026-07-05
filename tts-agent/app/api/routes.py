@@ -132,7 +132,7 @@ async def create_sample_project():
             "video_edit": "not_started",
         },
         "config": {
-            "llm": {"provider": "openrouter", "model": "anthropic/claude-sonnet-4-5"},
+            "llm": {"provider": "anthropic", "model": "anthropic/claude-sonnet-5"},
             "tts": {
                 "engine": "irodori",
                 "speakers": [

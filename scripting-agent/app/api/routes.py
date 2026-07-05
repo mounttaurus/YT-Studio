@@ -102,6 +102,7 @@ class NewStyleRequest(BaseModel):
     target_line_count: int = 60
     line_count_mode: str = "auto"
     content_mode: str = "long"
+    series_mode: bool = False
     is_default: bool = False
 
 
@@ -356,6 +357,7 @@ async def create_style(req: NewStyleRequest):
             target_line_count=req.target_line_count,
             line_count_mode=req.line_count_mode,
             content_mode=req.content_mode,
+            series_mode=req.series_mode,
             is_default=req.is_default,
         )
         return {"style": style_registry._style_to_summary(style), "status": "created"}
@@ -373,6 +375,8 @@ async def update_style(style_id: str, req: NewStyleRequest):
         structure=req.structure,
         target_line_count=req.target_line_count,
         content_mode=req.content_mode,
+        line_count_mode=req.line_count_mode,
+        series_mode=req.series_mode,
         is_default=req.is_default,
     )
     if style is None:

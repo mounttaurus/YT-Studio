@@ -87,6 +87,56 @@ async def list_styles() -> list[dict]:
     return data.get("styles", data) if isinstance(data, dict) else data
 
 
+async def create_style(style_name: str, description: str,
+                       speakers: list[dict], structure: list[dict],
+                       target_line_count: int = 30,
+                       line_count_mode: str = "auto",
+                       content_mode: str = "short",
+                       series_mode: bool = False) -> dict:
+    """新規の台本スタイルを作成する（shared/styles/ にJSON保存・可逆WRITE）。
+
+    speakers[] = {name, voice_id, character_id, role, tone, default_emotion}。
+    voice_id/character_id は当てずっぽう禁止＝先に list_voices / list_characters で実在値を確認する。
+    structure[] = {id, label, description}（説明に目安行数を書くとLLMが従う）。
+    content_mode: short(3分前後)|long(8分超)。series_mode=True で前後編等の複数話シリーズ用になる。
+    line_count_mode: auto|fixed。fixed時のみ target_line_count が厳密目標になる。
+    prompt_template と balance_ratio はサーバ側で自動生成される（話者比率は均等割り）。
+    """
+    body = {"style_name": style_name, "description": description,
+            "speakers": speakers, "structure": structure,
+            "target_line_count": target_line_count,
+            "line_count_mode": line_count_mode,
+            "content_mode": content_mode, "series_mode": series_mode}
+    return await dc.request("POST", "api/scripting/styles", json=body)
+
+
+async def update_style(style_id: str, style_name: str, description: str,
+                       speakers: list[dict], structure: list[dict],
+                       target_line_count: int = 30,
+                       line_count_mode: str = "auto",
+                       content_mode: str = "short",
+                       series_mode: bool = False) -> dict:
+    """ユーザースタイルを丸ごと上書き更新する（full-replace・組み込みスタイルは404）。
+
+    部分更新ではない＝ list_styles で現状を読み、変更を織り込んだ全体を渡すこと
+    （read-modify-write。assign_cast と同じ流儀）。パラメータの意味は create_style と同じ。
+    """
+    body = {"style_name": style_name, "description": description,
+            "speakers": speakers, "structure": structure,
+            "target_line_count": target_line_count,
+            "line_count_mode": line_count_mode,
+            "content_mode": content_mode, "series_mode": series_mode}
+    return await dc.request("PUT", f"api/scripting/styles/{style_id}", json=body)
+
+
+async def delete_style(style_id: str) -> dict:
+    """ユーザースタイルを削除する（組み込みスタイルは404で保護される・ファイル1枚の削除）。
+
+    既存プロジェクトが参照している style_id を消すと再生成時に選び直しが必要になる。消す前に一言確認。
+    """
+    return await dc.request("DELETE", f"api/scripting/styles/{style_id}")
+
+
 async def create_project(title: str, channel: str = "default",
                          slug: Optional[str] = None) -> dict:
     """新規プロジェクトを作成する(shared/projects/にディレクトリ生成)。一気通貫フローの起点。"""
@@ -461,6 +511,61 @@ async def research_get_digest(project_id: str) -> dict:
     return await dc.get(f"api/research/projects/{project_id}/digest")
 
 
+# ── Aロール（マンガ形式パネル / 台本セリフ行→キャラ画像の一括生成） ──────
+#
+# Aロール＝素材取得ではなく「セリフ1行＝マンガ1コマ」のキャラ画像（2026-07方針転換）。
+# 流れ: generate_aroll_prompts(LLM・無料枠) → aroll_status で確認 →
+#       run_aroll_batch(NanoBanana実課金 ≈$0.04/枚) → aroll_status でポーリング。
+# 正本: episodes/epNN/a_roll/aroll.json（吹き出しはユーザーが編集時に手作業で載せる）。
+
+async def generate_aroll_prompts(project_id: str, episode_number: int,
+                                 extra_prompt: Optional[str] = None,
+                                 overwrite: bool = False,
+                                 aspect: str = "16:9", style: str = "kamishibai",
+                                 model: Optional[str] = None) -> dict:
+    """承認済み台本の全セリフ行にマンガ1コマ分の画像生成プロンプトをLLMで用意する。
+
+    章単位でLLM(既定Gemini無料枠→OpenRouter無料)を呼び、aroll.jsonに保存する（課金なし）。
+    登場キャラ(1〜2人)もLLMが判定する。overwrite=Trueでも手編集済み(prompt_source=user)は保持。
+    前提: 台本承認済み(approve_script)＋配役割当済み(assign_cast)。未割当話者はwarningsに出る。
+    """
+    body: dict = {"overwrite": overwrite, "aspect": aspect, "style": style}
+    if extra_prompt is not None:
+        body["extra_prompt"] = extra_prompt
+    if model is not None:
+        body["model"] = model
+    return await dc.request(
+        "POST", f"api/scrapping/projects/{project_id}/episodes/{episode_number}/aroll/prompts",
+        json=body)
+
+
+async def run_aroll_batch(project_id: str, episode_number: int,
+                          only_missing: bool = True,
+                          line_ids: Optional[list] = None,
+                          allow_paid_fallback: bool = False) -> dict:
+    """Aロールのパネル画像をバッチ生成する(NanoBanana・外部API課金 ≈$0.04/枚×対象行数)。
+
+    バックグラウンド実行＝この呼び出しは即返る。進捗は aroll_status でポーリングする。
+    only_missing=True(既定)は生成済みをスキップ＝中断後の再開・失敗行の再試行を兼ねる。
+    allow_paid_fallback は既定False＝Gemini失敗時もOpenRouter(Free表示でも課金)へ退避しない。
+    実行前に aroll_status で対象枚数を確認し、概算コストをユーザーに提示してから呼ぶこと。
+    """
+    body: dict = {"only_missing": only_missing, "allow_paid_fallback": allow_paid_fallback}
+    if line_ids is not None:
+        body["line_ids"] = line_ids
+    return await dc.request(
+        "POST", f"api/scrapping/projects/{project_id}/episodes/{episode_number}/aroll/generate",
+        json=body)
+
+
+async def aroll_status(project_id: str, episode_number: int) -> dict:
+    """Aロールの進捗(counts: total/done/failed/pending/no_prompt ＋ 実行中ジョブ)を返す。
+
+    running=Trueの間はバッチ実行中。counts.no_prompt>0 なら先に generate_aroll_prompts が必要。
+    """
+    return await dc.get(f"api/scrapping/projects/{project_id}/episodes/{episode_number}/aroll/status")
+
+
 # ── レジストリ（server.py / 後継ループ が参照する単一の出所） ──────────
 
 S = SideEffect
@@ -470,6 +575,9 @@ TOOLS = [
     {"fn": list_projects,        "side_effects": [S.READ]},
     {"fn": project_status,       "side_effects": [S.READ]},
     {"fn": list_styles,          "side_effects": [S.READ]},
+    {"fn": create_style,         "side_effects": [S.WRITE]},
+    {"fn": update_style,         "side_effects": [S.WRITE]},
+    {"fn": delete_style,         "side_effects": [S.WRITE]},
     {"fn": create_project,       "side_effects": [S.WRITE]},
     {"fn": generate_script,      "side_effects": [S.WRITE]},
     {"fn": generate_series_script, "side_effects": [S.WRITE]},
@@ -490,6 +598,10 @@ TOOLS = [
     # 紙芝居パネル
     {"fn": list_panel_presets,   "side_effects": [S.READ]},
     {"fn": generate_character_panel, "side_effects": [S.COST]},
+    # Aロール（セリフ行→マンガ形式パネル）
+    {"fn": generate_aroll_prompts, "side_effects": [S.WRITE]},
+    {"fn": run_aroll_batch,      "side_effects": [S.COST, S.ASYNC]},
+    {"fn": aroll_status,         "side_effects": [S.READ]},
     # 自由生成（台本非依存）
     {"fn": list_imagegen_styles, "side_effects": [S.READ]},
     {"fn": free_generate,        "side_effects": [S.COST, S.GPU]},

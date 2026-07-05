@@ -78,18 +78,28 @@ async def generate_one(
     prompt: str,
     reference_images: list[tuple] | None = None,
     aspect: str = "1:1",
+    allow_fallback: bool = True,
 ) -> bytes:
     """1枚生成してPNG/JPEGバイト列を返す。reference_imagesは(データ, mime[, label])のリスト（最大3枚使用）。
 
     BACKEND=autoの場合、Google直叩きがクォータ/権限エラーならOpenRouterへ自動フォールバック。
+    allow_fallback=False にすると auto でも OpenRouter へ退避しない（OpenRouter経由の画像は
+    Free表示でも課金されるため、バッチ生成は既定で退避を止めて予期しない課金を防ぐ）。
+    BACKEND="openrouter" の明示設定は退避ではなくユーザーの選択なので常に従う。
     """
-    if BACKEND == "openrouter" or (BACKEND == "auto" and not GEMINI_API_KEY):
+    if BACKEND == "openrouter":
+        return await _generate_openrouter(prompt, reference_images, aspect)
+    if BACKEND == "auto" and not GEMINI_API_KEY:
+        if not allow_fallback:
+            raise RuntimeError(
+                "GEMINI_API_KEY is not configured（課金退避OFFのためOpenRouterへは退避しません）"
+            )
         return await _generate_openrouter(prompt, reference_images, aspect)
     try:
         return await _generate_google(prompt, reference_images, aspect)
     except RuntimeError as e:
         quota_error = any(s in str(e) for s in ("429", "RESOURCE_EXHAUSTED", "PERMISSION_DENIED", "403"))
-        if BACKEND == "auto" and OPENROUTER_API_KEY and quota_error:
+        if allow_fallback and BACKEND == "auto" and OPENROUTER_API_KEY and quota_error:
             return await _generate_openrouter(prompt, reference_images, aspect)
         raise
 

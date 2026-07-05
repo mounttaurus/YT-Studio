@@ -166,9 +166,9 @@ PROVIDERS: list[dict] = [
         "color": "#cc785c",
         "requires_key": "ANTHROPIC_API_KEY",
         "models": [
-            {"id": "anthropic/claude-opus-4-8",   "label": "Claude Opus 4.8",   "tier": "high"},
-            {"id": "anthropic/claude-sonnet-4-6", "label": "Claude Sonnet 4.6", "tier": "mid"},
-            {"id": "anthropic/claude-haiku-4-5",  "label": "Claude Haiku 4.5",  "tier": "fast"},
+            {"id": "anthropic/claude-opus-4-8",  "label": "Claude Opus 4.8",  "tier": "high"},
+            {"id": "anthropic/claude-sonnet-5",  "label": "Claude Sonnet 5",  "tier": "mid"},
+            {"id": "anthropic/claude-haiku-4-5", "label": "Claude Haiku 4.5", "tier": "fast"},
         ],
     },
     {
@@ -295,8 +295,8 @@ def get_available_models() -> list[dict]:
 
 def get_default_model() -> str:
     # OpenRouterは中間業者でマージンが乗るため、オリジナルAPIキーがある以上そちらを優先する。
-    # 既定は直接Anthropic APIのSonnet 4.6（OpenRouter非経由）。
-    return os.getenv("DEFAULT_LLM_MODEL", "anthropic/claude-sonnet-4-6")
+    # 既定は直接Anthropic APIのSonnet 5（OpenRouter非経由）。
+    return os.getenv("DEFAULT_LLM_MODEL", "anthropic/claude-sonnet-5")
 
 
 def _is_free_openrouter_model(model: str) -> bool:
@@ -313,6 +313,16 @@ def get_default_provider() -> str:
         if any(m["id"] == default for m in p["models"]):
             return p["id"]
     return PROVIDERS[0]["id"]
+
+
+# Anthropicの新世代モデル(Sonnet 5 / Opus 4.7以降 / Fable系)は temperature/top_p/top_k を
+# 非デフォルト値で送ると 400 を返す（samplingパラメータ自体が撤廃された）。該当モデルには送らない。
+_NO_SAMPLING_MARKERS = ("claude-sonnet-5", "claude-opus-4-7", "claude-opus-4-8",
+                        "claude-fable", "claude-mythos")
+
+
+def _supports_temperature(model: str) -> bool:
+    return not any(marker in model for marker in _NO_SAMPLING_MARKERS)
 
 
 def _build_api_kwargs(model: str) -> dict:
@@ -379,17 +389,29 @@ async def chat(
     messages.append({"role": "user", "content": prompt})
 
     kwargs = _build_api_kwargs(model)
+    if _supports_temperature(model):
+        kwargs["temperature"] = temperature
 
     # 503 UNAVAILABLE / 429 RateLimit など一時的エラーは自動リトライ（指数バックオフ）。
     # 特に Gemini 無料枠の flash 系はスパイク時に 503 を返しやすい。
-    response = await litellm.acompletion(
+    #
+    # 常にストリーミングで受信して結合する。非ストリーミングだと応答完了まで無通信になり、
+    # Docker Desktop(Windows)のNAT経路が約30秒でアイドル接続を切断して
+    # 「AnthropicException - Server disconnected」になる（長い台本生成が全滅する実測バグ）。
+    stream = await litellm.acompletion(
         model=model,
         messages=messages,
-        temperature=temperature,
         max_tokens=max_tokens,
         num_retries=4,
         retry_strategy="exponential_backoff_retry",
         timeout=120,
+        stream=True,
         **kwargs,
     )
-    return response.choices[0].message.content
+    parts: list[str] = []
+    async for chunk in stream:
+        if chunk.choices:
+            delta = chunk.choices[0].delta.content
+            if delta:
+                parts.append(delta)
+    return "".join(parts)

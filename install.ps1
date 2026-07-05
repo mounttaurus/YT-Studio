@@ -1,4 +1,4 @@
-# ===================================================================
+﻿# ===================================================================
 # YouTube Auto - Windows installer / setup script
 #
 # Usage (typical first run):
@@ -36,13 +36,10 @@ function Err($m)   { Write-Host "[X] $m" -ForegroundColor Red }
 function Step($m)  { Write-Host ""; Write-Host "=== $m ===" -ForegroundColor Magenta }
 function Have($exe) { return [bool](Get-Command $exe -ErrorAction SilentlyContinue) }
 
-# User-editable keys that live in the single root .env (harvested from old root if present)
-$ENV_KEYS = @(
-    'OPENROUTER_API_KEY','OPENAI_API_KEY','GEMINI_API_KEY','DEFAULT_LLM_MODEL','OLLAMA_BASE_URL',
-    'PEXELS_API_KEY','PIXABAY_API_KEY','VECTEEZY_API_KEY','VECTEEZY_USER_ID',
-    'NANOBANANA_BACKEND','NANOBANANA_MODEL','NANOBANANA_OR_MODEL',
-    'OTIO_PATH_STYLE','DEFAULT_FPS','IRODORI_DEFAULT_NUM_STEPS','TTS_CACHE_ENABLED','LOG_LEVEL'
-)
+# Keys NOT to harvest from an old root (root-specific values that must be regenerated here).
+# それ以外の旧 .env のキーは全て汎用継承する（固定の許可リストはキー追加のたびに陳腐化して
+# 取りこぼす事故があったため廃止。2026-07-02: GROK/CLOUDFLARE/RUNWARE 等8キーが漏れた実例）。
+$ENV_SKIP_KEYS = @('HOST_SHARED_DIR')
 $OLD_ENV_FILES = @('scripting-agent\.env','director-agent\.env','scrapping-agent\.env','editing-agent\.env','tts-agent\.env','.env')
 
 # Reusable shared/ libraries to carry over; generated/test data is NOT copied.
@@ -53,7 +50,8 @@ $SHARED_SKELETON = @('characters','styles','voices','projects','footage_pool','i
 function Get-EnvPairs($path) {
     $h = @{}
     if (-not (Test-Path $path)) { return $h }
-    foreach ($line in (Get-Content $path)) {
+    # UTF-8 明示読み。既定読み(cp932)だと日本語コメントの多バイト末尾が改行を食い、直後の行が消える
+    foreach ($line in [System.IO.File]::ReadAllLines($path, [System.Text.Encoding]::UTF8)) {
         if ($line -match '^\s*#') { continue }
         if ($line -match '^\s*([A-Za-z_][A-Za-z0-9_]*)\s*=\s*(.*)$') {
             $v = $matches[2].Trim()
@@ -67,13 +65,14 @@ function Get-EnvPairs($path) {
     return $h
 }
 function Set-EnvValue($path, $key, $value) {
-    $content = Get-Content $path -Raw
+    # UTF-8 明示読み書き（既定読みcp932→UTF8書きだと日本語コメントが文字化けして固定化する）
+    $content = [System.IO.File]::ReadAllText($path, [System.Text.Encoding]::UTF8)
     if ($content -match "(?m)^\s*$key=.*$") {
         $content = [Regex]::Replace($content, "(?m)^\s*$key=.*$", "$key=$value")
     } else {
         $content = $content.TrimEnd() + "`r`n$key=$value`r`n"
     }
-    Set-Content -Path $path -Value $content -Encoding UTF8
+    [System.IO.File]::WriteAllText($path, $content, [System.Text.UTF8Encoding]::new($false))
 }
 
 Write-Host ""
@@ -142,7 +141,7 @@ if ($FromOldRoot) {
     foreach ($rel in $OLD_ENV_FILES) {
         $p = Join-Path $FromOldRoot $rel
         foreach ($kv in (Get-EnvPairs $p).GetEnumerator()) {
-            if ($ENV_KEYS -contains $kv.Key -and $kv.Value -ne '' -and -not $harvest.ContainsKey($kv.Key)) {
+            if ($ENV_SKIP_KEYS -notcontains $kv.Key -and $kv.Value -ne '' -and -not $harvest.ContainsKey($kv.Key)) {
                 $harvest[$kv.Key] = $kv.Value
             }
         }
