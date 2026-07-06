@@ -571,11 +571,142 @@
       <textarea x-model="extraInstruction" rows="3"
                 placeholder="ラフ台本に対する追加の指示（例：『この部分を強調して』『〇〇についてはバイアスをつけて』）。空欄でOK"></textarea>
 
-      <label style="display:flex;align-items:center;gap:6px;font-size:12px;color:#6b7280;margin-top:10px">
+      <label style="display:flex;align-items:center;gap:6px;font-size:12px;color:#6b7280;margin-top:10px"
+             title="生成前にYouTube市場を分析し、台本に馴染むキーワードだけを軽く反映します（詰め込みません）">
         <input type="checkbox" x-model="seoAutoEnabled" @change="saveSeoAutoConfig()">
-        ⚡ SEO自動最適化（生成前にYouTube市場分析を自動実行し、台本に反映します）
+        ⚡ SEO自動最適化（生成前にYouTube市場を分析し、台本に馴染むキーワードだけを軽く反映します。詰め込みません）
       </label>
       <div x-show="seoAutoStatus" style="font-size:11px;color:#6b7280;margin-top:4px" x-text="seoAutoStatus"></div>
+    </div>
+
+    <!-- ════════ 🔍 コンパクトSEOパネル ════════ -->
+    <div class="card" x-show="currentProject">
+      <h2 style="display:flex;align-items:center;gap:10px;flex-wrap:wrap">🔍 SEO分析
+        <span x-show="seoQuota && seoQuota.configured" style="font-size:10px;padding:2px 8px;border-radius:99px;background:#1e293b;color:#93c5fd"
+              x-text="`YouTube API: ${(seoQuota?.used||0).toLocaleString()} / ${(seoQuota?.budget||0).toLocaleString()}`"></span>
+        <span x-show="seoQuota && !seoQuota.configured" style="font-size:10px;padding:2px 8px;border-radius:99px;background:#3f1d1d;color:#fca5a5"
+              x-text="'YOUTUBE_DATA_API_KEY 未設定'"></span>
+      </h2>
+
+      <div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap">
+        <button class="btn btn-primary btn-sm" @click="runSeoOptimize()" :disabled="seoBusy || !(seoQuota && seoQuota.configured)">
+          <span x-text="seoBusy ? '⏳ 分析中…' : '🔍 SEO分析'"></span>
+        </button>
+        <label style="display:flex;align-items:center;gap:6px;font-size:12px;color:#94a3b8">
+          <input type="checkbox" x-model="seoForce" :disabled="seoBusy">強制再分析（キャッシュ無視）
+        </label>
+        <span x-show="seoQuota?.remaining !== undefined" style="font-size:11px;color:#64748b"
+              x-text="`残クォータ: ${(seoQuota?.remaining||0).toLocaleString()}（${seoQuota?.date_pt} PT）`"></span>
+      </div>
+      <div x-show="seoBusy" class="progress-indeterminate" style="height:4px;margin-top:8px"></div>
+      <p x-show="seoError" style="color:#fca5a5;font-size:12px;margin-top:8px" x-text="seoError"></p>
+
+      <!-- 📝 台本に反映するキーワード（script_brief・最重要） -->
+      <template x-if="seoPack">
+        <div style="margin-top:16px;border-top:1px solid #2d3748;padding-top:14px">
+          <h3 style="margin:0 0 4px;font-size:13px;color:#e2e8f0;display:flex;align-items:center;gap:8px">
+            📝 台本に反映するキーワード
+            <span x-show="seoPack.script_brief?.curated_by" style="font-size:9px;padding:1px 6px;border-radius:99px;background:#1e3a2f;color:#86efac"
+                  x-text="seoPack.script_brief?.curated_by === 'user' ? '手動確定' : 'AI選定'"></span>
+          </h3>
+          <p style="font-size:11px;color:#64748b;margin:0 0 10px">これらが台本本文に軽く反映されます（詰め込みません）。クリックで選択/解除できます。</p>
+
+          <div style="display:flex;flex-wrap:wrap;gap:6px;margin-bottom:10px">
+            <template x-for="kw in (seoPack.script_brief?.keywords || [])" :key="kw">
+              <span style="font-size:11px;padding:3px 10px;border-radius:99px;cursor:pointer;background:#1e3a2f;border:1px solid #14532d;color:#86efac;display:inline-flex;align-items:center;gap:6px"
+                    @click="toggleBriefKeyword(kw)" title="クリックで解除">
+                <span x-text="kw"></span>
+                <span style="color:#4ade80" @click.stop="removeBriefKeyword(kw)">×</span>
+              </span>
+            </template>
+            <span x-show="(seoPack.script_brief?.keywords || []).length === 0" style="font-size:11px;color:#4b5563">
+              キーワード未選定（SEO分析を実行するか、AIにおまかせを押してください）
+            </span>
+          </div>
+
+          <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">
+            <button class="btn btn-ghost btn-sm" @click="curateSeoBrief()" :disabled="seoBriefBusy">
+              <span x-text="seoBriefBusy ? '⏳ 選定中…' : '🤖 AIにおまかせ（クォータ消費なし）'"></span>
+            </button>
+            <input type="text" x-model="seoBriefInput" @keydown.enter="addBriefKeyword()"
+                   placeholder="キーワードを追加してEnter" style="max-width:200px">
+          </div>
+          <p x-show="seoBriefError" style="color:#fca5a5;font-size:12px;margin-top:6px" x-text="seoBriefError"></p>
+          <div style="font-size:10px;color:#4b5563;margin-top:6px" x-show="seoPack.script_brief?.curated_at"
+               x-text="`最終更新: ${seoPack.script_brief?.curated_at || '-'}`"></div>
+        </div>
+      </template>
+
+      <!-- 💡 参考: 企画のヒント（読み取り専用・自動反映されない） -->
+      <template x-if="seoPack && (seoPack.gap_analysis?.multiplier_ideas || []).length > 0">
+        <div style="margin-top:14px;border-top:1px solid #2d3748;padding-top:12px">
+          <h3 style="margin:0 0 4px;font-size:13px;color:#e2e8f0">💡 参考: 企画のヒント</h3>
+          <p style="font-size:11px;color:#64748b;margin:0 0 8px">本文には自動反映されません（参考用）。</p>
+          <div style="display:flex;flex-wrap:wrap;gap:6px">
+            <template x-for="idea in (seoPack.gap_analysis?.multiplier_ideas || [])" :key="idea">
+              <span style="font-size:10px;padding:2px 8px;border-radius:99px;background:#1a1d2e;border:1px solid #2d3748;color:#94a3b8" x-text="idea"></span>
+            </template>
+          </div>
+        </div>
+      </template>
+
+      <!-- 📤 公開パック -->
+      <div style="margin-top:16px;border-top:1px solid #2d3748;padding-top:14px">
+        <h3 style="margin:0 0 10px;font-size:13px;color:#e2e8f0">📤 公開パック</h3>
+        <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">
+          <label style="font-size:12px;color:#94a3b8">エピソード番号</label>
+          <input type="number" x-model.number="seoPublishEpisode" min="1" style="max-width:80px" @change="loadPublishPack()">
+          <button class="btn btn-primary btn-sm" @click="runPublishPack()" :disabled="seoPublishBusy">
+            <span x-text="seoPublishBusy ? '⏳ 生成中…' : '📤 公開パック生成'"></span>
+          </button>
+        </div>
+        <p x-show="seoPublishError" style="color:#fca5a5;font-size:12px;margin-top:8px" x-text="seoPublishError"></p>
+
+        <template x-if="seoPublishPack">
+          <div style="margin-top:12px;display:flex;flex-direction:column;gap:10px">
+            <div>
+              <h4 style="margin:0 0 6px;font-size:12px;color:#94a3b8">タイトル案</h4>
+              <div style="display:flex;flex-direction:column;gap:6px">
+                <template x-for="(t,i) in (seoPublishPack.titles || [])" :key="i">
+                  <div style="display:flex;align-items:center;gap:8px;background:#0f1117;border:1px solid #2d3748;border-radius:6px;padding:6px 10px">
+                    <span style="font-size:12px;color:#e2e8f0;flex:1" x-text="t"></span>
+                    <button class="btn btn-ghost btn-sm" @click="copySeoText('title'+i, t)" x-text="seoCopyLabel['title'+i] || '📋'"></button>
+                  </div>
+                </template>
+              </div>
+            </div>
+            <div>
+              <h4 style="margin:0 0 6px;font-size:12px;color:#94a3b8">概要欄</h4>
+              <div style="display:flex;align-items:flex-start;gap:8px;background:#0f1117;border:1px solid #2d3748;border-radius:6px;padding:8px 10px">
+                <pre style="white-space:pre-wrap;word-break:break-word;font-size:12px;color:#e2e8f0;flex:1;margin:0" x-text="seoPublishPack.description"></pre>
+                <button class="btn btn-ghost btn-sm" @click="copySeoText('desc', seoPublishPack.description)" x-text="seoCopyLabel['desc'] || '📋'"></button>
+              </div>
+            </div>
+            <div>
+              <h4 style="margin:0 0 6px;font-size:12px;color:#94a3b8">ハッシュタグ</h4>
+              <div style="display:flex;align-items:center;gap:8px">
+                <div style="display:flex;flex-wrap:wrap;gap:6px;flex:1">
+                  <template x-for="(h,i) in (seoPublishPack.hashtags || [])" :key="i">
+                    <span style="font-size:10px;padding:2px 8px;border-radius:99px;background:#1a1d2e;border:1px solid #2d3748;color:#93c5fd" x-text="h"></span>
+                  </template>
+                </div>
+                <button class="btn btn-ghost btn-sm" @click="copySeoText('hashtags', (seoPublishPack.hashtags||[]).join(' '))" x-text="seoCopyLabel['hashtags'] || '📋'"></button>
+              </div>
+            </div>
+            <div>
+              <h4 style="margin:0 0 6px;font-size:12px;color:#94a3b8">タグ</h4>
+              <div style="display:flex;align-items:center;gap:8px">
+                <div style="display:flex;flex-wrap:wrap;gap:6px;flex:1">
+                  <template x-for="(g,i) in (seoPublishPack.tags || [])" :key="i">
+                    <span style="font-size:10px;padding:2px 8px;border-radius:99px;background:#1a1d2e;border:1px solid #2d3748;color:#94a3b8" x-text="g"></span>
+                  </template>
+                </div>
+                <button class="btn btn-ghost btn-sm" @click="copySeoText('tags', (seoPublishPack.tags||[]).join(', '))" x-text="seoCopyLabel['tags'] || '📋'"></button>
+              </div>
+            </div>
+          </div>
+        </template>
+      </div>
     </div>
 
     <!-- 生成ボタン（通常） -->
@@ -1093,6 +1224,17 @@ function app() {
     seoAutoConfigChecked: false,
     seoAutoConfigured: false,
     seoAutoStatus: '',
+    // 🔍 コンパクトSEOパネル（seo_pack=パレット/表示用、script_brief=台本に効く厳選キーワード）
+    seoQuota: null,
+    seoPack: null,
+    seoBusy: false, seoError: '',
+    seoForce: false,
+    seoBriefBusy: false, seoBriefError: '',
+    seoBriefInput: '',
+    seoPublishEpisode: 1,
+    seoPublishPack: null,
+    seoPublishBusy: false, seoPublishError: '',
+    seoCopyLabel: {},
     pendingJsonFile: null,
     showJsonImportChoice: false,
     // エピソード管理（標準・シリーズ統合）
@@ -1629,6 +1771,10 @@ function app() {
       const seoCfg = await fetch(`/projects/${pj.id}/seo-config`).then(r => r.json()).catch(() => null);
       this.seoAutoEnabled = seoCfg ? seoCfg.auto !== false : true;
 
+      // コンパクトSEOパネル（script_brief）を読み込み
+      await this.loadSeoQuota();
+      await this.loadSeoPack();
+
       // エピソード一覧を読み込み、ep01のdraftを表示
       await this.loadEpisodes();
       if (this.episodes.length > 0) {
@@ -1683,6 +1829,138 @@ function app() {
         console.warn('SEO自動最適化に失敗（台本生成は続行）:', e);
         this.seoAutoStatus = '';
       }
+    },
+
+    // ─── 🔍 コンパクトSEOパネル ────────────────────────────────────
+    async loadSeoQuota() {
+      try {
+        this.seoQuota = await fetch('/research/youtube/quota').then(r => r.json());
+      } catch { this.seoQuota = null; }
+    },
+    async loadSeoPack() {
+      this.seoPack = null;
+      if (!this.currentProject) return;
+      try {
+        const r = await fetch(`/research/projects/${this.currentProject.id}/seo`);
+        if (r.ok) this.seoPack = await r.json();
+      } catch {}
+    },
+    async runSeoOptimize() {
+      if (!this.currentProject) return;
+      this.seoBusy = true; this.seoError = '';
+      try {
+        const r = await fetch(`/research/projects/${this.currentProject.id}/seo/optimize`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ force: this.seoForce, model: null, rough_script: null }),
+        });
+        const j = await r.json();
+        if (!r.ok) { this.seoError = j.detail || `エラー（HTTP ${r.status}）`; return; }
+        this.seoPack = j;
+        await this.loadSeoQuota();
+      } catch (e) {
+        this.seoError = `通信エラー: ${e}`;
+      } finally {
+        this.seoBusy = false;
+      }
+    },
+
+    // ─── 📝 台本に反映するキーワード（script_brief） ──────────────
+    // ※ここだけが台本本文に軽く反映される。seoPack本体は「パレット」＝メタデータ/参考用。
+    isBriefKeyword(kw) {
+      return !!(this.seoPack?.script_brief?.keywords || []).includes(kw);
+    },
+    async toggleBriefKeyword(kw) {
+      if (!this.seoPack) return;
+      const cur = (this.seoPack.script_brief?.keywords || []).slice();
+      const i = cur.indexOf(kw);
+      if (i >= 0) cur.splice(i, 1); else cur.push(kw);
+      await this.saveSeoBrief(cur);
+    },
+    async addBriefKeyword() {
+      const kw = this.seoBriefInput.trim();
+      this.seoBriefInput = '';
+      if (!kw || !this.seoPack) return;
+      const cur = (this.seoPack.script_brief?.keywords || []).slice();
+      if (!cur.includes(kw)) cur.push(kw);
+      await this.saveSeoBrief(cur);
+    },
+    async removeBriefKeyword(kw) {
+      if (!this.seoPack) return;
+      const cur = (this.seoPack.script_brief?.keywords || []).filter(k => k !== kw);
+      await this.saveSeoBrief(cur);
+    },
+    async saveSeoBrief(keywords) {
+      if (!this.currentProject) return;
+      this.seoBriefBusy = true; this.seoBriefError = '';
+      try {
+        const r = await fetch(`/research/projects/${this.currentProject.id}/seo/brief`, {
+          method: 'PATCH',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ keywords }),
+        });
+        const j = await r.json();
+        if (!r.ok) { this.seoBriefError = j.detail || `エラー（HTTP ${r.status}）`; return; }
+        this.seoPack = { ...this.seoPack, script_brief: j };
+      } catch (e) {
+        this.seoBriefError = `通信エラー: ${e}`;
+      } finally {
+        this.seoBriefBusy = false;
+      }
+    },
+    async curateSeoBrief() {
+      // AIにおまかせ：YouTube APIクォータを消費せず script_brief のみ再選定
+      if (!this.currentProject) return;
+      this.seoBriefBusy = true; this.seoBriefError = '';
+      try {
+        const r = await fetch(`/research/projects/${this.currentProject.id}/seo/curate`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ model: null }),
+        });
+        const j = await r.json();
+        if (!r.ok) { this.seoBriefError = j.detail || `エラー（HTTP ${r.status}）`; return; }
+        this.seoPack = { ...this.seoPack, script_brief: j };
+      } catch (e) {
+        this.seoBriefError = `通信エラー: ${e}`;
+      } finally {
+        this.seoBriefBusy = false;
+      }
+    },
+
+    // ─── 📤 公開パック ─────────────────────────────────────────
+    async loadPublishPack() {
+      this.seoPublishPack = null;
+      if (!this.currentProject) return;
+      try {
+        const r = await fetch(`/research/projects/${this.currentProject.id}/episodes/${this.seoPublishEpisode}/publish-pack`);
+        if (r.ok) this.seoPublishPack = await r.json();
+      } catch {}
+    },
+    async runPublishPack() {
+      if (!this.currentProject) return;
+      this.seoPublishBusy = true; this.seoPublishError = '';
+      try {
+        const r = await fetch(`/research/projects/${this.currentProject.id}/episodes/${this.seoPublishEpisode}/publish-pack`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ model: null }),
+        });
+        const j = await r.json();
+        if (!r.ok) { this.seoPublishError = j.detail || `エラー（HTTP ${r.status}）`; return; }
+        this.seoPublishPack = j;
+      } catch (e) {
+        this.seoPublishError = `通信エラー: ${e}`;
+      } finally {
+        this.seoPublishBusy = false;
+      }
+    },
+    async copySeoText(key, text) {
+      try {
+        await navigator.clipboard.writeText(text);
+        this.seoCopyLabel = { ...this.seoCopyLabel, [key]: '✅ コピー済み' };
+        setTimeout(() => { this.seoCopyLabel = { ...this.seoCopyLabel, [key]: '' }; }, 1500);
+      } catch {}
     },
 
     // ─── ラフ台本ファイル取込み ───────────────────────────────────

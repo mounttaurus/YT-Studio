@@ -48,6 +48,12 @@ PUBLISH_SYSTEM = (
     "出力は指定のJSONのみ、前置き・コメント禁止。"
 )
 
+CURATE_SYSTEM = (
+    "あなたはSEOと物語構成の両方を理解する編集者です。検索性より台本の面白さを優先し、"
+    "この台本に無理なく馴染むキーワードだけを厳選します。詰め込みすぎて話が不自然になることを"
+    "最も嫌います。出力は指定のJSONのみ、前置き・コメント禁止。"
+)
+
 
 # ─── JSON抽出（digest_builder と同じ頑健パース） ──────────────────────────
 
@@ -304,15 +310,106 @@ async def _gap_analysis(
     return parsed, fallback_used
 
 
+# ─── SEOキュレーション層（seo_pack全体からscript_briefを厳選） ────────────
+
+async def _curate_brief(source_text: str, pack: dict, model: Optional[str] = None) -> tuple[dict, bool]:
+    """seo_pack（パレット＝全分析結果）から、この台本に自然に馴染むキーワードだけを
+    3〜6個に厳選する。台本本文に直接注入するのはこの script_brief のみとし、
+    パレット全体（harvest.tagsなど）は表示・参照用に留める。
+    最優先は検索性ではなくシナリオの面白さ＝無理に馴染まない語は捨てる。
+    """
+    tags = (pack.get("harvest") or {}).get("tags") or []
+    tag_list = ", ".join(t["tag"] for t in tags[:20])
+    own_keywords = (pack.get("genre_frame") or {}).get("own_keywords") or []
+
+    prompt = f"""以下の台本と、市場調査で得られたキーワード候補を見比べて、この台本に自然に馴染むキーワードだけを3〜6個選んでください。
+
+## 台本（抜粋）
+{source_text[:3000]}
+
+## 市場タグ（上位、参考）
+{tag_list or "（データなし）"}
+
+## 台本の手持ちキーワード（参考）
+{", ".join(own_keywords)}
+
+## 選定方針
+- 最優先はシナリオの面白さ。無理に入れると話が不自然になる語は捨てること。
+- この台本の内容・トーンに合わないキーワードは選ばないこと。
+- 3〜6個に絞ること（多すぎても不自然になる）。
+
+## 出力フォーマット（このJSONだけを出力）
+{{
+  "keywords": ["この台本に自然に馴染むキーワードを3〜6個"]
+}}
+"""
+    raw, fallback_used = await llm_client.chat(
+        prompt, model=model or llm_client.FLASH_MODEL, system=CURATE_SYSTEM, temperature=0.3, max_tokens=1024,
+    )
+    parsed = _parse_json(raw, {"keywords": []})
+
+    # 空文字/重複を除去し最大6個に切り詰め
+    seen: set[str] = set()
+    keywords: list[str] = []
+    for kw in parsed.get("keywords") or []:
+        kw = str(kw).strip()
+        if not kw or kw in seen:
+            continue
+        seen.add(kw)
+        keywords.append(kw)
+        if len(keywords) >= 6:
+            break
+
+    brief = {"keywords": keywords, "curated_by": "ai", "curated_at": _now()}
+    return brief, fallback_used
+
+
+# ─── 既存台本フォールバック（ラフ台本が無いプロジェクト向け） ──────────────
+
+def _derive_source_from_scripts(project_id: str) -> Optional[str]:
+    """ラフ台本が無い場合の代替ソース。episodes/ep{NN}/ 配下の確定台本
+    （script.json、無ければscript_draft.json）を番号順に読み、本文を連結して返す。
+    1件も無ければNone。
+    """
+    episodes_dir = project_manager.get_project_dir(project_id) / "episodes"
+    if not episodes_dir.exists():
+        return None
+
+    summaries: list[str] = []
+    for ep_dir in sorted(episodes_dir.glob("ep*")):
+        if not ep_dir.is_dir():
+            continue
+        script = None
+        for name in ("script.json", "script_draft.json"):
+            f = ep_dir / name
+            if f.exists():
+                try:
+                    script = json.loads(f.read_text(encoding="utf-8"))
+                except (OSError, json.JSONDecodeError):
+                    continue
+                break
+        if script is not None:
+            summary = _script_text_summary(script)
+            if summary:
+                summaries.append(summary)
+
+    if not summaries:
+        return None
+    return "\n\n".join(summaries)[:8000]
+
+
 # ─── メインパイプライン ────────────────────────────────────────────────
 
 async def optimize(project_id: str, force: bool = False, model: Optional[str] = None) -> dict:
     """ラフ台本→SEOパック生成のメインパイプライン。
     既存パックがあり source_hash が一致すれば（force=False時）再生成せず既存を返す。
     """
+    # ラフ台本または既存台本本文（rough_scriptが無ければ確定台本から代替ソースを組み立てる）
     rough_script = project_manager.read_rough_script(project_id)
     if rough_script is None:
-        raise ValueError("ラフ台本がありません。先にリサーチ/台本生成を行ってください。")
+        rough_script = _derive_source_from_scripts(project_id)
+    if rough_script is None:
+        raise ValueError("ラフ台本も台本もありません。先にリサーチ/台本生成を行ってください。")
     research = project_manager.read_research(project_id)
 
     source_hash = _sha256(rough_script)
@@ -369,6 +466,12 @@ async def optimize(project_id: str, force: bool = False, model: Optional[str] = 
         "partial_reason": partial_reason,
     }
 
+    # seo_pack（パレット）から台本注入用の厳選キーワード（script_brief）を自動選抜
+    script_brief, fb = await _curate_brief(rough_script, pack, model)
+    fallback_used = fallback_used or fb
+    pack["engine"]["fallback_used"] = fallback_used
+    pack["script_brief"] = script_brief
+
     _save_seo_pack(project_id, pack)
     return pack
 
@@ -390,6 +493,55 @@ def read_seo_pack(project_id: str) -> Optional[dict]:
         except (OSError, json.JSONDecodeError):
             return None
     return None
+
+
+# ─── キュレーション層のAPI向けヘルパー（routes.pyから薄く呼ばれる） ────────
+
+async def recurate(project_id: str, model: Optional[str] = None) -> dict:
+    """既存seo_packを読み、AIによるscript_brief再選定のみをやり直す
+    （harvest等の市場データ収穫はやり直さない＝クォータ消費なし）。
+    """
+    pack = read_seo_pack(project_id)
+    if pack is None:
+        raise ValueError("seo_pack.json がまだありません。先にSEO分析を実行してください。")
+
+    # ラフ台本または既存台本本文（optimize()と同じ解決順）
+    source_text = project_manager.read_rough_script(project_id)
+    if source_text is None:
+        source_text = _derive_source_from_scripts(project_id)
+    if source_text is None:
+        raise ValueError("ラフ台本も台本もありません。先にリサーチ/台本生成を行ってください。")
+
+    script_brief, fb = await _curate_brief(source_text, pack, model)
+    pack["engine"]["fallback_used"] = pack.get("engine", {}).get("fallback_used", False) or fb
+    pack["script_brief"] = script_brief
+
+    _save_seo_pack(project_id, pack)
+    return script_brief
+
+
+def set_brief(project_id: str, keywords: list[str]) -> dict:
+    """ユーザーによる手動編集でscript_briefを置き換える（最大10個・空/重複除去）。"""
+    pack = read_seo_pack(project_id)
+    if pack is None:
+        raise ValueError("seo_pack.json がまだありません。先にSEO分析を実行してください。")
+
+    seen: set[str] = set()
+    cleaned: list[str] = []
+    for kw in keywords:
+        kw = str(kw).strip()
+        if not kw or kw in seen:
+            continue
+        seen.add(kw)
+        cleaned.append(kw)
+        if len(cleaned) >= 10:
+            break
+
+    script_brief = {"keywords": cleaned, "curated_by": "user", "curated_at": _now()}
+    pack["script_brief"] = script_brief
+
+    _save_seo_pack(project_id, pack)
+    return script_brief
 
 
 # ─── 公開パック（タイトル/概要欄/タグ） ────────────────────────────────

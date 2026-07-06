@@ -667,6 +667,38 @@
                       </div>
                     </div>
 
+                    <!-- 📝 台本に反映するキーワード（script_brief・最重要。台本タブと同じデータを共有） -->
+                    <div style="background:#0f1117;border:1px solid #14532d;border-radius:6px;padding:12px">
+                      <h3 style="margin:0 0 4px;font-size:13px;color:#e2e8f0;display:flex;align-items:center;gap:8px">
+                        📝 台本に反映するキーワード
+                        <span x-show="seoPack.script_brief?.curated_by" style="font-size:9px;padding:1px 6px;border-radius:99px;background:#1e3a2f;color:#86efac"
+                              x-text="seoPack.script_brief?.curated_by === 'user' ? '手動確定' : 'AI選定'"></span>
+                      </h3>
+                      <p style="font-size:11px;color:#64748b;margin:0 0 10px">
+                        以下は「パレット」＝全分析（表示専用）。ここで選んだキーワードだけが台本本文に軽く反映されます（詰め込みません）。
+                      </p>
+                      <div style="display:flex;flex-wrap:wrap;gap:6px;margin-bottom:10px">
+                        <template x-for="kw in (seoPack.script_brief?.keywords || [])" :key="kw">
+                          <span style="font-size:11px;padding:3px 10px;border-radius:99px;cursor:pointer;background:#1e3a2f;border:1px solid #14532d;color:#86efac;display:inline-flex;align-items:center;gap:6px"
+                                @click="toggleBriefKeyword(kw)" title="クリックで解除">
+                            <span x-text="kw"></span>
+                            <span style="color:#4ade80" @click.stop="removeBriefKeyword(kw)">×</span>
+                          </span>
+                        </template>
+                        <span x-show="(seoPack.script_brief?.keywords || []).length === 0" style="font-size:11px;color:#4b5563">
+                          キーワード未選定
+                        </span>
+                      </div>
+                      <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">
+                        <button class="btn btn-ghost btn-sm" @click="curateSeoBrief()" :disabled="seoBriefBusy">
+                          <span x-text="seoBriefBusy ? '⏳ 選定中…' : '🤖 AIにおまかせ（クォータ消費なし）'"></span>
+                        </button>
+                        <input type="text" x-model="seoBriefInput" @keydown.enter="addBriefKeyword()"
+                               placeholder="キーワードを追加してEnter" style="max-width:200px">
+                      </div>
+                      <p x-show="seoBriefError" style="color:#fca5a5;font-size:12px;margin-top:6px" x-text="seoBriefError"></p>
+                    </div>
+
                     <!-- 市場タグ上位 -->
                     <div>
                       <h3 style="margin:0 0 6px;font-size:13px;color:#e2e8f0">市場タグ 上位30</h3>
@@ -1039,11 +1071,82 @@
                 <textarea x-model="extraInstruction" rows="3"
                           placeholder="ラフ台本に対する追加の指示（例：『この部分を強調して』『〇〇についてはバイアスをつけて』）。空欄でOK"></textarea>
 
-                <label style="display:flex;align-items:center;gap:6px;font-size:12px;color:#6b7280;margin-top:10px">
+                <label style="display:flex;align-items:center;gap:6px;font-size:12px;color:#6b7280;margin-top:10px"
+                       title="生成前にYouTube市場を分析し、台本に馴染むキーワードだけを軽く反映します（詰め込みません）">
                   <input type="checkbox" x-model="seoAutoEnabled" @change="saveSeoAutoConfig()">
-                  ⚡ SEO自動最適化（生成前にYouTube市場分析を自動実行し、台本に反映します）
+                  ⚡ SEO自動最適化（生成前にYouTube市場を分析し、台本に馴染むキーワードだけを軽く反映します。詰め込みません）
                 </label>
                 <div x-show="seoAutoStatus" style="font-size:11px;color:#6b7280;margin-top:4px" x-text="seoAutoStatus"></div>
+              </div>
+
+              <!-- ════════ 🔍 コンパクトSEOパネル（台本タブ） ════════ -->
+              <div class="card" x-show="currentProject">
+                <h2 style="display:flex;align-items:center;gap:10px;flex-wrap:wrap">🔍 SEO分析
+                  <span x-show="seoQuota && seoQuota.configured" style="font-size:10px;padding:2px 8px;border-radius:99px;background:#1e293b;color:#93c5fd"
+                        x-text="`YouTube API: ${(seoQuota?.used||0).toLocaleString()} / ${(seoQuota?.budget||0).toLocaleString()}`"></span>
+                  <span x-show="seoQuota && !seoQuota.configured" style="font-size:10px;padding:2px 8px;border-radius:99px;background:#3f1d1d;color:#fca5a5"
+                        x-text="'YOUTUBE_DATA_API_KEY 未設定'"></span>
+                </h2>
+
+                <div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap">
+                  <button class="btn btn-primary btn-sm" @click="runSeoOptimize()" :disabled="seoBusy || !(seoQuota && seoQuota.configured)">
+                    <span x-text="seoBusy ? '⏳ 分析中…' : '🔍 SEO分析'"></span>
+                  </button>
+                  <span x-show="seoQuota?.remaining !== undefined" style="font-size:11px;color:#64748b"
+                        x-text="`残クォータ: ${(seoQuota?.remaining||0).toLocaleString()}（${seoQuota?.date_pt} PT）`"></span>
+                  <button class="btn btn-ghost btn-sm" style="margin-left:auto" @click="setTab('research')">🔎 詳細分析はリサーチタブへ →</button>
+                </div>
+                <div x-show="seoBusy" class="progress-indeterminate" style="height:4px;margin-top:8px"></div>
+                <p x-show="seoError" style="color:#fca5a5;font-size:12px;margin-top:8px" x-text="seoError"></p>
+
+                <!-- 📝 台本に反映するキーワード（script_brief・最重要） -->
+                <template x-if="seoPack">
+                  <div style="margin-top:16px;border-top:1px solid #2d3748;padding-top:14px">
+                    <h3 style="margin:0 0 4px;font-size:13px;color:#e2e8f0;display:flex;align-items:center;gap:8px">
+                      📝 台本に反映するキーワード
+                      <span x-show="seoPack.script_brief?.curated_by" style="font-size:9px;padding:1px 6px;border-radius:99px;background:#1e3a2f;color:#86efac"
+                            x-text="seoPack.script_brief?.curated_by === 'user' ? '手動確定' : 'AI選定'"></span>
+                    </h3>
+                    <p style="font-size:11px;color:#64748b;margin:0 0 10px">これらが台本本文に軽く反映されます（詰め込みません）。クリックで選択/解除できます。</p>
+
+                    <div style="display:flex;flex-wrap:wrap;gap:6px;margin-bottom:10px">
+                      <template x-for="kw in (seoPack.script_brief?.keywords || [])" :key="kw">
+                        <span style="font-size:11px;padding:3px 10px;border-radius:99px;cursor:pointer;background:#1e3a2f;border:1px solid #14532d;color:#86efac;display:inline-flex;align-items:center;gap:6px"
+                              @click="toggleBriefKeyword(kw)" title="クリックで解除">
+                          <span x-text="kw"></span>
+                          <span style="color:#4ade80" @click.stop="removeBriefKeyword(kw)">×</span>
+                        </span>
+                      </template>
+                      <span x-show="(seoPack.script_brief?.keywords || []).length === 0" style="font-size:11px;color:#4b5563">
+                        キーワード未選定（SEO分析を実行するか、AIにおまかせを押してください）
+                      </span>
+                    </div>
+
+                    <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">
+                      <button class="btn btn-ghost btn-sm" @click="curateSeoBrief()" :disabled="seoBriefBusy">
+                        <span x-text="seoBriefBusy ? '⏳ 選定中…' : '🤖 AIにおまかせ（クォータ消費なし）'"></span>
+                      </button>
+                      <input type="text" x-model="seoBriefInput" @keydown.enter="addBriefKeyword()"
+                             placeholder="キーワードを追加してEnter" style="max-width:200px">
+                    </div>
+                    <p x-show="seoBriefError" style="color:#fca5a5;font-size:12px;margin-top:6px" x-text="seoBriefError"></p>
+                    <div style="font-size:10px;color:#4b5563;margin-top:6px" x-show="seoPack.script_brief?.curated_at"
+                         x-text="`最終更新: ${seoPack.script_brief?.curated_at || '-'}`"></div>
+                  </div>
+                </template>
+
+                <!-- 💡 参考: 企画のヒント（読み取り専用・自動反映されない） -->
+                <template x-if="seoPack && (seoPack.gap_analysis?.multiplier_ideas || []).length > 0">
+                  <div style="margin-top:14px;border-top:1px solid #2d3748;padding-top:12px">
+                    <h3 style="margin:0 0 4px;font-size:13px;color:#e2e8f0">💡 参考: 企画のヒント</h3>
+                    <p style="font-size:11px;color:#64748b;margin:0 0 8px">本文には自動反映されません（参考用）。</p>
+                    <div style="display:flex;flex-wrap:wrap;gap:6px">
+                      <template x-for="idea in (seoPack.gap_analysis?.multiplier_ideas || [])" :key="idea">
+                        <span style="font-size:10px;padding:2px 8px;border-radius:99px;background:#1a1d2e;border:1px solid #2d3748;color:#94a3b8" x-text="idea"></span>
+                      </template>
+                    </div>
+                  </div>
+                </template>
               </div>
 
               <!-- 生成ボタン（通常） -->
@@ -3199,6 +3302,9 @@ function app() {
     seoAutoConfigured: false,
     seoAutoEnabled: true,
     seoAutoStatus: '',
+    // 📝 台本に反映するキーワード（script_brief。台本タブのコンパクトパネル＋リサーチタブ両方で共有）
+    seoBriefBusy: false, seoBriefError: '',
+    seoBriefInput: '',
     // 🎭 キャラ（プロジェクト非依存・チャンネル共通）
     charas: [],
     chara: null,
@@ -3913,6 +4019,8 @@ function app() {
       // 台本タブの行編集（配役キャラ選択・Voice自動解決・表示名解決）にも使うため常に読み込む
       this.loadVoiceRefs().then(() => Promise.all([this.loadCharas(), this.loadTtsSpeakers()]));
       if (this.tab === 'tts') await this.refreshTtsTab();
+      // 台本タブのコンパクトSEOパネル（script_brief）は既定タブのため常に読み込む
+      if (this.tab === 'script') { await this.loadSeoQuota(); await this.loadSeoPack(); }
     },
 
     selectedStyleObj() {
@@ -4367,6 +4475,7 @@ function app() {
       this.tab = t;
       localStorage.setItem('director_last_tab', t);
       if (t === 'research') await this.refreshResearchTab();
+      if (t === 'script') { await this.loadSeoQuota(); await this.loadSeoPack(); }
       if (t === 'tts') await this.refreshTtsTab();
       if (t === 'footage') await this.refreshFootageTab();
       if (t === 'aroll') await this.refreshArollTab();
@@ -4534,6 +4643,69 @@ function app() {
         this.seoCopyLabel = { ...this.seoCopyLabel, [key]: '✅ コピー済み' };
         setTimeout(() => { this.seoCopyLabel = { ...this.seoCopyLabel, [key]: '' }; }, 1500);
       } catch {}
+    },
+
+    // ─── 📝 台本に反映するキーワード（script_brief） ──────────────
+    // ※ここだけが台本本文に軽く反映される。seoPack本体は「パレット」＝メタデータ/参考用。
+    isBriefKeyword(kw) {
+      return !!(this.seoPack?.script_brief?.keywords || []).includes(kw);
+    },
+    async toggleBriefKeyword(kw) {
+      if (!this.seoPack) return;
+      const cur = (this.seoPack.script_brief?.keywords || []).slice();
+      const i = cur.indexOf(kw);
+      if (i >= 0) cur.splice(i, 1); else cur.push(kw);
+      await this.saveSeoBrief(cur);
+    },
+    async addBriefKeyword() {
+      const kw = this.seoBriefInput.trim();
+      this.seoBriefInput = '';
+      if (!kw || !this.seoPack) return;
+      const cur = (this.seoPack.script_brief?.keywords || []).slice();
+      if (!cur.includes(kw)) cur.push(kw);
+      await this.saveSeoBrief(cur);
+    },
+    async removeBriefKeyword(kw) {
+      if (!this.seoPack) return;
+      const cur = (this.seoPack.script_brief?.keywords || []).filter(k => k !== kw);
+      await this.saveSeoBrief(cur);
+    },
+    async saveSeoBrief(keywords) {
+      if (!this.currentProject) return;
+      this.seoBriefBusy = true; this.seoBriefError = '';
+      try {
+        const r = await fetch(`${RAPI}/projects/${this.currentProject.id}/seo/brief`, {
+          method: 'PATCH',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ keywords }),
+        });
+        const j = await r.json();
+        if (!r.ok) { this.seoBriefError = j.detail || `エラー（HTTP ${r.status}）`; return; }
+        this.seoPack = { ...this.seoPack, script_brief: j };
+      } catch (e) {
+        this.seoBriefError = `通信エラー: ${e}`;
+      } finally {
+        this.seoBriefBusy = false;
+      }
+    },
+    async curateSeoBrief() {
+      // AIにおまかせ：YouTube APIクォータを消費せず script_brief のみ再選定
+      if (!this.currentProject) return;
+      this.seoBriefBusy = true; this.seoBriefError = '';
+      try {
+        const r = await fetch(`${RAPI}/projects/${this.currentProject.id}/seo/curate`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ model: null }),
+        });
+        const j = await r.json();
+        if (!r.ok) { this.seoBriefError = j.detail || `エラー（HTTP ${r.status}）`; return; }
+        this.seoPack = { ...this.seoPack, script_brief: j };
+      } catch (e) {
+        this.seoBriefError = `通信エラー: ${e}`;
+      } finally {
+        this.seoBriefBusy = false;
+      }
     },
 
     // ─── 🔍 SEO自動最適化（台本タブの半自動発火） ──────────────────

@@ -1119,11 +1119,17 @@ def _build_input_content(project_id: str, rough_script: Optional[str]) -> str:
     existing_rough = rough_script or project_manager.read_rough_script(project_id)
     if existing_rough:
         parts.append("## ラフ台本\n" + existing_rough)
+    # SEO反映はキュレーション済みの厳選キーワード（script_brief）だけを軽く注入する。
+    # 旧来の for_script（全部盛り指示文）は詰め込みで台本を壊すため、注入ソースには使わない。
     seo_pack = project_manager.read_seo_pack(project_id)
-    if seo_pack and seo_pack.get("for_script"):
+    brief = (seo_pack or {}).get("script_brief") or {}
+    keywords = [k for k in (brief.get("keywords") or []) if k]
+    if keywords:
         parts.append(
-            "## SEO最適化情報（視聴者検索に乗るための指示。台本の内容・事実を歪めない範囲で反映すること）\n"
-            + seo_pack["for_script"]
+            "## SEO反映（軽め・任意）\n"
+            "次の語は視聴者検索に効きます。話の面白さ・構成・オチ・キャラの一貫性を最優先し、"
+            "自然に馴染む範囲でのみ織り込んでください（無理なら入れなくて構いません。詰め込み厳禁）:\n"
+            + "、".join(keywords)
         )
     if not parts:
         parts.append(f"プロジェクトID: {project_id}（リサーチ情報なし）")

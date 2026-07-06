@@ -439,5 +439,218 @@ class TestYoutubeClientLedger(unittest.TestCase):
                     self.assertEqual(status["remaining"], 5000)
 
 
+class TestDeriveSourceFromScripts(unittest.TestCase):
+    """seo_optimizer._derive_source_from_scripts の検証
+
+    既存台本（script.json, script_draft.json）から本文を連結して返すフォールバック。
+    """
+
+    def setUp(self):
+        """テスト用一時ディレクトリとプロジェクト構造を作成"""
+        self.tmpdir = tempfile.TemporaryDirectory()
+        self.project_dir = Path(self.tmpdir.name) / "projects" / "20260706_test_001"
+        self.episodes_dir = self.project_dir / "episodes"
+        self.episodes_dir.mkdir(parents=True, exist_ok=True)
+
+    def tearDown(self):
+        """一時ディレクトリを削除"""
+        self.tmpdir.cleanup()
+
+    def test_script_json_priority(self):
+        """script.json が script_draft.json より優先される"""
+        ep01_dir = self.episodes_dir / "ep01"
+        ep01_dir.mkdir(exist_ok=True)
+
+        # 両方ファイルを作成
+        script_draft = {"lines": [{"text": "draft version"}]}
+        script = {"lines": [{"text": "confirmed version"}]}
+        (ep01_dir / "script_draft.json").write_text(json.dumps(script_draft), encoding="utf-8")
+        (ep01_dir / "script.json").write_text(json.dumps(script), encoding="utf-8")
+
+        with patch.object(seo_optimizer.project_manager, "get_project_dir", return_value=self.project_dir):
+            result = seo_optimizer._derive_source_from_scripts("20260706_test_001")
+
+        # script.json が優先
+        self.assertIsNotNone(result)
+        self.assertIn("confirmed version", result)
+        self.assertNotIn("draft version", result)
+
+    def test_fallback_to_script_draft(self):
+        """script.json がない場合は script_draft.json を使う"""
+        ep01_dir = self.episodes_dir / "ep01"
+        ep01_dir.mkdir(exist_ok=True)
+
+        script_draft = {"lines": [{"text": "draft only"}]}
+        (ep01_dir / "script_draft.json").write_text(json.dumps(script_draft), encoding="utf-8")
+
+        with patch.object(seo_optimizer.project_manager, "get_project_dir", return_value=self.project_dir):
+            result = seo_optimizer._derive_source_from_scripts("20260706_test_001")
+
+        self.assertIsNotNone(result)
+        self.assertIn("draft only", result)
+
+    def test_episode_order(self):
+        """複数エピソードが番号順に連結される"""
+        for i in range(1, 4):
+            ep_dir = self.episodes_dir / f"ep{i:02d}"
+            ep_dir.mkdir(exist_ok=True)
+            script = {"lines": [{"text": f"episode {i}"}]}
+            (ep_dir / "script.json").write_text(json.dumps(script), encoding="utf-8")
+
+        with patch.object(seo_optimizer.project_manager, "get_project_dir", return_value=self.project_dir):
+            result = seo_optimizer._derive_source_from_scripts("20260706_test_001")
+
+        self.assertIsNotNone(result)
+        # ep01, ep02, ep03 の順序で現れること
+        idx1 = result.find("episode 1")
+        idx2 = result.find("episode 2")
+        idx3 = result.find("episode 3")
+        self.assertTrue(idx1 < idx2 < idx3)
+
+    def test_no_episodes_returns_none(self):
+        """episodes ディレクトリがなければ None"""
+        with patch.object(seo_optimizer.project_manager, "get_project_dir", return_value=self.project_dir):
+            result = seo_optimizer._derive_source_from_scripts("20260706_test_001")
+
+        self.assertIsNone(result)
+
+    def test_no_scripts_returns_none(self):
+        """episode ディレクトリはあるが script/draft ファイルがない場合は None"""
+        (self.episodes_dir / "ep01").mkdir(exist_ok=True)
+
+        with patch.object(seo_optimizer.project_manager, "get_project_dir", return_value=self.project_dir):
+            result = seo_optimizer._derive_source_from_scripts("20260706_test_001")
+
+        self.assertIsNone(result)
+
+    def test_malformed_json_skipped(self):
+        """不正な JSON のエピソードはスキップ（他は通常に続行）"""
+        ep01_dir = self.episodes_dir / "ep01"
+        ep01_dir.mkdir(exist_ok=True)
+        (ep01_dir / "script.json").write_text("{ invalid json", encoding="utf-8")
+
+        ep02_dir = self.episodes_dir / "ep02"
+        ep02_dir.mkdir(exist_ok=True)
+        script = {"lines": [{"text": "episode 2"}]}
+        (ep02_dir / "script.json").write_text(json.dumps(script), encoding="utf-8")
+
+        with patch.object(seo_optimizer.project_manager, "get_project_dir", return_value=self.project_dir):
+            result = seo_optimizer._derive_source_from_scripts("20260706_test_001")
+
+        # ep02 は含まれる
+        self.assertIsNotNone(result)
+        self.assertIn("episode 2", result)
+
+
+class TestSetBrief(unittest.TestCase):
+    """seo_optimizer.set_brief のテスト
+
+    ユーザー手動編集でscript_briefを置き換える（重複/空除去・最大10個・curated_by:user）。
+    """
+
+    def setUp(self):
+        """テスト用一時ディレクトリとダミーseo_pack.jsonを作成"""
+        self.tmpdir = tempfile.TemporaryDirectory()
+        self.project_dir = Path(self.tmpdir.name) / "projects" / "20260706_test_002"
+        self.project_dir.mkdir(parents=True, exist_ok=True)
+
+        # ダミーseo_packを作成（既存フィールドを保持）
+        self.seo_pack = {
+            "schema_version": "1.0.0",
+            "project_id": "20260706_test_002",
+            "generated_at": "2026-07-06T10:00:00Z",
+            "source_hash": "abc123",
+            "harvest": {"tags": [], "channels": [], "upset_videos": []},
+            "gap_analysis": {"missing_tags": []},
+            "for_script": "old for_script content",
+            "script_brief": {"keywords": ["old1", "old2"], "curated_by": "ai", "curated_at": "2026-07-06T09:00:00Z"}
+        }
+        pack_path = self.project_dir / "seo_pack.json"
+        pack_path.write_text(json.dumps(self.seo_pack), encoding="utf-8")
+
+    def tearDown(self):
+        """一時ディレクトリを削除"""
+        self.tmpdir.cleanup()
+
+    def test_set_brief_replaces_keywords(self):
+        """新しいキーワード群でscript_briefを置き換える"""
+        with patch.object(seo_optimizer.project_manager, "get_project_dir", return_value=self.project_dir):
+            result = seo_optimizer.set_brief("20260706_test_002", ["new1", "new2", "new3"])
+
+        self.assertEqual(result["keywords"], ["new1", "new2", "new3"])
+        self.assertEqual(result["curated_by"], "user")
+        self.assertIn("curated_at", result)
+
+    def test_removes_duplicates(self):
+        """重複を除去"""
+        with patch.object(seo_optimizer.project_manager, "get_project_dir", return_value=self.project_dir):
+            result = seo_optimizer.set_brief("20260706_test_002", ["kw1", "kw1", "kw2"])
+
+        self.assertEqual(result["keywords"], ["kw1", "kw2"])
+
+    def test_removes_empty_strings(self):
+        """空文字を除去"""
+        with patch.object(seo_optimizer.project_manager, "get_project_dir", return_value=self.project_dir):
+            result = seo_optimizer.set_brief("20260706_test_002", ["kw1", "", "kw2"])
+
+        self.assertEqual(result["keywords"], ["kw1", "kw2"])
+
+    def test_truncates_to_10(self):
+        """最大10個に制限"""
+        keywords = [f"kw{i}" for i in range(15)]
+        with patch.object(seo_optimizer.project_manager, "get_project_dir", return_value=self.project_dir):
+            result = seo_optimizer.set_brief("20260706_test_002", keywords)
+
+        self.assertEqual(len(result["keywords"]), 10)
+
+    def test_whitespace_stripped(self):
+        """前後の空白を除去"""
+        with patch.object(seo_optimizer.project_manager, "get_project_dir", return_value=self.project_dir):
+            result = seo_optimizer.set_brief("20260706_test_002", ["  kw1  ", " kw2 "])
+
+        self.assertEqual(result["keywords"], ["kw1", "kw2"])
+
+    def test_preserves_other_fields(self):
+        """他のseo_pack フィールドが保持される"""
+        with patch.object(seo_optimizer.project_manager, "get_project_dir", return_value=self.project_dir):
+            seo_optimizer.set_brief("20260706_test_002", ["new"])
+
+        # ファイルを再度読んで確認
+        pack_path = self.project_dir / "seo_pack.json"
+        updated_pack = json.loads(pack_path.read_text(encoding="utf-8"))
+
+        # 既存フィールドが保持されている
+        self.assertEqual(updated_pack["schema_version"], "1.0.0")
+        self.assertEqual(updated_pack["for_script"], "old for_script content")
+        self.assertEqual(updated_pack["gap_analysis"]["missing_tags"], [])
+
+    def test_curated_by_is_user(self):
+        """curated_by が 'user' に設定される"""
+        with patch.object(seo_optimizer.project_manager, "get_project_dir", return_value=self.project_dir):
+            result = seo_optimizer.set_brief("20260706_test_002", ["kw"])
+
+        self.assertEqual(result["curated_by"], "user")
+
+    def test_curated_at_is_present(self):
+        """curated_at が ISO8601 形式で記録される"""
+        with patch.object(seo_optimizer.project_manager, "get_project_dir", return_value=self.project_dir):
+            result = seo_optimizer.set_brief("20260706_test_002", ["kw"])
+
+        self.assertIn("curated_at", result)
+        # ISO8601 形式の確認（簡易版: 'T' を含むか）
+        self.assertIn("T", result["curated_at"])
+
+    def test_no_seo_pack_raises_error(self):
+        """seo_pack.json がない場合はエラー"""
+        empty_dir = self.project_dir / "empty"
+        empty_dir.mkdir(exist_ok=True)
+
+        with patch.object(seo_optimizer.project_manager, "get_project_dir", return_value=empty_dir):
+            with self.assertRaises(ValueError) as ctx:
+                seo_optimizer.set_brief("nonexistent", ["kw"])
+
+            self.assertIn("seo_pack.json がまだありません", str(ctx.exception))
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

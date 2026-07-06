@@ -559,6 +559,26 @@ async def get_publish_pack(project_id: str, episode_number: int) -> dict:
     return await dc.get(f"api/research/projects/{project_id}/episodes/{episode_number}/publish-pack")
 
 
+async def curate_seo_brief(project_id: str, model: Optional[str] = None) -> dict:
+    """既存のseo_packから、台本本文に自然に馴染む厳選キーワード(script_brief)だけをAIで再選定する。
+
+    市場データの再収穫はせずYouTube APIクォータを消費しない。台本生成時はこの厳選キーワードだけが軽く反映される。
+    """
+    body: dict = {}
+    if model is not None:
+        body["model"] = model
+    return await dc.request("POST", f"api/research/projects/{project_id}/seo/curate", json=body)
+
+
+async def set_seo_brief(project_id: str, keywords: list[str]) -> dict:
+    """台本本文に反映するキーワード(script_brief)を明示的に指定する。
+
+    AIまたは人が「この語だけ台本に効かせる」と決める用途。重複・空は自動除去、最大10語。
+    """
+    return await dc.request("PATCH", f"api/research/projects/{project_id}/seo/brief",
+                            json={"keywords": keywords})
+
+
 # ── Aロール（マンガ形式パネル / 台本セリフ行→キャラ画像の一括生成） ──────
 #
 # Aロール＝素材取得ではなく「セリフ1行＝マンガ1コマ」のキャラ画像（2026-07方針転換）。
@@ -667,4 +687,7 @@ TOOLS = [
     {"fn": get_seo_pack,         "side_effects": [S.READ]},
     {"fn": generate_publish_pack, "side_effects": [S.WRITE]},
     {"fn": get_publish_pack,     "side_effects": [S.READ]},
+    # SEO キュレーション（厳選キーワード・台本反映用）
+    {"fn": curate_seo_brief,     "side_effects": [S.WRITE]},
+    {"fn": set_seo_brief,        "side_effects": [S.WRITE]},
 ]

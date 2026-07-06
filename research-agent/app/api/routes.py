@@ -48,6 +48,14 @@ class PublishPackRequest(BaseModel):
     model: Optional[str] = None
 
 
+class SeoCurateRequest(BaseModel):
+    model: Optional[str] = None
+
+
+class SeoBriefRequest(BaseModel):
+    keywords: list[str]
+
+
 # ─── 基本 ─────────────────────────────────────────────────────────────
 
 @router.get("/health")
@@ -191,6 +199,31 @@ async def get_seo(project_id: str):
     if pack is None:
         raise HTTPException(status_code=404, detail="seo_pack.json がまだありません")
     return pack
+
+
+@router.post("/projects/{project_id}/seo/curate")
+async def curate_seo(project_id: str, req: SeoCurateRequest):
+    """既存seo_packからscript_brief（台本注入用の厳選キーワード）だけをAIで再選定する。
+    市場データの再収穫はしないためYouTube APIクォータは消費しない。
+    """
+    try:
+        script_brief = await seo_optimizer.recurate(project_id, model=req.model)
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    except Exception as e:  # noqa: BLE001
+        logger.exception("seo curate failed")
+        raise HTTPException(status_code=502, detail=f"キュレーション失敗: {e}")
+    return script_brief
+
+
+@router.patch("/projects/{project_id}/seo/brief")
+async def update_seo_brief(project_id: str, req: SeoBriefRequest):
+    """ユーザーがscript_briefのキーワードを手動で調整する（curated_by=userとして保存）。"""
+    try:
+        script_brief = seo_optimizer.set_brief(project_id, req.keywords)
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    return script_brief
 
 
 @router.post("/projects/{project_id}/episodes/{episode_number}/publish-pack")
