@@ -4,6 +4,7 @@ Cloudflare Workers AI — テキストLLM(フォールバック頭脳) と Whisp
 Geminiの代替ではなく協調（保険＋音声の入口）。鍵は scrapping-agent の画像クライアントと共有
 （CLOUDFLARE_API_KEY / CLOUDFLARE_ACCOUNT_ID）。モデル名は compose の environment に固定。
 """
+import json
 import os
 
 import httpx
@@ -39,7 +40,11 @@ async def chat(prompt: str, system: str | None = None, max_tokens: int = 4096) -
         body = res.json()
         if not body.get("success", True):
             raise RuntimeError(f"Cloudflare returned error: {str(body)[:300]}")
-        return (body.get("result") or {}).get("response", "") or ""
+        response = (body.get("result") or {}).get("response", "") or ""
+        # Workers AI はJSONを要求すると response をdictで返すことがある → 常にstrへ正規化
+        if not isinstance(response, str):
+            response = json.dumps(response, ensure_ascii=False)
+        return response
 
 
 async def transcribe(audio_bytes: bytes) -> str:

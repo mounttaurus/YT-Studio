@@ -608,6 +608,234 @@
 
           </div>
         </template>
+
+        <!-- ════════ 🔍 SEOオプティマイザ ════════ -->
+        <template x-if="currentProject">
+          <div class="card" style="margin-top:16px">
+            <h2 style="display:flex;align-items:center;gap:10px">🔍 SEOオプティマイザ
+              <span x-show="seoQuota && seoQuota.configured" style="font-size:10px;padding:2px 8px;border-radius:99px;background:#1e293b;color:#93c5fd"
+                    x-text="`YouTube API: ${(seoQuota?.used||0).toLocaleString()} / ${(seoQuota?.budget||0).toLocaleString()}`"></span>
+            </h2>
+
+            <!-- YOUTUBE_DATA_API_KEY 未設定時は縮退表示 -->
+            <template x-if="seoQuota && !seoQuota.configured">
+              <div class="empty" style="padding:16px;font-size:12px">
+                YOUTUBE_DATA_API_KEY 未設定のため SEO最適化 は利用できません（ルート .env に設定してください）。
+              </div>
+            </template>
+
+            <template x-if="seoQuota && seoQuota.configured">
+              <div>
+                <p style="font-size:12px;color:#94a3b8;margin:4px 0 12px">
+                  YouTube上の競合動画・タグ・視聴者コメントを分析し、台本のSEO（検索されやすさ）を強化します。
+                  分析結果は台本生成時に自動で参照されます（<code>for_script</code>）。
+                </p>
+                <div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap">
+                  <button class="btn btn-primary" @click="runSeoOptimize()" :disabled="seoBusy">
+                    <span x-text="seoBusy ? '⏳ 分析中…' : '🔍 SEO最適化を実行'"></span>
+                  </button>
+                  <label style="display:flex;align-items:center;gap:6px;font-size:12px;color:#94a3b8">
+                    <input type="checkbox" x-model="seoForce" :disabled="seoBusy">強制再分析（キャッシュ無視）
+                  </label>
+                  <span x-show="seoQuota.remaining !== undefined" style="font-size:11px;color:#64748b"
+                        x-text="`残クォータ: ${(seoQuota.remaining||0).toLocaleString()}（${seoQuota.date_pt} PT）`"></span>
+                </div>
+                <div x-show="seoBusy" class="progress-indeterminate" style="height:4px;margin-top:8px"></div>
+                <p x-show="seoError" style="color:#fca5a5;font-size:12px;margin-top:8px" x-text="seoError"></p>
+
+                <template x-if="seoPack">
+                  <div style="margin-top:16px;display:flex;flex-direction:column;gap:14px">
+
+                    <!-- partial警告バナー -->
+                    <div x-show="seoPack.partial" style="background:#3f2d0f;border:1px solid #92600a;border-radius:6px;padding:8px 12px;font-size:12px;color:#fbbf24">
+                      ⚠ 一部データのみで分析されました<span x-show="seoPack.partial_reason" x-text="`（${seoPack.partial_reason}）`"></span>
+                    </div>
+                    <span x-show="seoPack.cached" style="font-size:10px;color:#64748b">※キャッシュ済み結果</span>
+
+                    <!-- ジャンルフレーム -->
+                    <div>
+                      <h3 style="margin:0 0 6px;font-size:13px;color:#e2e8f0">ジャンル / 想定視聴者</h3>
+                      <div style="font-size:12px;color:#cbd5e1">
+                        <span x-text="seoPack.genre_frame?.genre"></span>
+                        <span style="color:#4b5563"> / </span>
+                        <span x-text="seoPack.genre_frame?.audience"></span>
+                      </div>
+                      <div style="display:flex;flex-wrap:wrap;gap:6px;margin-top:6px">
+                        <template x-for="q in (seoPack.genre_frame?.seed_queries || [])" :key="q">
+                          <span style="font-size:10px;padding:2px 8px;border-radius:99px;background:#1a1d2e;border:1px solid #2d3748;color:#94a3b8" x-text="q"></span>
+                        </template>
+                      </div>
+                    </div>
+
+                    <!-- 市場タグ上位 -->
+                    <div>
+                      <h3 style="margin:0 0 6px;font-size:13px;color:#e2e8f0">市場タグ 上位30</h3>
+                      <div style="display:flex;flex-wrap:wrap;gap:6px">
+                        <template x-for="t in (seoPack.harvest?.tags || []).slice(0, 30)" :key="t.tag">
+                          <span style="font-size:10px;padding:2px 8px;border-radius:99px;background:#1a1d2e;border:1px solid #2d3748;color:#93c5fd"
+                                x-text="`${t.tag} (${t.count})`"></span>
+                        </template>
+                      </div>
+                    </div>
+
+                    <!-- 競合チャンネル -->
+                    <div>
+                      <h3 style="margin:0 0 6px;font-size:13px;color:#e2e8f0">競合チャンネル 上位10</h3>
+                      <table style="width:100%;font-size:12px;border-collapse:collapse">
+                        <thead>
+                          <tr style="border-bottom:1px solid #3f3f46;text-align:left;color:#94a3b8">
+                            <th style="padding:6px">チャンネル</th><th style="padding:6px">登録者</th><th style="padding:6px">出現回数</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          <template x-for="c in (seoPack.harvest?.channels || []).slice(0, 10)" :key="c.channel_id">
+                            <tr style="border-bottom:1px solid #27272a">
+                              <td style="padding:6px;color:#e2e8f0" x-text="c.title"></td>
+                              <td style="padding:6px;color:#94a3b8" x-text="(c.subscribers||0).toLocaleString()"></td>
+                              <td style="padding:6px;color:#94a3b8" x-text="c.appearances"></td>
+                            </tr>
+                          </template>
+                        </tbody>
+                      </table>
+                    </div>
+
+                    <!-- 下克上動画 -->
+                    <div>
+                      <h3 style="margin:0 0 6px;font-size:13px;color:#e2e8f0">下克上動画（登録者少数×高再生）</h3>
+                      <table style="width:100%;font-size:12px;border-collapse:collapse">
+                        <thead>
+                          <tr style="border-bottom:1px solid #3f3f46;text-align:left;color:#94a3b8">
+                            <th style="padding:6px">タイトル</th><th style="padding:6px">チャンネル</th><th style="padding:6px">再生数</th><th style="padding:6px">打率</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          <template x-for="v in (seoPack.harvest?.upset_videos || [])" :key="v.video_id">
+                            <tr style="border-bottom:1px solid #27272a">
+                              <td style="padding:6px;color:#e2e8f0" x-text="v.title"></td>
+                              <td style="padding:6px;color:#94a3b8" x-text="v.channel_title"></td>
+                              <td style="padding:6px;color:#94a3b8" x-text="(v.views||0).toLocaleString()"></td>
+                              <td style="padding:6px;color:#86efac" x-text="(v.ratio||0).toFixed(1) + 'x'"></td>
+                            </tr>
+                          </template>
+                        </tbody>
+                      </table>
+                    </div>
+
+                    <!-- 差分分析 -->
+                    <div>
+                      <h3 style="margin:0 0 6px;font-size:13px;color:#e2e8f0">差分分析（自チャンネルとの比較）</h3>
+                      <div style="font-size:11px;color:#64748b;margin-bottom:2px">不足タグ</div>
+                      <div style="display:flex;flex-wrap:wrap;gap:6px;margin-bottom:8px">
+                        <template x-for="t in (seoPack.gap_analysis?.missing_tags || [])" :key="t">
+                          <span style="font-size:10px;padding:2px 8px;border-radius:99px;background:#3f1d1d;border:1px solid #7f1d1d;color:#fca5a5" x-text="t"></span>
+                        </template>
+                      </div>
+                      <div style="font-size:11px;color:#64748b;margin-bottom:2px">掛け算候補</div>
+                      <div style="display:flex;flex-wrap:wrap;gap:6px;margin-bottom:8px">
+                        <template x-for="idea in (seoPack.gap_analysis?.multiplier_ideas || [])" :key="idea">
+                          <span style="font-size:10px;padding:2px 8px;border-radius:99px;background:#1e3a2f;border:1px solid #14532d;color:#86efac" x-text="idea"></span>
+                        </template>
+                      </div>
+                      <div style="font-size:11px;color:#64748b;margin-bottom:2px">タイトルパターン</div>
+                      <ul style="margin:0;padding-left:18px;font-size:12px;color:#cbd5e1">
+                        <template x-for="p in (seoPack.gap_analysis?.title_patterns || [])" :key="p">
+                          <li x-text="p"></li>
+                        </template>
+                      </ul>
+                    </div>
+
+                    <!-- 視聴者インサイト -->
+                    <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:12px">
+                      <div>
+                        <h3 style="margin:0 0 6px;font-size:13px;color:#e2e8f0">👍 絶賛</h3>
+                        <ul style="margin:0;padding-left:16px;font-size:11px;color:#cbd5e1">
+                          <template x-for="(x,i) in (seoPack.viewer_insights?.praise || [])" :key="i"><li x-text="x"></li></template>
+                        </ul>
+                      </div>
+                      <div>
+                        <h3 style="margin:0 0 6px;font-size:13px;color:#e2e8f0">👎 不満</h3>
+                        <ul style="margin:0;padding-left:16px;font-size:11px;color:#cbd5e1">
+                          <template x-for="(x,i) in (seoPack.viewer_insights?.complaints || [])" :key="i"><li x-text="x"></li></template>
+                        </ul>
+                      </div>
+                      <div>
+                        <h3 style="margin:0 0 6px;font-size:13px;color:#e2e8f0">❓ 質問</h3>
+                        <ul style="margin:0;padding-left:16px;font-size:11px;color:#cbd5e1">
+                          <template x-for="(x,i) in (seoPack.viewer_insights?.questions || [])" :key="i"><li x-text="x"></li></template>
+                        </ul>
+                      </div>
+                    </div>
+
+                    <!-- for_script 縮小表示 -->
+                    <div>
+                      <h3 style="margin:0 0 6px;font-size:13px;color:#e2e8f0">台本への反映情報（for_script）</h3>
+                      <pre style="white-space:pre-wrap;word-break:break-word;background:#0f1117;border:1px solid #2d3748;border-radius:6px;padding:10px;font-size:11px;max-height:160px;overflow:auto;color:#94a3b8" x-text="seoPack.for_script"></pre>
+                      <div style="font-size:10px;color:#4b5563;margin-top:4px" x-text="`生成日時: ${seoPack.generated_at || '-'}`"></div>
+                    </div>
+                  </div>
+                </template>
+
+                <!-- 公開メタデータ -->
+                <div style="margin-top:20px;border-top:1px solid #2d3748;padding-top:14px">
+                  <h3 style="margin:0 0 10px;font-size:14px;color:#e2e8f0">📤 公開メタデータ</h3>
+                  <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">
+                    <label style="font-size:12px;color:#94a3b8">エピソード番号</label>
+                    <input type="number" x-model.number="seoPublishEpisode" min="1" style="max-width:80px" @change="loadPublishPack()">
+                    <button class="btn btn-primary btn-sm" @click="runPublishPack()" :disabled="seoPublishBusy">
+                      <span x-text="seoPublishBusy ? '⏳ 生成中…' : '📤 公開パック生成'"></span>
+                    </button>
+                  </div>
+                  <p x-show="seoPublishError" style="color:#fca5a5;font-size:12px;margin-top:8px" x-text="seoPublishError"></p>
+
+                  <template x-if="seoPublishPack">
+                    <div style="margin-top:12px;display:flex;flex-direction:column;gap:10px">
+                      <div>
+                        <h4 style="margin:0 0 6px;font-size:12px;color:#94a3b8">タイトル案</h4>
+                        <div style="display:flex;flex-direction:column;gap:6px">
+                          <template x-for="(t,i) in (seoPublishPack.titles || [])" :key="i">
+                            <div style="display:flex;align-items:center;gap:8px;background:#0f1117;border:1px solid #2d3748;border-radius:6px;padding:6px 10px">
+                              <span style="font-size:12px;color:#e2e8f0;flex:1" x-text="t"></span>
+                              <button class="btn btn-ghost btn-sm" @click="copySeoText('title'+i, t)" x-text="seoCopyLabel['title'+i] || '📋'"></button>
+                            </div>
+                          </template>
+                        </div>
+                      </div>
+                      <div>
+                        <h4 style="margin:0 0 6px;font-size:12px;color:#94a3b8">概要欄</h4>
+                        <div style="display:flex;align-items:flex-start;gap:8px;background:#0f1117;border:1px solid #2d3748;border-radius:6px;padding:8px 10px">
+                          <pre style="white-space:pre-wrap;word-break:break-word;font-size:12px;color:#e2e8f0;flex:1;margin:0" x-text="seoPublishPack.description"></pre>
+                          <button class="btn btn-ghost btn-sm" @click="copySeoText('desc', seoPublishPack.description)" x-text="seoCopyLabel['desc'] || '📋'"></button>
+                        </div>
+                      </div>
+                      <div>
+                        <h4 style="margin:0 0 6px;font-size:12px;color:#94a3b8">ハッシュタグ</h4>
+                        <div style="display:flex;align-items:center;gap:8px">
+                          <div style="display:flex;flex-wrap:wrap;gap:6px;flex:1">
+                            <template x-for="(h,i) in (seoPublishPack.hashtags || [])" :key="i">
+                              <span style="font-size:10px;padding:2px 8px;border-radius:99px;background:#1a1d2e;border:1px solid #2d3748;color:#93c5fd" x-text="h"></span>
+                            </template>
+                          </div>
+                          <button class="btn btn-ghost btn-sm" @click="copySeoText('hashtags', (seoPublishPack.hashtags||[]).join(' '))" x-text="seoCopyLabel['hashtags'] || '📋'"></button>
+                        </div>
+                      </div>
+                      <div>
+                        <h4 style="margin:0 0 6px;font-size:12px;color:#94a3b8">タグ</h4>
+                        <div style="display:flex;align-items:center;gap:8px">
+                          <div style="display:flex;flex-wrap:wrap;gap:6px;flex:1">
+                            <template x-for="(g,i) in (seoPublishPack.tags || [])" :key="i">
+                              <span style="font-size:10px;padding:2px 8px;border-radius:99px;background:#1a1d2e;border:1px solid #2d3748;color:#94a3b8" x-text="g"></span>
+                            </template>
+                          </div>
+                          <button class="btn btn-ghost btn-sm" @click="copySeoText('tags', (seoPublishPack.tags||[]).join(', '))" x-text="seoCopyLabel['tags'] || '📋'"></button>
+                        </div>
+                      </div>
+                    </div>
+                  </template>
+                </div>
+              </div>
+            </template>
+          </div>
+        </template>
       </div>
     </template>
 
@@ -810,6 +1038,12 @@
                 <h2 style="margin-top:14px">追加指示（任意）</h2>
                 <textarea x-model="extraInstruction" rows="3"
                           placeholder="ラフ台本に対する追加の指示（例：『この部分を強調して』『〇〇についてはバイアスをつけて』）。空欄でOK"></textarea>
+
+                <label style="display:flex;align-items:center;gap:6px;font-size:12px;color:#6b7280;margin-top:10px">
+                  <input type="checkbox" x-model="seoAutoEnabled" @change="saveSeoAutoConfig()">
+                  ⚡ SEO自動最適化（生成前にYouTube市場分析を自動実行し、台本に反映します）
+                </label>
+                <div x-show="seoAutoStatus" style="font-size:11px;color:#6b7280;margin-top:4px" x-text="seoAutoStatus"></div>
               </div>
 
               <!-- 生成ボタン（通常） -->
@@ -2952,6 +3186,19 @@ function app() {
     researchTargetSec: 300, researchExtra: '',
     researchRough: '', researchFallback: false,
     researchBusy: false, researchError: '',
+    // 🔍 SEOオプティマイザ（プロジェクト単位・YouTube Data APIベース市場分析）
+    seoQuota: null,
+    seoPack: null,
+    seoBusy: false, seoError: '',
+    seoForce: false,
+    seoPublishEpisode: 1,
+    seoPublishPack: null,
+    seoPublishBusy: false, seoPublishError: '',
+    seoCopyLabel: {},
+    seoAutoConfigChecked: false,  // YouTube configured の判定結果をキャッシュ（health確認は1回だけ）
+    seoAutoConfigured: false,
+    seoAutoEnabled: true,
+    seoAutoStatus: '',
     // 🎭 キャラ（プロジェクト非依存・チャンネル共通）
     charas: [],
     chara: null,
@@ -3653,6 +3900,10 @@ function app() {
         this.styleIsSaved = true;
       }
 
+      // SEO自動最適化トグルの状態を復元（config.seo.auto が本籍・既定true）
+      const seoCfg = await fetch(`${SAPI}/projects/${pj.id}/seo-config`).then(r => r.json()).catch(() => null);
+      this.seoAutoEnabled = seoCfg ? seoCfg.auto !== false : true;
+
       // エピソード一覧を読み込み、先頭エピソードのdraftを表示
       await this.loadEpisodes();
       if (this.episodes.length > 0) {
@@ -3748,6 +3999,7 @@ function app() {
       this.seriesGenerating = true;
       this.seriesGenError = '';
       this.warnings = [];
+      await this.maybeRunSeoAutoOptimize();
       try {
         const body = {
           style_id: this.selectedStyleId,
@@ -3808,6 +4060,7 @@ function app() {
       if (!this.currentProject || !this.selectedStyleId) return;
       this.generating = true;
       this.warnings = [];
+      await this.maybeRunSeoAutoOptimize();
       try {
         const body = {
           style_id: this.selectedStyleId,
@@ -4129,6 +4382,9 @@ function app() {
       await this.loadResearchModels();
       await this.loadResearchSources();
       await this.loadResearchDigest();
+      await this.loadSeoQuota();
+      await this.loadSeoPack();
+      await this.loadPublishPack();
     },
     async checkResearchHealth() {
       try {
@@ -4210,6 +4466,113 @@ function app() {
         this.researchRough = j.rough_script;
         this.researchFallback = j.fallback_used;
         await this.loadResearchSources();
+      }
+    },
+
+    // ─── 🔍 SEOオプティマイザ ────────────────────────────────────
+    async loadSeoQuota() {
+      try {
+        this.seoQuota = await fetch(`${RAPI}/youtube/quota`).then(r => r.json());
+      } catch { this.seoQuota = null; }
+    },
+    async loadSeoPack() {
+      this.seoPack = null;
+      if (!this.currentProject) return;
+      try {
+        const r = await fetch(`${RAPI}/projects/${this.currentProject.id}/seo`);
+        if (r.ok) this.seoPack = await r.json();
+      } catch {}
+    },
+    async runSeoOptimize() {
+      if (!this.currentProject) return;
+      this.seoBusy = true; this.seoError = '';
+      try {
+        const r = await fetch(`${RAPI}/projects/${this.currentProject.id}/seo/optimize`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ force: this.seoForce, model: null, rough_script: null }),
+        });
+        const j = await r.json();
+        if (!r.ok) { this.seoError = j.detail || `エラー（HTTP ${r.status}）`; return; }
+        this.seoPack = j;
+        await this.loadSeoQuota();
+      } catch (e) {
+        this.seoError = `通信エラー: ${e}`;
+      } finally {
+        this.seoBusy = false;
+      }
+    },
+    async loadPublishPack() {
+      this.seoPublishPack = null;
+      if (!this.currentProject) return;
+      try {
+        const r = await fetch(`${RAPI}/projects/${this.currentProject.id}/episodes/${this.seoPublishEpisode}/publish-pack`);
+        if (r.ok) this.seoPublishPack = await r.json();
+      } catch {}
+    },
+    async runPublishPack() {
+      if (!this.currentProject) return;
+      this.seoPublishBusy = true; this.seoPublishError = '';
+      try {
+        const r = await fetch(`${RAPI}/projects/${this.currentProject.id}/episodes/${this.seoPublishEpisode}/publish-pack`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ model: null }),
+        });
+        const j = await r.json();
+        if (!r.ok) { this.seoPublishError = j.detail || `エラー（HTTP ${r.status}）`; return; }
+        this.seoPublishPack = j;
+      } catch (e) {
+        this.seoPublishError = `通信エラー: ${e}`;
+      } finally {
+        this.seoPublishBusy = false;
+      }
+    },
+    async copySeoText(key, text) {
+      try {
+        await navigator.clipboard.writeText(text);
+        this.seoCopyLabel = { ...this.seoCopyLabel, [key]: '✅ コピー済み' };
+        setTimeout(() => { this.seoCopyLabel = { ...this.seoCopyLabel, [key]: '' }; }, 1500);
+      } catch {}
+    },
+
+    // ─── 🔍 SEO自動最適化（台本タブの半自動発火） ──────────────────
+    async saveSeoAutoConfig() {
+      if (!this.currentProject) return;
+      try {
+        await fetch(`${SAPI}/projects/${this.currentProject.id}/seo-config`, {
+          method: 'PATCH',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ auto: this.seoAutoEnabled }),
+        });
+      } catch (e) { console.warn('SEO自動最適化トグルの保存に失敗:', e); }
+    },
+    async isSeoConfigured() {
+      if (this.seoAutoConfigChecked) return this.seoAutoConfigured;
+      try {
+        const h = await fetch(`${RAPI}/health`).then(r => r.json());
+        this.seoAutoConfigured = !!(h.youtube && h.youtube.configured);
+      } catch { this.seoAutoConfigured = false; }
+      this.seoAutoConfigChecked = true;
+      return this.seoAutoConfigured;
+    },
+    async maybeRunSeoAutoOptimize() {
+      // 生成前フック: トグルON・ラフ台本あり・YouTube configured の全条件が揃った時だけ実行。
+      // 失敗しても台本生成をブロックしない（console.warnのみ）。
+      this.seoAutoStatus = '';
+      if (!this.seoAutoEnabled || !this.roughScript || !this.currentProject) return;
+      try {
+        if (!(await this.isSeoConfigured())) return;
+        this.seoAutoStatus = '🔍 SEO最適化中…';
+        const r = await fetch(`${RAPI}/projects/${this.currentProject.id}/seo/optimize`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ force: false, model: null, rough_script: this.roughScript }),
+        });
+        if (r.ok) { this.seoAutoStatus = '✅ SEO最適化 完了'; } else { this.seoAutoStatus = ''; }
+      } catch (e) {
+        console.warn('SEO自動最適化に失敗（台本生成は続行）:', e);
+        this.seoAutoStatus = '';
       }
     },
 

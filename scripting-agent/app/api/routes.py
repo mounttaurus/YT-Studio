@@ -13,14 +13,15 @@ from pathlib import Path
 from typing import Optional
 
 import httpx
-from fastapi import APIRouter, HTTPException, Query, UploadFile, File, Form
-from fastapi.responses import FileResponse
+from fastapi import APIRouter, HTTPException, Query, Request, Response, UploadFile, File, Form
+from fastapi.responses import FileResponse, JSONResponse
 from pydantic import BaseModel
 from starlette.background import BackgroundTask
 
 from app.core import character_reader, llm_client, project_manager, script_generator, style_registry
 
 TTS_AGENT_URL = os.getenv("TTS_AGENT_URL", "http://tts-agent:8004")
+RESEARCH_AGENT_URL = os.getenv("RESEARCH_AGENT_URL", "http://research-agent:8001")
 
 router = APIRouter(tags=["api"])
 
@@ -82,6 +83,10 @@ class RenameChannelRequest(BaseModel):
 
 class StyleSaveRequest(BaseModel):
     style_id: str
+
+
+class SeoConfigRequest(BaseModel):
+    auto: bool
 
 
 class SaveNamedDraftRequest(BaseModel):
@@ -453,6 +458,22 @@ async def save_style(project_id: str, req: StyleSaveRequest):
 async def get_style_for_project(project_id: str):
     style_id = project_manager.get_project_style(project_id)
     return {"project_id": project_id, "style_id": style_id}
+
+
+@router.patch("/projects/{project_id}/seo-config")
+async def save_seo_config(project_id: str, req: SeoConfigRequest):
+    """SEO自動最適化トグルの永続化先（config.seo.auto が唯一の本籍）。"""
+    try:
+        project_manager.save_project_seo_auto(project_id, req.auto)
+        return {"project_id": project_id, "auto": req.auto, "status": "saved"}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.get("/projects/{project_id}/seo-config")
+async def get_seo_config(project_id: str):
+    auto = project_manager.get_project_seo_auto(project_id)
+    return {"project_id": project_id, "auto": auto}
 
 
 # ─── エピソード一覧 ────────────────────────────────────────────────────
@@ -1055,6 +1076,39 @@ def _extract_json_script_text(raw: bytes) -> str:
     return "\n".join(texts)
 
 
+# ─── research-agent連携（汎用プロキシ） ─────────────────────────────────
+#
+# scripting-agentのスタンドアロンUI（:8002）はresearch-agent（:8001）と別オリジンのため、
+# SEO最適化（/seo/optimize等）をブラウザから直接叩けない。director-agentの汎用プロキシ
+# （director-agent/app/api/routes.py の proxy_research）と同じパターンをここにも敷く。
+# 蒸留(LLM)・SEO分析は時間がかかるためタイムアウトは長め（300秒）。
+
+@router.api_route("/research/{path:path}", methods=["GET", "POST", "PUT", "PATCH", "DELETE"])
+async def proxy_research(path: str, request: Request):
+    url = f"{RESEARCH_AGENT_URL}/{path}"
+    body = await request.body()
+    headers = {}
+    if "content-type" in request.headers:
+        headers["content-type"] = request.headers["content-type"]
+
+    async with httpx.AsyncClient(timeout=300.0) as client:
+        try:
+            res = await client.request(
+                request.method,
+                url,
+                params=request.query_params,
+                content=body,
+                headers=headers,
+            )
+        except httpx.RequestError as e:
+            raise HTTPException(status_code=502, detail=f"research-agent unreachable: {e}")
+
+    content_type = res.headers.get("content-type", "")
+    if "application/json" in content_type:
+        return JSONResponse(content=res.json(), status_code=res.status_code)
+    return Response(content=res.content, status_code=res.status_code, media_type=content_type)
+
+
 # ─── ヘルパー ──────────────────────────────────────────────────────────
 
 def _build_input_content(project_id: str, rough_script: Optional[str]) -> str:
@@ -1065,6 +1119,12 @@ def _build_input_content(project_id: str, rough_script: Optional[str]) -> str:
     existing_rough = rough_script or project_manager.read_rough_script(project_id)
     if existing_rough:
         parts.append("## ラフ台本\n" + existing_rough)
+    seo_pack = project_manager.read_seo_pack(project_id)
+    if seo_pack and seo_pack.get("for_script"):
+        parts.append(
+            "## SEO最適化情報（視聴者検索に乗るための指示。台本の内容・事実を歪めない範囲で反映すること）\n"
+            + seo_pack["for_script"]
+        )
     if not parts:
         parts.append(f"プロジェクトID: {project_id}（リサーチ情報なし）")
     return "\n\n".join(parts)

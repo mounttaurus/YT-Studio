@@ -42,6 +42,10 @@ services:
       - CLOUDFLARE_TEXT_MODEL=@cf/meta/llama-3.3-70b-instruct-fp8-fast
       # 音声/動画ソースの書き起こし（Whisper）
       - CLOUDFLARE_STT_MODEL=@cf/openai/whisper-large-v3-turbo
+      # YouTube SEOオプティマイザ（キーは .env(env_file) の YOUTUBE_DATA_API_KEY 経由）
+      - YOUTUBE_REGION=JP
+      - YOUTUBE_DAILY_QUOTA_BUDGET=8000
+      - YOUTUBE_CACHE_TTL_HOURS=72
     volumes:
       - ./shared:/shared
     networks:
@@ -58,6 +62,7 @@ services:
     environment:
       - SHARED_DIR=/shared
       - TTS_AGENT_URL=http://tts-agent:8004
+      - RESEARCH_AGENT_URL=http://research-agent:8001
     volumes:
       - ./shared:/shared
     networks:

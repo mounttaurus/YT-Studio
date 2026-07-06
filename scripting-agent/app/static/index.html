@@ -570,6 +570,12 @@
       <h2 style="margin-top:14px">追加指示（任意）</h2>
       <textarea x-model="extraInstruction" rows="3"
                 placeholder="ラフ台本に対する追加の指示（例：『この部分を強調して』『〇〇についてはバイアスをつけて』）。空欄でOK"></textarea>
+
+      <label style="display:flex;align-items:center;gap:6px;font-size:12px;color:#6b7280;margin-top:10px">
+        <input type="checkbox" x-model="seoAutoEnabled" @change="saveSeoAutoConfig()">
+        ⚡ SEO自動最適化（生成前にYouTube市場分析を自動実行し、台本に反映します）
+      </label>
+      <div x-show="seoAutoStatus" style="font-size:11px;color:#6b7280;margin-top:4px" x-text="seoAutoStatus"></div>
     </div>
 
     <!-- 生成ボタン（通常） -->
@@ -1082,6 +1088,11 @@ function app() {
     fileDragOver: false,
     fileImporting: false,
     fileImportError: '',
+    // 🔍 SEO自動最適化（config.seo.auto が本籍・research-agentプロキシ経由で呼び出す）
+    seoAutoEnabled: true,
+    seoAutoConfigChecked: false,
+    seoAutoConfigured: false,
+    seoAutoStatus: '',
     pendingJsonFile: null,
     showJsonImportChoice: false,
     // エピソード管理（標準・シリーズ統合）
@@ -1614,6 +1625,10 @@ function app() {
         this.styleIsSaved = true;
       }
 
+      // SEO自動最適化トグルの状態を復元（config.seo.auto が本籍・既定true）
+      const seoCfg = await fetch(`/projects/${pj.id}/seo-config`).then(r => r.json()).catch(() => null);
+      this.seoAutoEnabled = seoCfg ? seoCfg.auto !== false : true;
+
       // エピソード一覧を読み込み、ep01のdraftを表示
       await this.loadEpisodes();
       if (this.episodes.length > 0) {
@@ -1628,6 +1643,46 @@ function app() {
     isSeriesStyle() {
       const s = this.selectedStyleObj();
       return !!(s && s.series_mode);
+    },
+
+    // ─── 🔍 SEO自動最適化（台本生成の半自動発火） ──────────────────
+    async saveSeoAutoConfig() {
+      if (!this.currentProject) return;
+      try {
+        await fetch(`/projects/${this.currentProject.id}/seo-config`, {
+          method: 'PATCH',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ auto: this.seoAutoEnabled }),
+        });
+      } catch (e) { console.warn('SEO自動最適化トグルの保存に失敗:', e); }
+    },
+    async isSeoConfigured() {
+      if (this.seoAutoConfigChecked) return this.seoAutoConfigured;
+      try {
+        const h = await fetch('/research/health').then(r => r.json());
+        this.seoAutoConfigured = !!(h.youtube && h.youtube.configured);
+      } catch { this.seoAutoConfigured = false; }
+      this.seoAutoConfigChecked = true;
+      return this.seoAutoConfigured;
+    },
+    async maybeRunSeoAutoOptimize() {
+      // 生成前フック: トグルON・ラフ台本あり・YouTube configured の全条件が揃った時だけ実行。
+      // 失敗しても台本生成をブロックしない（console.warnのみ）。
+      this.seoAutoStatus = '';
+      if (!this.seoAutoEnabled || !this.roughScript || !this.currentProject) return;
+      try {
+        if (!(await this.isSeoConfigured())) return;
+        this.seoAutoStatus = '🔍 SEO最適化中…';
+        const r = await fetch(`/research/projects/${this.currentProject.id}/seo/optimize`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ force: false, model: null, rough_script: this.roughScript }),
+        });
+        if (r.ok) { this.seoAutoStatus = '✅ SEO最適化 完了'; } else { this.seoAutoStatus = ''; }
+      } catch (e) {
+        console.warn('SEO自動最適化に失敗（台本生成は続行）:', e);
+        this.seoAutoStatus = '';
+      }
     },
 
     // ─── ラフ台本ファイル取込み ───────────────────────────────────
@@ -1706,6 +1761,7 @@ function app() {
       this.seriesGenerating = true;
       this.seriesGenError = '';
       this.warnings = [];
+      await this.maybeRunSeoAutoOptimize();
       try {
         const body = {
           style_id: this.selectedStyleId,
@@ -1759,6 +1815,7 @@ function app() {
       if (!this.currentProject || !this.selectedStyleId) return;
       this.generating = true;
       this.warnings = [];
+      await this.maybeRunSeoAutoOptimize();
       try {
         const body = {
           style_id: this.selectedStyleId,

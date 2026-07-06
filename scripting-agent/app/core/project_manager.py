@@ -499,6 +499,15 @@ def read_research(project_id: str) -> Optional[dict]:
     return None
 
 
+def read_seo_pack(project_id: str) -> Optional[dict]:
+    """research-agent が生成した seo_pack.json（YouTube SEO最適化の正本）を読む。"""
+    pj_dir = get_project_dir(project_id)
+    f = pj_dir / "seo_pack.json"
+    if f.exists():
+        return json.loads(f.read_text(encoding="utf-8"))
+    return None
+
+
 def read_rough_script(project_id: str) -> Optional[str]:
     pj_dir = get_project_dir(project_id)
     f = pj_dir / "rough_script.txt"
@@ -575,6 +584,24 @@ def save_project_style(project_id: str, style_id: str):
 
 def get_project_style(project_id: str) -> str:
     return read_project(project_id).get("style", "")
+
+
+def save_project_seo_auto(project_id: str, auto: bool):
+    """SEO自動最適化トグルの保存先（config.seo.auto が唯一の本籍・既定 true）。"""
+    pj_dir = get_project_dir(project_id)
+    pj_file = pj_dir / "project.json"
+    if pj_file.exists():
+        pj = json.loads(pj_file.read_text(encoding="utf-8"))
+    else:
+        pj = {"id": project_id, "status": {}, "errors": [], "created_at": datetime.now(timezone.utc).isoformat()}
+    pj.setdefault("config", {}).setdefault("seo", {})["auto"] = bool(auto)
+    pj["updated_at"] = datetime.now(timezone.utc).isoformat()
+    pj_file.write_text(json.dumps(pj, ensure_ascii=False, indent=2), encoding="utf-8")
+
+
+def get_project_seo_auto(project_id: str) -> bool:
+    """既定 true（未設定＝オプトアウトしていない状態として扱う）。"""
+    return read_project(project_id).get("config", {}).get("seo", {}).get("auto", True)
 
 
 # ─── マイグレーション ────────────────────────────────────────────────

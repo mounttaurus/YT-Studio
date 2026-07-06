@@ -55,6 +55,14 @@ async def check_vecteezy_quota() -> dict:
     return await dc.get("api/scrapping/vecteezy/account")
 
 
+async def check_youtube_quota() -> dict:
+    """YouTube Data APIの日次クォータ台帳（太平洋時間リセット・自主予算8000）を返す。
+
+    外部API課金監視の一環＝generate_publish_pack 等の SEO 工程の影響を把握する。
+    """
+    return await dc.get("api/research/youtube/quota")
+
+
 # ── 読み取りツール ────────────────────────────────────────────────
 
 async def list_projects() -> list[dict]:
@@ -511,6 +519,46 @@ async def research_get_digest(project_id: str) -> dict:
     return await dc.get(f"api/research/projects/{project_id}/digest")
 
 
+# ── YouTube SEO オプティマイザ（市場データ収穫→公開メタデータ生成） ─────
+#
+# ラフ台本からジャンル/シードキーワードを推定し、YouTube Data API で市場データ（タグ・競合・コメント）
+# を収穫して seo_pack.json を生成。生成後は generate_script / generate_series_script の
+# extra_instruction に自動注入されて台本品質向上（視聴者ニーズ反映）に繋がる。
+# 最終出力 publish_pack.json は確定台本＋SEOパックから YouTube 公開用メタデータ（タイトル案3/概要欄/
+# ハッシュタグ/タグ）を生成する。
+
+async def seo_optimize(project_id: str, force: bool = False,
+                       rough_script: Optional[str] = None) -> dict:
+    """ラフ台本からLLMでジャンル/シードキーワードを推定し、YouTube Data APIで市場データを収穫してseo_pack.jsonを生成。
+
+    台本生成プロンプトに自動注入される。rough_script を渡すと保存してから分析。
+    force=True でも既に seo_pack.json が存在すれば確認なく上書き。
+    """
+    body: dict = {"force": force}
+    if rough_script is not None:
+        body["rough_script"] = rough_script
+    return await dc.request("POST", f"api/research/projects/{project_id}/seo/optimize", json=body)
+
+
+async def get_seo_pack(project_id: str) -> dict:
+    """プロジェクトの seo_pack.json（ジャンル/シードキーワード/市場データ）を読み取る。"""
+    return await dc.get(f"api/research/projects/{project_id}/seo")
+
+
+async def generate_publish_pack(project_id: str, episode_number: int) -> dict:
+    """確定台本とSEOパックからYouTube公開用メタデータ（タイトル案3/概要欄/ハッシュタグ/タグ）を生成。
+
+    publish_pack.json に保存される。前提: 台本承認済み(approve_script) + seo_optimize 実行済み。
+    """
+    return await dc.request(
+        "POST", f"api/research/projects/{project_id}/episodes/{episode_number}/publish-pack", json={})
+
+
+async def get_publish_pack(project_id: str, episode_number: int) -> dict:
+    """確定話の publish_pack.json（YouTube公開メタデータ）を読み取る。"""
+    return await dc.get(f"api/research/projects/{project_id}/episodes/{episode_number}/publish-pack")
+
+
 # ── Aロール（マンガ形式パネル / 台本セリフ行→キャラ画像の一括生成） ──────
 #
 # Aロール＝素材取得ではなく「セリフ1行＝マンガ1コマ」のキャラ画像（2026-07方針転換）。
@@ -572,6 +620,7 @@ S = SideEffect
 TOOLS = [
     {"fn": check_openrouter_credits, "side_effects": [S.READ]},
     {"fn": check_vecteezy_quota, "side_effects": [S.READ]},
+    {"fn": check_youtube_quota,  "side_effects": [S.READ]},
     {"fn": list_projects,        "side_effects": [S.READ]},
     {"fn": project_status,       "side_effects": [S.READ]},
     {"fn": list_styles,          "side_effects": [S.READ]},
@@ -613,4 +662,9 @@ TOOLS = [
     {"fn": research_add_source,  "side_effects": [S.WRITE]},
     {"fn": research_digest,      "side_effects": [S.WRITE]},
     {"fn": research_get_digest,  "side_effects": [S.READ]},
+    # YouTube SEO オプティマイザ（市場データ収穫→公開メタデータ生成）
+    {"fn": seo_optimize,         "side_effects": [S.WRITE, S.COST]},
+    {"fn": get_seo_pack,         "side_effects": [S.READ]},
+    {"fn": generate_publish_pack, "side_effects": [S.WRITE]},
+    {"fn": get_publish_pack,     "side_effects": [S.READ]},
 ]
