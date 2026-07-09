@@ -4,6 +4,7 @@ Cloudflare Workers AI — テキストLLM(フォールバック頭脳) と Whisp
 Geminiの代替ではなく協調（保険＋音声の入口）。鍵は scrapping-agent の画像クライアントと共有
 （CLOUDFLARE_API_KEY / CLOUDFLARE_ACCOUNT_ID）。モデル名は compose の environment に固定。
 """
+import base64
 import json
 import os
 
@@ -51,9 +52,10 @@ async def transcribe(audio_bytes: bytes) -> str:
     """音声/動画の音声トラックを Whisper で書き起こす。Geminiの無料枠を消費せず音声を扱える。"""
     if not is_configured():
         raise RuntimeError("Cloudflare (CLOUDFLARE_API_KEY/CLOUDFLARE_ACCOUNT_ID) is not configured")
-    headers = {"Authorization": f"Bearer {CF_API_KEY}", "Content-Type": "application/octet-stream"}
+    headers = {"Authorization": f"Bearer {CF_API_KEY}", "Content-Type": "application/json"}
+    payload = {"audio": base64.b64encode(audio_bytes).decode("ascii")}
     async with httpx.AsyncClient(timeout=300.0) as client:
-        res = await client.post(_url(CF_STT_MODEL), content=audio_bytes, headers=headers)
+        res = await client.post(_url(CF_STT_MODEL), json=payload, headers=headers)
         if res.status_code != 200:
             raise RuntimeError(f"Cloudflare STT API error {res.status_code}: {res.text[:300]}")
         body = res.json()
