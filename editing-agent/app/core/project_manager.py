@@ -70,14 +70,19 @@ def list_projects() -> list[dict]:
     return summaries
 
 
-def get_episode_status(project_id: str, episode_number: int) -> dict:
-    """project.json の episodes[n].status を返す（無ければ空dict）。"""
+def get_episode_status(project_id: str, episode_number: int, lang: str | None = None) -> dict:
+    """project.json の episodes[n].status を返す（無ければ空dict）。
+    lang指定時は episodes[n].locales[lang].status を返す（DATA_SCHEMA §episodes[].locales）。
+    footage は言語別に持たない（原語と共有）ため、footageの完了判定は常に lang=None で見ること。
+    """
     pj_dir = find_project_dir(project_id)
     if pj_dir is None:
         return {}
     pj = _read_json(pj_dir / "project.json")
     for ep in pj.get("episodes", []):
         if ep.get("number") == episode_number:
+            if lang:
+                return (ep.get("locales", {}).get(lang, {}) or {}).get("status", {})
             return ep.get("status", {})
     return {}
 
@@ -122,11 +127,12 @@ def get_episode_script(project_id: str, episode_number: int) -> dict | None:
     return _read_json(f)
 
 
-def get_episode_tts(project_id: str, episode_number: int) -> dict | None:
+def get_episode_tts(project_id: str, episode_number: int, lang: str | None = None) -> dict | None:
+    """tts.json を返す。lang指定時は locales/{lang}/tts.json（翻訳版の音声・DATA_SCHEMA §2c）。"""
     ep_dir = episode_dir(project_id, episode_number)
     if ep_dir is None:
         return None
-    f = ep_dir / "tts.json"
+    f = (ep_dir / "locales" / lang / "tts.json") if lang else (ep_dir / "tts.json")
     if not f.exists():
         return None
     return _read_json(f)
@@ -159,12 +165,14 @@ def get_episode_footage(project_id: str, episode_number: int) -> dict | None:
 
 
 def write_edit_outputs(project_id: str, episode_number: int, otio_text: str, srt_text: str,
-                       edit_json: dict, fcpxml_text: str | None = None) -> Path | None:
-    """edit/timeline.otio, subtitles.srt, (任意)subtitles.fcpxml, edit.json を書き出す。戻り値はeditディレクトリ。"""
+                       edit_json: dict, fcpxml_text: str | None = None,
+                       lang: str | None = None) -> Path | None:
+    """edit/timeline.otio, subtitles.srt, (任意)subtitles.fcpxml, edit.json を書き出す。戻り値はeditディレクトリ。
+    lang指定時は locales/{lang}/edit/ へ書く（DATA_SCHEMA §2c）。"""
     ep_dir = episode_dir(project_id, episode_number)
     if ep_dir is None:
         return None
-    edit_dir = ep_dir / "edit"
+    edit_dir = (ep_dir / "locales" / lang / "edit") if lang else (ep_dir / "edit")
     edit_dir.mkdir(parents=True, exist_ok=True)
     (edit_dir / "timeline.otio").write_text(otio_text, encoding="utf-8")
     (edit_dir / "subtitles.srt").write_text(srt_text, encoding="utf-8")
@@ -199,20 +207,22 @@ def set_subtitle_style(project_id: str, style: dict) -> bool:
     return True
 
 
-def read_edit_result(project_id: str, episode_number: int) -> dict | None:
+def read_edit_result(project_id: str, episode_number: int, lang: str | None = None) -> dict | None:
     ep_dir = episode_dir(project_id, episode_number)
     if ep_dir is None:
         return None
-    f = ep_dir / "edit" / "edit.json"
+    f = (ep_dir / "locales" / lang / "edit" / "edit.json") if lang else (ep_dir / "edit" / "edit.json")
     if not f.exists():
         return None
     return _read_json(f)
 
 
-def update_episode_status(project_id: str, episode_number: int, **status_updates: str) -> None:
-    """project.json の episodes[n].status の指定キーを更新する。
+def update_episode_status(project_id: str, episode_number: int, lang: str | None = None,
+                          **status_updates: str) -> None:
+    """project.json の status の指定キーを更新する。
 
     例: update_episode_status(pid, 1, editing="done", video_edit="pending")
+    lang指定時は episodes[n].locales[lang].status（原語のstatusとは別枠。DATA_SCHEMA §episodes[].locales）。
     """
     pj_dir = find_project_dir(project_id)
     if pj_dir is None:
@@ -221,7 +231,14 @@ def update_episode_status(project_id: str, episode_number: int, **status_updates
     pj = _read_json(pj_file)
     for ep in pj.setdefault("episodes", []):
         if ep.get("number") == episode_number:
-            status = ep.setdefault("status", {})
+            if lang:
+                loc = ep.setdefault("locales", {}).setdefault(lang, {})
+                status = loc.setdefault("status", {
+                    "translation": "not_started", "tts": "not_started",
+                    "editing": "not_started", "video_edit": "not_started",
+                })
+            else:
+                status = ep.setdefault("status", {})
             status.update(status_updates)
             break
     pj["updated_at"] = datetime.now(timezone.utc).isoformat()

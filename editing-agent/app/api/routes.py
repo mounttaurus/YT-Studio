@@ -1,4 +1,5 @@
 import os
+from typing import Optional
 
 import opentimelineio as otio
 from fastapi import APIRouter, HTTPException
@@ -18,6 +19,7 @@ class EditRunRequest(BaseModel):
     path_style: str = DEFAULT_PATH_STYLE
     force: bool = False
     subtitle_format: str = "both"  # srt | fcpxml | both
+    lang: Optional[str] = None  # 省略=原語。指定時は locales/{lang}/tts.json を使い locales/{lang}/edit/ へ出力
 
 
 class SubtitleStyleRequest(BaseModel):
@@ -54,18 +56,20 @@ def run_edit(project_id: str, episode_number: int, req: EditRunRequest):
     if ep_dir is None:
         raise HTTPException(status_code=404, detail=f"episode not found: {project_id} ep{episode_number}")
 
-    tts = project_manager.get_episode_tts(project_id, episode_number)
+    tts = project_manager.get_episode_tts(project_id, episode_number, lang=req.lang)
     footage = project_manager.get_episode_footage(project_id, episode_number)
     if tts is None or footage is None:
         raise HTTPException(status_code=422, detail="tts.json or footage.json not found")
     if "schema_version" not in tts or "schema_version" not in footage:
         raise HTTPException(status_code=422, detail="tts.json or footage.json missing schema_version")
 
-    status = project_manager.get_episode_status(project_id, episode_number)
-    if not req.force and (status.get("tts") != "done" or status.get("footage") != "done"):
+    # tts の完了判定は対象言語（lang）で見るが、footage は言語別に持たない（原語と共有）ため常に原語で見る。
+    tts_status = project_manager.get_episode_status(project_id, episode_number, lang=req.lang)
+    footage_status = project_manager.get_episode_status(project_id, episode_number)
+    if not req.force and (tts_status.get("tts") != "done" or footage_status.get("footage") != "done"):
         raise HTTPException(
             status_code=409,
-            detail=f"prerequisite not done: tts={status.get('tts')}, footage={status.get('footage')} (use force=true to override)",
+            detail=f"prerequisite not done: tts={tts_status.get('tts')}, footage={footage_status.get('footage')} (use force=true to override)",
         )
 
     if req.path_style not in ("file_uri", "windows"):
@@ -77,7 +81,7 @@ def run_edit(project_id: str, episode_number: int, req: EditRunRequest):
         edit_json = edit_runner.run_edit(
             project_id, episode_number,
             fps=req.fps, path_style=req.path_style, speaker_prefix=req.speaker_prefix,
-            subtitle_format=req.subtitle_format,
+            subtitle_format=req.subtitle_format, lang=req.lang,
         )
     except FileNotFoundError as e:
         raise HTTPException(status_code=422, detail=str(e))
@@ -88,8 +92,8 @@ def run_edit(project_id: str, episode_number: int, req: EditRunRequest):
 
 
 @router.get("/projects/{project_id}/episodes/{episode_number}/edit/result")
-def get_edit_result(project_id: str, episode_number: int):
-    result = project_manager.read_edit_result(project_id, episode_number)
+def get_edit_result(project_id: str, episode_number: int, lang: Optional[str] = None):
+    result = project_manager.read_edit_result(project_id, episode_number, lang=lang)
     if result is None:
         raise HTTPException(status_code=404, detail="edit.json not found")
     return result

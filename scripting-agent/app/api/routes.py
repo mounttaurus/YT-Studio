@@ -18,7 +18,7 @@ from fastapi.responses import FileResponse, JSONResponse
 from pydantic import BaseModel
 from starlette.background import BackgroundTask
 
-from app.core import character_reader, llm_client, project_manager, script_generator, style_registry
+from app.core import character_reader, llm_client, project_manager, script_generator, style_registry, translator
 
 TTS_AGENT_URL = os.getenv("TTS_AGENT_URL", "http://tts-agent:8004")
 RESEARCH_AGENT_URL = os.getenv("RESEARCH_AGENT_URL", "http://research-agent:8001")
@@ -761,6 +761,138 @@ async def get_script(project_id: str, draft: bool = True, episode: int = 1):
     if data is None:
         raise HTTPException(status_code=404, detail="スクリプトが見つかりません")
     return _apply_live_speaker_names(project_id, data)
+
+
+# ─── 多言語（行保存翻訳・DATA_SCHEMA §2c / Docs/08_i18n.md §5） ─────────────
+
+class TranslateRequest(BaseModel):
+    lang: str                              # ISO 639-1（例 en / es）
+    model: Optional[str] = None            # 省略時は既存LLMルーティング
+    instructions: Optional[str] = None     # 任意の訳調指示
+
+
+@router.post("/projects/{project_id}/episodes/{episode_number}/translate")
+async def translate_episode(
+    project_id: str,
+    episode_number: int,
+    req: TranslateRequest,
+    force: bool = Query(False, description="既存翻訳がある場合に上書きするか"),
+):
+    """確定 script.json を行保存翻訳して locales/{lang}/script.json を生成する。
+
+    line_id / speaker_id / section 等は原本と同一のまま text だけを翻訳する
+    （Aロールパネル・素材紐付けを言語間で共有するための必須条件）。
+    """
+    lang = req.lang.strip().lower()
+    pj = project_manager.read_project(project_id)
+    if lang == pj.get("language", "ja"):
+        raise HTTPException(status_code=400, detail=f"原語（{lang}）への翻訳は不要です")
+
+    if project_manager.read_script(project_id, episode_number) is None:
+        raise HTTPException(
+            status_code=409,
+            detail="確定 script.json がありません。先に台本を承認（✓）してください",
+        )
+    if project_manager.read_locale_script(project_id, episode_number, lang) is not None and not force:
+        raise HTTPException(
+            status_code=409,
+            detail=f"{lang} の翻訳が既に存在します。上書きするには ?force=true を指定してください",
+        )
+
+    project_manager.update_locale_status(project_id, episode_number, lang, "translation", "running")
+    try:
+        result = await translator.translate_episode(
+            project_id, episode_number, lang,
+            model=req.model, instructions=req.instructions,
+        )
+    except ValueError as e:
+        project_manager.update_locale_status(project_id, episode_number, lang, "translation", "error")
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        project_manager.update_locale_status(project_id, episode_number, lang, "translation", "error")
+        raise HTTPException(status_code=500, detail=f"翻訳に失敗しました: {e}")
+
+    project_manager.update_locale_status(
+        project_id, episode_number, lang, "translation", "done", title=result["title"],
+    )
+    project_manager.update_locale_status(project_id, episode_number, lang, "tts", "pending")
+    return {
+        "project_id": project_id,
+        "episode_number": episode_number,
+        "lang": lang,
+        "title": result["title"],
+        "line_count": result["line_count"],
+        "translated_count": result["translated_count"],
+        "status": "done",
+    }
+
+
+@router.get("/projects/{project_id}/episodes/{episode_number}/locales")
+async def list_locales(project_id: str, episode_number: int):
+    """このエピソードの言語別状態（原語＋翻訳済み言語＋鮮度）を返す。"""
+    pj = project_manager.read_project(project_id)
+    source_lang = pj.get("language", "ja")
+    script = project_manager.read_script(project_id, episode_number)
+    current_hash = project_manager.source_script_hash(script) if script else None
+
+    locales = {}
+    for ep in pj.get("episodes", []):
+        if ep.get("number") == episode_number:
+            locales = ep.get("locales", {}) or {}
+            break
+
+    out = []
+    for lang, meta in locales.items():
+        loc_script = project_manager.read_locale_script(project_id, episode_number, lang)
+        stale = bool(
+            loc_script is not None and current_hash is not None
+            and loc_script.get("source_script_hash") != current_hash
+        )
+        out.append({
+            "lang": lang,
+            "title": meta.get("title", ""),
+            "status": meta.get("status", {}),
+            "has_script": loc_script is not None,
+            "stale": stale,
+        })
+    return {
+        "project_id": project_id,
+        "episode_number": episode_number,
+        "source_language": source_lang,
+        "has_source_script": script is not None,
+        "locales": out,
+    }
+
+
+@router.get("/projects/{project_id}/episodes/{episode_number}/locales/{lang}/script")
+async def get_locale_script(project_id: str, episode_number: int, lang: str):
+    """翻訳済み script.json を返す（speaker_name は原語同様に都度解決）。"""
+    data = project_manager.read_locale_script(project_id, episode_number, lang)
+    if data is None:
+        raise HTTPException(status_code=404, detail=f"{lang} の翻訳スクリプトがありません")
+    return _apply_live_speaker_names(project_id, data)
+
+
+@router.delete("/projects/{project_id}/episodes/{episode_number}/locales/{lang}")
+async def delete_locale(project_id: str, episode_number: int, lang: str):
+    """言語別成果物（locales/{lang}/ 一式）と project.json の locales エントリを削除する。"""
+    ep_dir = project_manager.get_project_dir(project_id) / "episodes" / f"ep{episode_number:02d}"
+    loc_dir = ep_dir / "locales" / lang
+    if not loc_dir.exists():
+        raise HTTPException(status_code=404, detail=f"{lang} の翻訳がありません")
+    shutil.rmtree(loc_dir)
+
+    pj_dir = project_manager.get_project_dir(project_id)
+    pj_file = pj_dir / "project.json"
+    if pj_file.exists():
+        pj = json.loads(pj_file.read_text(encoding="utf-8"))
+        for ep in pj.get("episodes", []):
+            if ep.get("number") == episode_number:
+                (ep.get("locales") or {}).pop(lang, None)
+                break
+        pj["updated_at"] = datetime.now(timezone.utc).isoformat()
+        pj_file.write_text(json.dumps(pj, ensure_ascii=False, indent=2), encoding="utf-8")
+    return {"deleted": lang, "project_id": project_id, "episode_number": episode_number}
 
 
 # ─── 行操作（ライトスルー同期） ───────────────────────────────────────

@@ -9,15 +9,18 @@ from pathlib import Path
 from fastapi import APIRouter, BackgroundTasks, File, HTTPException, UploadFile
 from fastapi.responses import Response
 from pydantic import BaseModel
+from typing import Optional
 
-from app.core import audio_utils, cache_manager, tts_client
+from app.core import audio_utils, cache_manager, engines
+from app.core.engines import irodori, omnivoice
+from app.core.engines.omnivoice import MissingRefAudioError
 from app.core.emotion_mapper import apply_emotion_to_text, emotion_to_emoji
 from app.core.project_manager import (
     append_error,
     get_project_dir,
-    get_episode_dir,
     get_script_path,
     get_audio_dir,
+    get_tts_json_path,
     list_episodes,
     read_project,
     update_status,
@@ -50,12 +53,19 @@ _progress: dict[str, dict] = {}
 
 @router.get("/health")
 async def health():
-    engine_status = await tts_client.check_health()
+    irodori_status = await irodori.check_health()
+    omnivoice_status = await omnivoice.check_health()
     return {
         "status": "ok",
+        # 後方互換: 既存UIは以下3キーで日本語(irodori)エンジンの死活だけを見る
         "engine": "irodori",
-        "engine_url": tts_client.IRODORI_SERVER_URL,
-        "engine_reachable": engine_status["reachable"],
+        "engine_url": irodori.IRODORI_SERVER_URL,
+        "engine_reachable": irodori_status["reachable"],
+        # 多言語対応後の全エンジン状態（新規UI向け）
+        "engines": {
+            "irodori": irodori_status,
+            "omnivoice": omnivoice_status,
+        },
     }
 
 
@@ -185,17 +195,29 @@ async def create_sample_project():
     return {"status": "created", "project_id": "sample_001_test"}
 
 
+def _run_key(project_id: str, episode: int, lang: Optional[str] = None) -> str:
+    return f"{project_id}:ep{episode}:{lang}" if lang else f"{project_id}:ep{episode}"
+
+
 @router.get("/projects/{project_id}/status")
-async def project_status(project_id: str, episode: int = 1):
+async def project_status(project_id: str, episode: int = 1, lang: Optional[str] = None):
     try:
         pj = read_project(project_id)
     except FileNotFoundError:
         raise HTTPException(404, f"Project not found: {project_id}")
+    if lang:
+        status = {}
+        for ep in pj.get("episodes", []):
+            if ep.get("number") == episode:
+                status = (ep.get("locales", {}).get(lang, {}) or {}).get("status", {})
+                break
+    else:
+        status = pj.get("status", {})
     return {
         "id": pj["id"],
-        "status": pj.get("status", {}),
+        "status": status,
         "errors": pj.get("errors", []),
-        "progress": _progress.get(f"{project_id}:ep{episode}"),
+        "progress": _progress.get(_run_key(project_id, episode, lang)),
     }
 
 
@@ -228,27 +250,32 @@ async def project_run(
     project_id: str,
     background_tasks: BackgroundTasks,
     episode: int = 1,
+    lang: Optional[str] = None,
 ):
     try:
         read_project(project_id)
     except FileNotFoundError:
         raise HTTPException(404, f"Project not found: {project_id}")
-    run_key = f"{project_id}:ep{episode}"
+    run_key = _run_key(project_id, episode, lang)
     if _running.get(run_key):
         raise HTTPException(409, "Already running")
-    background_tasks.add_task(_run_project, project_id, episode)
-    return {"status": "accepted", "project_id": project_id, "episode": episode}
+    background_tasks.add_task(_run_project, project_id, episode, lang)
+    return {"status": "accepted", "project_id": project_id, "episode": episode, "lang": lang}
 
 
 @router.post("/projects/{project_id}/cancel")
-async def project_cancel(project_id: str, episode: int = 1):
-    _running[f"{project_id}:ep{episode}"] = False
-    return {"status": "cancel_requested", "project_id": project_id, "episode": episode}
+async def project_cancel(project_id: str, episode: int = 1, lang: Optional[str] = None):
+    _running[_run_key(project_id, episode, lang)] = False
+    return {"status": "cancel_requested", "project_id": project_id, "episode": episode, "lang": lang}
 
 
 @router.post("/projects/{project_id}/run/line/{line_id}")
-async def run_single_line(project_id: str, line_id: str, episode: int = 1, force: bool = False):
+async def run_single_line(
+    project_id: str, line_id: str, episode: int = 1, force: bool = False,
+    lang: Optional[str] = None,
+):
     """1行だけ生成する。force=true でキャッシュを無視（リテイク用）。
+    lang指定時は原語ではなく locales/{lang}/ の翻訳台本・音声を対象にする（Docs/08_i18n.md §4）。
     生成後は tts.json の該当エントリとタイムラインも同期更新する。
     """
     try:
@@ -256,9 +283,12 @@ async def run_single_line(project_id: str, line_id: str, episode: int = 1, force
     except FileNotFoundError:
         raise HTTPException(404, f"Project not found: {project_id}")
 
-    script_path = get_script_path(project_id, episode)
+    script_path = get_script_path(project_id, episode, lang=lang)
     if not script_path.exists():
-        raise HTTPException(404, "script.json not found")
+        raise HTTPException(404, f"{'翻訳' if lang else ''}script.json not found")
+
+    engine_name = engines.resolve_engine_name(pj, lang)
+    engine_mod = engines.get_engine(engine_name)
 
     lines = parse_script_json(script_path)
     line = next((l for l in lines if l.id == line_id), None)
@@ -273,24 +303,29 @@ async def run_single_line(project_id: str, line_id: str, episode: int = 1, force
             f"話者 {line.speaker_id} にキャラ/声が未割当です。🎭キャラタブで割り当ててください",
         )
     processed_text = apply_emotion_to_text(line.text, line.emotion)
-    audio_dir = get_audio_dir(project_id, episode)
+    audio_dir = get_audio_dir(project_id, episode, lang=lang)
     out_path = audio_dir / f"{line_id}.wav"
 
-    key = cache_manager.get_cache_key(processed_text, voice, "irodori-stereo", caption=caption, speed=line.speed)
+    key = cache_manager.get_cache_key(
+        processed_text, voice, f"{engine_name}-stereo", caption=caption, speed=line.speed,
+    )
     cached = None if force else cache_manager.cache_hit(key)
     if cached:
         shutil.copy(cached, out_path)
         cache_hit = True
         duration = _wav_duration_sec(out_path)
     else:
-        audio_bytes = await tts_client.generate(processed_text, voice, line.speed, caption=caption)
+        try:
+            audio_bytes = await engine_mod.generate(processed_text, voice, line.speed, caption=caption)
+        except MissingRefAudioError as e:
+            raise HTTPException(409, str(e))
         out_path.write_bytes(audio_bytes)
-        cache_manager.save_to_cache(key, audio_bytes, processed_text, voice, "irodori-stereo")
+        cache_manager.save_to_cache(key, audio_bytes, processed_text, voice, f"{engine_name}-stereo")
         cache_hit = False
         duration = audio_utils.wav_duration_sec(audio_bytes)
 
     _upsert_tts_entry(project_id, episode, lines, line, voice, caption,
-                      processed_text, duration, cache_hit)
+                      processed_text, duration, cache_hit, lang=lang, engine_name=engine_name)
     return {
         "line_id": line_id,
         "cache_hit": cache_hit,
@@ -300,28 +335,28 @@ async def run_single_line(project_id: str, line_id: str, episode: int = 1, force
 
 
 @router.delete("/projects/{project_id}/audio/line/{line_id}")
-async def delete_line_audio(project_id: str, line_id: str, episode: int = 1):
+async def delete_line_audio(project_id: str, line_id: str, episode: int = 1, lang: Optional[str] = None):
     """行の音声(wav)と tts.json のエントリを削除する（台本の行削除との同期用）。"""
     try:
         read_project(project_id)
     except FileNotFoundError:
         raise HTTPException(404, f"Project not found: {project_id}")
 
-    audio_dir = get_audio_dir(project_id, episode)
+    audio_dir = get_audio_dir(project_id, episode, lang=lang)
     wav_path = audio_dir / f"{Path(line_id).name}.wav"
     deleted_wav = False
     if wav_path.exists():
         wav_path.unlink()
         deleted_wav = True
 
-    tts, tts_path = _load_tts_json(project_id, episode)
+    tts, tts_path = _load_tts_json(project_id, episode, lang=lang)
     deleted_entry = False
     if tts is not None:
         before = len(tts.get("audio_files", []))
         tts["audio_files"] = [f for f in tts.get("audio_files", []) if f.get("line_id") != line_id]
         deleted_entry = len(tts["audio_files"]) < before
         if deleted_entry:
-            script_path = get_script_path(project_id, episode)
+            script_path = get_script_path(project_id, episode, lang=lang)
             lines = parse_script_json(script_path) if script_path.exists() else []
             _rebuild_tts_metadata(tts, lines)
             tts_path.write_text(json.dumps(tts, ensure_ascii=False, indent=2), encoding="utf-8")
@@ -339,7 +374,7 @@ async def list_voices():
     import httpx as _httpx
     try:
         async with _httpx.AsyncClient(timeout=5.0) as client:
-            resp = await client.get(f"{tts_client.IRODORI_SERVER_URL}/v1/audio/voices")
+            resp = await client.get(f"{irodori.IRODORI_SERVER_URL}/v1/audio/voices")
             resp.raise_for_status()
             data = resp.json()
             voices = [
@@ -370,6 +405,7 @@ async def list_voice_profiles_endpoint():
             "has_ref_wav": True,   # フラットファイル自身が参照音声
             "has_ref_latent": False,
             "has_caption": False,  # 字幕名・性格は character.json が本籍
+            "has_ref_multilingual": omnivoice.has_ref(v["id"]),  # .ref.wav+.ref.txt揃い＝他言語TTS可
             "description": "",
         }
         for v in voices
@@ -407,20 +443,24 @@ class PreviewRequest(BaseModel):
     caption: str = ""
     emotion: str = "neutral"
     speed: float = 1.0
+    lang: Optional[str] = None  # 省略 or "ja" = irodori、それ以外 = omnivoice（プロジェクト非依存の単発プレビュー用）
 
 
 @router.post("/preview")
 async def preview(req: PreviewRequest):
     processed = apply_emotion_to_text(req.text, req.emotion)
     caption = req.caption.strip() or None
+    engine_mod = irodori if (not req.lang or req.lang == "ja") else omnivoice
 
     try:
-        audio_bytes = await tts_client.generate(
+        audio_bytes = await engine_mod.generate(
             processed,
             req.voice or "none",
             req.speed,
             caption=caption,
         )
+    except MissingRefAudioError as e:
+        raise HTTPException(409, str(e))
     except Exception as e:
         logger.error("TTS generate error: %s", e, exc_info=True)
         raise HTTPException(503, f"TTS server error: {e}")
@@ -449,10 +489,10 @@ async def serve_direct_audio(filename: str):
 
 
 @router.get("/audio/project/{project_id}/{filename}")
-async def serve_project_audio(project_id: str, filename: str, episode: int = 1):
+async def serve_project_audio(project_id: str, filename: str, episode: int = 1, lang: Optional[str] = None):
     safe_name = Path(filename).name
     try:
-        audio_dir = get_audio_dir(project_id, episode)
+        audio_dir = get_audio_dir(project_id, episode, lang=lang)
     except FileNotFoundError:
         raise HTTPException(404, "Project not found")
     path = audio_dir / safe_name
@@ -549,9 +589,8 @@ def _wav_duration_sec(path: Path) -> float:
     return audio_utils.wav_duration_sec_from_file(path)
 
 
-def _load_tts_json(project_id: str, episode: int) -> tuple[dict | None, Path]:
-    ep_dir = get_episode_dir(project_id, episode)
-    path = ep_dir / "tts.json"
+def _load_tts_json(project_id: str, episode: int, lang: Optional[str] = None) -> tuple[dict | None, Path]:
+    path = get_tts_json_path(project_id, episode, lang=lang)
     if path.exists():
         try:
             return json.loads(path.read_text(encoding="utf-8")), path
@@ -585,21 +624,30 @@ def _rebuild_tts_metadata(tts: dict, lines: list) -> None:
     tts["generated_at"] = datetime.now(timezone.utc).isoformat()
 
 
+def _tts_audio_file_path(episode: int, line_id: str, lang: Optional[str] = None) -> str:
+    """tts.json の file_path（プロジェクトルート相対・DATA_SCHEMA §1）。"""
+    if lang:
+        return f"episodes/ep{episode:02d}/locales/{lang}/audio/{line_id}.wav"
+    return f"episodes/ep{episode:02d}/audio/{line_id}.wav"
+
+
 def _upsert_tts_entry(project_id: str, episode: int, lines: list, line,
                       voice: str, caption: str | None, processed_text: str,
-                      duration: float, cache_hit: bool) -> None:
+                      duration: float, cache_hit: bool,
+                      lang: Optional[str] = None, engine_name: str = "irodori") -> None:
     """行単位生成後に tts.json の該当エントリを更新（無ければ挿入）し、タイムラインを再計算する。"""
-    tts, tts_path = _load_tts_json(project_id, episode)
+    tts, tts_path = _load_tts_json(project_id, episode, lang=lang)
     if tts is None:
         tts = {
             "schema_version": "1.0.0",
             "project_id": project_id,
             "generated_at": datetime.now(timezone.utc).isoformat(),
-            "engine": "irodori",
+            "engine": engine_name,
             "audio_files": [],
             "timeline": [],
             "metadata": {},
         }
+    tts["engine"] = engine_name
     entry = {
         "line_id": line.id, "order": line.order,
         "speaker_id": line.speaker_id, "speaker_name": line.speaker_name,
@@ -607,7 +655,7 @@ def _upsert_tts_entry(project_id: str, episode: int, lines: list, line,
         "emotion": line.emotion, "emotion_emoji": emotion_to_emoji(line.emotion),
         "speed": line.speed, "voice_id": voice,
         "caption": caption,
-        "file_path": f"episodes/ep{episode:02d}/audio/{line.id}.wav",
+        "file_path": _tts_audio_file_path(episode, line.id, lang=lang),
         "duration_sec": round(duration, 2), "sample_rate": 48000,
         "generated_at": datetime.now(timezone.utc).isoformat(),
         "cache_hit": cache_hit,
@@ -674,24 +722,28 @@ def _save_script(project_dir: Path, project_id: str, lines: list, style: str):
         json.dumps(script, ensure_ascii=False, indent=2), encoding="utf-8")
 
 
-async def _run_project(project_id: str, episode_number: int = 1):
-    run_key = f"{project_id}:ep{episode_number}"
+async def _run_project(project_id: str, episode_number: int = 1, lang: Optional[str] = None):
+    run_key = _run_key(project_id, episode_number, lang)
+    lang_prefix = f"[{lang}] " if lang else ""
     _running[run_key] = True
     try:
         pj = read_project(project_id)
-        script_path = get_script_path(project_id, episode_number)
+        script_path = get_script_path(project_id, episode_number, lang=lang)
 
         if not script_path.exists():
             append_error(project_id, "tts", "SCRIPT_NOT_FOUND",
-                         f"script.json が存在しません (episode={episode_number})")
-            update_status(project_id, "tts", "error", episode_number=episode_number)
+                         f"{lang_prefix}script.json が存在しません (episode={episode_number})")
+            update_status(project_id, "tts", "error", episode_number=episode_number, lang=lang)
             return
 
+        engine_name = engines.resolve_engine_name(pj, lang)
+        engine_mod = engines.get_engine(engine_name)
+
         lines = parse_script_json(script_path)
-        update_status(project_id, "tts", "running", episode_number=episode_number)
+        update_status(project_id, "tts", "running", episode_number=episode_number, lang=lang)
         _progress[run_key] = {"total": len(lines), "done": 0, "current_line_id": None}
 
-        audio_dir = get_audio_dir(project_id, episode_number)
+        audio_dir = get_audio_dir(project_id, episode_number, lang=lang)
 
         audio_files = []
         timeline = []
@@ -699,7 +751,7 @@ async def _run_project(project_id: str, episode_number: int = 1):
 
         for line in lines:
             if not _running.get(run_key):
-                update_status(project_id, "tts", "pending", episode_number=episode_number)
+                update_status(project_id, "tts", "pending", episode_number=episode_number, lang=lang)
                 return
 
             _progress[run_key]["current_line_id"] = line.id
@@ -708,11 +760,13 @@ async def _run_project(project_id: str, episode_number: int = 1):
             # キャラタブが唯一の本籍。NULLキャラは作らず「未割当=生成ブロック」とする。
             if voice == "none":
                 append_error(project_id, "tts", "SPEAKER_UNASSIGNED",
-                             f"{line.id}: 話者 {line.speaker_id} にキャラ/声が未割当のためスキップしました",
+                             f"{lang_prefix}{line.id}: 話者 {line.speaker_id} にキャラ/声が未割当のためスキップしました",
                              recoverable=True)
                 continue
             processed_text = apply_emotion_to_text(line.text, line.emotion)
-            key = cache_manager.get_cache_key(processed_text, voice, "irodori-stereo", caption=caption, speed=line.speed)
+            key = cache_manager.get_cache_key(
+                processed_text, voice, f"{engine_name}-stereo", caption=caption, speed=line.speed,
+            )
             out_path = audio_dir / f"{line.id}.wav"
             cache_hit = False
 
@@ -723,17 +777,22 @@ async def _run_project(project_id: str, episode_number: int = 1):
                 duration = _wav_duration_sec(out_path)
             else:
                 try:
-                    audio_bytes = await tts_client.generate(
+                    audio_bytes = await engine_mod.generate(
                         processed_text, voice, line.speed, caption=caption
                     )
                     out_path.write_bytes(audio_bytes)
-                    cache_manager.save_to_cache(key, audio_bytes, processed_text, voice, "irodori-stereo")
+                    cache_manager.save_to_cache(key, audio_bytes, processed_text, voice, f"{engine_name}-stereo")
                     duration = audio_utils.wav_duration_sec(audio_bytes)
+                except MissingRefAudioError as e:
+                    append_error(project_id, "tts", "REF_AUDIO_MISSING",
+                                 f"{lang_prefix}{line.id}: {e}", recoverable=True)
+                    continue
                 except Exception as e:
                     logger.error("Line %s generation failed: %s", line.id, e, exc_info=True)
-                    append_error(project_id, "tts", "GENERATE_FAILED", f"{line.id}: {e}", recoverable=True)
+                    append_error(project_id, "tts", "GENERATE_FAILED", f"{lang_prefix}{line.id}: {e}", recoverable=True)
                     continue
 
+            file_path = _tts_audio_file_path(episode_number, line.id, lang=lang)
             audio_files.append({
                 "line_id": line.id, "order": line.order,
                 "speaker_id": line.speaker_id, "speaker_name": line.speaker_name,
@@ -741,14 +800,14 @@ async def _run_project(project_id: str, episode_number: int = 1):
                 "emotion": line.emotion, "emotion_emoji": emotion_to_emoji(line.emotion),
                 "speed": line.speed, "voice_id": voice,
                 "caption": caption,
-                "file_path": f"episodes/ep{episode_number:02d}/audio/{line.id}.wav",
+                "file_path": file_path,
                 "duration_sec": round(duration, 2), "sample_rate": 48000,
                 "generated_at": datetime.now(timezone.utc).isoformat(),
                 "cache_hit": cache_hit,
             })
             timeline.append({
                 "line_id": line.id,
-                "file_path": f"episodes/ep{episode_number:02d}/audio/{line.id}.wav",
+                "file_path": file_path,
                 "start_sec": round(current_time, 3),
                 "end_sec": round(current_time + duration, 3),
                 "pause_after_sec": line.pause_after_sec,
@@ -759,15 +818,15 @@ async def _run_project(project_id: str, episode_number: int = 1):
         tts_json = {
             "schema_version": "1.0.0", "project_id": project_id,
             "generated_at": datetime.now(timezone.utc).isoformat(),
-            "engine": "irodori", "audio_files": audio_files, "timeline": timeline,
+            "engine": engine_name, "audio_files": audio_files, "timeline": timeline,
             "metadata": {
                 "total_audio_duration_sec": round(current_time, 2),
-                "file_count": len(audio_files), "engine_version": "irodori-voicedesign",
+                "file_count": len(audio_files), "engine_version": f"{engine_name}-voicedesign",
                 "all_generated": len(audio_files) == len(lines),
             },
         }
-        ep_dir = get_episode_dir(project_id, episode_number)
-        (ep_dir / "tts.json").write_text(
+        tts_path = get_tts_json_path(project_id, episode_number, lang=lang)
+        tts_path.write_text(
             json.dumps(tts_json, ensure_ascii=False, indent=2), encoding="utf-8")
         _progress[run_key]["current_line_id"] = None
         if lines and not audio_files:
@@ -775,14 +834,15 @@ async def _run_project(project_id: str, episode_number: int = 1):
             # status文字列しか見ないため安全ゲートを素通りしてしまう（無音タイムラインが警告無しで生成される）。
             # 全滅時はerrorに倒し、下流の409ガードを正しく機能させる。
             append_error(project_id, "tts", "ALL_LINES_SKIPPED",
-                         "全行が話者未割当等でスキップされ、音声が1件も生成されませんでした", recoverable=True)
-            update_status(project_id, "tts", "error", episode_number=episode_number)
+                         f"{lang_prefix}全行が話者未割当等でスキップされ、音声が1件も生成されませんでした",
+                         recoverable=True)
+            update_status(project_id, "tts", "error", episode_number=episode_number, lang=lang)
         else:
-            update_status(project_id, "tts", "done", episode_number=episode_number)
+            update_status(project_id, "tts", "done", episode_number=episode_number, lang=lang)
 
     except Exception as e:
         logger.error("Unexpected error in project %s ep%d: %s", project_id, episode_number, e, exc_info=True)
-        append_error(project_id, "tts", "UNEXPECTED_ERROR", str(e))
-        update_status(project_id, "tts", "error", episode_number=episode_number)
+        append_error(project_id, "tts", "UNEXPECTED_ERROR", f"{lang_prefix}{e}")
+        update_status(project_id, "tts", "error", episode_number=episode_number, lang=lang)
     finally:
         _running.pop(run_key, None)

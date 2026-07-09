@@ -46,21 +46,24 @@ async def edit_generate(
     path_style: str = "file_uri",
     speaker_prefix: bool = False,
     force: bool = False,
+    lang: str | None = None,
 ) -> dict:
-    """script/tts/footageを統合し、DaVinci Resolve用のラフ編集データ（timeline.otio・subtitles.srt・edit.json）を生成する。"""
+    """script/tts/footageを統合し、DaVinci Resolve用のラフ編集データ（timeline.otio・subtitles.srt・edit.json）を生成する。
+    lang指定時は原語ではなく翻訳言語（locales/{lang}/）向けに生成する。"""
     ep_dir = project_manager.episode_dir(project_id, episode)
     if ep_dir is None:
         return {"error": f"episode not found: {project_id} ep{episode}"}
 
-    tts = project_manager.get_episode_tts(project_id, episode)
+    tts = project_manager.get_episode_tts(project_id, episode, lang=lang)
     footage = project_manager.get_episode_footage(project_id, episode)
     if tts is None or footage is None:
         return {"error": "tts.json or footage.json not found"}
 
-    status = project_manager.get_episode_status(project_id, episode)
-    if not force and (status.get("tts") != "done" or status.get("footage") != "done"):
+    tts_status = project_manager.get_episode_status(project_id, episode, lang=lang)
+    footage_status = project_manager.get_episode_status(project_id, episode)
+    if not force and (tts_status.get("tts") != "done" or footage_status.get("footage") != "done"):
         return {
-            "error": f"prerequisite not done: tts={status.get('tts')}, footage={status.get('footage')} "
+            "error": f"prerequisite not done: tts={tts_status.get('tts')}, footage={footage_status.get('footage')} "
                      f"(force=true で上書き実行可能)",
         }
 
@@ -68,7 +71,7 @@ async def edit_generate(
         return {"error": "path_style must be 'file_uri' or 'windows'"}
 
     edit_json = edit_runner.run_edit(
-        project_id, episode, fps=fps, path_style=path_style, speaker_prefix=speaker_prefix,
+        project_id, episode, fps=fps, path_style=path_style, speaker_prefix=speaker_prefix, lang=lang,
     )
     return edit_json
 

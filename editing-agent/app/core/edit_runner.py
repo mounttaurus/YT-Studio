@@ -21,18 +21,25 @@ def run_edit(
     path_style: str = "file_uri",
     speaker_prefix: bool = False,
     subtitle_format: str = "both",
+    lang: str | None = None,
 ) -> dict:
+    """script/tts/footageを統合し編集情報を生成する。
+
+    lang指定時は原語ではなく locales/{lang}/tts.json（翻訳音声）を使い、
+    出力も locales/{lang}/edit/ へ書く（Docs/08_i18n.md §6）。footage.json は
+    言語に依らず常に原語のもの（原語と翻訳語でAロール/Bロールを共有するため）。
+    """
     project_dir = project_manager.find_project_dir(project_id)
     episode_dir = project_manager.episode_dir(project_id, episode_number)
     if project_dir is None or episode_dir is None:
         raise FileNotFoundError(f"episode directory not found: {project_id} ep{episode_number}")
 
-    tts = project_manager.get_episode_tts(project_id, episode_number)
+    tts = project_manager.get_episode_tts(project_id, episode_number, lang=lang)
     footage = project_manager.get_episode_footage(project_id, episode_number)
     if tts is None or footage is None:
-        raise FileNotFoundError("tts.json or footage.json not found")
+        raise FileNotFoundError(f"{'locales/' + lang + '/' if lang else ''}tts.json or footage.json not found")
 
-    project_manager.update_episode_status(project_id, episode_number, editing="running")
+    project_manager.update_episode_status(project_id, episode_number, lang=lang, editing="running")
 
     try:
         timeline, warnings = timeline_builder.build_timeline(
@@ -49,17 +56,20 @@ def run_edit(
         stats = timeline_builder.timeline_stats(timeline)
         stats["subtitle_count"] = srt_writer.count_subtitles(tts)
 
+        edit_dir_rel = f"episodes/ep{episode_number:02d}/locales/{lang}/edit" if lang \
+            else f"episodes/ep{episode_number:02d}/edit"
         files = {
-            "otio": "edit/timeline.otio",
-            "srt": "edit/subtitles.srt",
+            "otio": f"{edit_dir_rel}/timeline.otio",
+            "srt": f"{edit_dir_rel}/subtitles.srt",
         }
         if fcpxml_text is not None:
-            files["fcpxml"] = "edit/subtitles.fcpxml"
+            files["fcpxml"] = f"{edit_dir_rel}/subtitles.fcpxml"
 
         edit_json = {
             "schema_version": SCHEMA_VERSION,
             "project_id": project_id,
             "episode": episode_number,
+            "lang": lang,
             "generated_at": datetime.now(timezone.utc).isoformat(),
             "fps": fps,
             "path_style": path_style,
@@ -70,17 +80,17 @@ def run_edit(
         }
 
         project_manager.write_edit_outputs(project_id, episode_number, otio_text, srt_text, edit_json,
-                                           fcpxml_text=fcpxml_text)
+                                           fcpxml_text=fcpxml_text, lang=lang)
 
     except Exception as e:
         project_manager.append_error(project_id, "editing", str(e))
-        project_manager.update_episode_status(project_id, episode_number, editing="error")
+        project_manager.update_episode_status(project_id, episode_number, lang=lang, editing="error")
         raise
 
     status_updates = {"editing": "done"}
-    current_status = project_manager.get_episode_status(project_id, episode_number)
+    current_status = project_manager.get_episode_status(project_id, episode_number, lang=lang)
     if current_status.get("video_edit", "not_started") == "not_started":
         status_updates["video_edit"] = "pending"
-    project_manager.update_episode_status(project_id, episode_number, **status_updates)
+    project_manager.update_episode_status(project_id, episode_number, lang=lang, **status_updates)
 
     return edit_json

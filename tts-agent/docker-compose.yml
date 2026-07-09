@@ -12,6 +12,7 @@ services:
     environment:
       - SHARED_DIR=/shared
       - IRODORI_SERVER_URL=${IRODORI_SERVER_URL:-http://irodori-tts-server:8088}
+      - OMNIVOICE_SERVER_URL=${OMNIVOICE_SERVER_URL:-http://omnivoice-tts-server:8880}
       # 声カタログは shared/voices/{engine}/ へ移設（旧 ./voices）
       - VOICES_DIR=/shared/voices/irodori
     volumes:

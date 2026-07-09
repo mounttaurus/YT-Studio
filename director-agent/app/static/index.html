@@ -1367,6 +1367,62 @@
                 </div>
               </div>
 
+              <!-- 🌐 多言語（行保存翻訳） -->
+              <div class="card" x-init="loadLocales()">
+                <h2>🌐 多言語
+                  <span style="font-weight:400;text-transform:none;color:#4b5563;font-size:11px">
+                    — 確定台本を行保存翻訳（パネル・素材は言語間で共有）
+                  </span>
+                </h2>
+                <div x-show="!localesInfo?.has_source_script" style="font-size:12px;color:#fbbf24;margin-bottom:8px">
+                  ⚠ 確定台本（script.json）がありません。先に「✓ 承認・確定」すると翻訳できます。
+                </div>
+                <div style="display:flex;flex-direction:column;gap:8px">
+                  <template x-for="loc in localesInfo?.locales || []" :key="loc.lang">
+                    <div style="display:flex;align-items:center;gap:10px;background:#0f1117;border:1px solid #374151;border-radius:6px;padding:8px 12px;flex-wrap:wrap">
+                      <span style="font-size:14px;font-weight:700;color:#c4b5fd;text-transform:uppercase" x-text="loc.lang"></span>
+                      <span style="font-size:12px;color:#94a3b8;flex:1;min-width:120px" x-text="loc.title || '(タイトル未翻訳)'"></span>
+                      <span style="font-size:11px" :style="loc.status?.translation === 'done' ? 'color:#34d399' : 'color:#fbbf24'"
+                            x-text="`翻訳:${loc.status?.translation || '-'} / TTS:${loc.status?.tts || '-'}`"></span>
+                      <span x-show="loc.stale" style="font-size:11px;color:#f87171" title="原語の台本が翻訳後に変更されています">⚠ 原語更新あり</span>
+                      <button class="btn btn-ghost btn-sm" @click="viewLocaleScript(loc.lang)"
+                              x-text="viewingLocale === loc.lang ? '閉じる' : '表示'"></button>
+                      <button class="btn btn-ghost btn-sm" @click="translateEpisode(loc.lang, true)"
+                              :disabled="translating" title="再翻訳（上書き）">↺ 再翻訳</button>
+                      <button class="btn btn-ghost btn-sm" style="color:#f87171" @click="deleteLocale(loc.lang)"
+                              title="この言語の翻訳・音声・編集情報を削除">✕</button>
+                    </div>
+                  </template>
+                  <!-- 翻訳プレビュー（読み取り専用） -->
+                  <div x-show="viewingLocale && localeScript" style="background:#0f1117;border:1px solid #374151;border-radius:6px;padding:10px;max-height:340px;overflow-y:auto">
+                    <template x-for="line in localeScript?.lines || []" :key="line.id">
+                      <div style="display:flex;gap:10px;padding:4px 0;border-bottom:1px solid #1f2937;font-size:12px">
+                        <span style="color:#4b5563;min-width:24px;text-align:right" x-text="line.order"></span>
+                        <span style="color:#a5b4fc;min-width:80px" x-text="line.speaker_name"></span>
+                        <span style="color:#e2e8f0" x-text="line.text"></span>
+                      </div>
+                    </template>
+                  </div>
+                  <!-- 言語追加 -->
+                  <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">
+                    <select x-model="localeLangInput" style="padding:6px 10px;font-size:13px;width:auto">
+                      <option value="en">English (en)</option>
+                      <option value="es">Español (es)</option>
+                      <option value="zh">中文 (zh)</option>
+                      <option value="ko">한국어 (ko)</option>
+                      <option value="fr">Français (fr)</option>
+                      <option value="de">Deutsch (de)</option>
+                      <option value="pt">Português (pt)</option>
+                    </select>
+                    <button class="btn btn-primary btn-sm" @click="translateEpisode(localeLangInput, false)"
+                            :disabled="translating || !localesInfo?.has_source_script">
+                      <span x-text="translating ? '翻訳中…' : '🌐 翻訳を作成'"></span>
+                    </button>
+                    <span style="font-size:11px;color:#4b5563">LLM行保存翻訳（line_id維持・約10〜30秒）</span>
+                  </div>
+                </div>
+              </div>
+
             </div>
           </div>
         </template>
@@ -3421,6 +3477,12 @@ function app() {
     // 名前付きドラフト
     namedDrafts: [],
     saveNameInput: '',
+    // 多言語（行保存翻訳）
+    localesInfo: null,
+    localeLangInput: 'en',
+    translating: false,
+    viewingLocale: null,
+    localeScript: null,
     // TTSタブ
     ttsMode: 'gen',
     ttsEngineOk: false,
@@ -4162,6 +4224,7 @@ function app() {
       if (this.tab === 'tts') await this.loadEpisodeTts();
       if (this.tab === 'footage') await this.refreshFootageTab();
       if (this.tab === 'editing') await this.refreshEditingTab();
+      if (this.tab === 'script') await this.loadLocales();
     },
 
     async generateScript() {
@@ -4231,9 +4294,71 @@ function app() {
         alert(`第${ep}話 承認完了！\n${data.script_path}`);
         await this.loadEpisodes();
         await this.loadProjects();
+        await this.loadLocales();
       } finally {
         this.approving = false;
       }
+    },
+
+    // ─── 多言語（行保存翻訳） ───────────────────────────────
+
+    async loadLocales() {
+      if (!this.currentProject) { this.localesInfo = null; return; }
+      const ep = this.activeEpisodeNumber || 1;
+      try {
+        const r = await fetch(`${SAPI}/projects/${this.currentProject.id}/episodes/${ep}/locales`);
+        this.localesInfo = r.ok ? await r.json() : null;
+      } catch (e) {
+        this.localesInfo = null;
+      }
+      this.viewingLocale = null;
+      this.localeScript = null;
+    },
+
+    async translateEpisode(lang, force) {
+      if (!this.currentProject || !lang) return;
+      const ep = this.activeEpisodeNumber || 1;
+      if (force && !confirm(`${lang} の翻訳を上書きしますか？（言語別の音声・編集情報は古くなります）`)) return;
+      this.translating = true;
+      try {
+        const r = await fetch(
+          `${SAPI}/projects/${this.currentProject.id}/episodes/${ep}/translate${force ? '?force=true' : ''}`,
+          {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ lang }),
+          },
+        );
+        const data = await r.json();
+        if (!r.ok) { alert('翻訳エラー: ' + (data.detail || JSON.stringify(data))); return; }
+        alert(`${lang} 翻訳完了！ ${data.translated_count}/${data.line_count}行\nタイトル: ${data.title}`);
+        await this.loadLocales();
+      } finally {
+        this.translating = false;
+      }
+    },
+
+    async viewLocaleScript(lang) {
+      if (this.viewingLocale === lang) {
+        this.viewingLocale = null;
+        this.localeScript = null;
+        return;
+      }
+      const ep = this.activeEpisodeNumber || 1;
+      const r = await fetch(`${SAPI}/projects/${this.currentProject.id}/episodes/${ep}/locales/${lang}/script`);
+      if (!r.ok) { alert('翻訳スクリプトを読み込めません'); return; }
+      this.localeScript = await r.json();
+      this.viewingLocale = lang;
+    },
+
+    async deleteLocale(lang) {
+      if (!this.currentProject) return;
+      const ep = this.activeEpisodeNumber || 1;
+      if (!confirm(`${lang} の翻訳・音声・編集情報を削除しますか？（元に戻せません）`)) return;
+      const r = await fetch(`${SAPI}/projects/${this.currentProject.id}/episodes/${ep}/locales/${lang}`, { method: 'DELETE' });
+      const data = await r.json();
+      if (!r.ok) { alert('削除エラー: ' + (data.detail || JSON.stringify(data))); return; }
+      await this.loadLocales();
     },
 
     async loadNamedDrafts() {

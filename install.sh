@@ -101,6 +101,18 @@ else
 fi
 
 # -------------------------------------------------------------------
+step "2b. Clone omnivoice-server source (multilingual TTS)"
+# -------------------------------------------------------------------
+OMNIVOICE_SRC="$ROOT/tts-agent/omnivoice-tts-server-src"
+if [ -f "$OMNIVOICE_SRC/Dockerfile.cuda" ]; then
+  ok "omnivoice-server source already present (skip clone)"
+else
+  info "git clone omnivoice-server ..."
+  git clone --depth 1 https://github.com/maemreyo/omnivoice-server.git "$OMNIVOICE_SRC"
+  ok "cloned -> tts-agent/omnivoice-tts-server-src"
+fi
+
+# -------------------------------------------------------------------
 step "3. Configuration (single root .env)"
 # -------------------------------------------------------------------
 ENV_PATH="$ROOT/.env"

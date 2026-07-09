@@ -146,6 +146,8 @@ services:
     environment:
       - SHARED_DIR=/shared
       - IRODORI_SERVER_URL=http://irodori-tts-server:8088
+      # 多言語TTS（Docs/08_i18n.md）。ref_audio/ref_textはVOICES_DIR配下の.ref.wav/.ref.txtを流用
+      - OMNIVOICE_SERVER_URL=http://omnivoice-tts-server:8880
       # 声カタログは shared/voices/{engine}/ へ移設（旧 ./tts-agent/voices）。/shared は既にマウント済み
       - VOICES_DIR=/shared/voices/irodori
     volumes:
@@ -199,6 +201,40 @@ services:
       timeout: 10s
       retries: 5
       start_period: 180s   # モデルDL・ロード時間を考慮
+    networks:
+      - youtube-auto-net
+    restart: unless-stopped
+
+  # ─── 多言語TTS実推論エンジン（OmniVoice。irodoriは日本語専用のため他言語はこちら）───
+  # ソースは install.ps1 が ./tts-agent/omnivoice-tts-server-src へ clone する（maemreyo/omnivoice-server）
+  omnivoice-tts-server:
+    profiles: ["gpu"]
+    build:
+      context: ./tts-agent/omnivoice-tts-server-src
+      dockerfile: Dockerfile.cuda
+    ports:
+      - "8089:8880"
+    environment:
+      - OMNIVOICE_DEVICE=cuda
+      - OMNIVOICE_NUM_STEP=32
+      - OMNIVOICE_MAX_CONCURRENT=1
+      - OMNIVOICE_LOG_LEVEL=info
+    volumes:
+      # HFモデルキャッシュ(数GB)もホストの見えるフォルダへ（Volume不使用・ユーザーがバックアップ/削除可能）
+      - ./tts-agent/omnivoice-models:/home/ubuntu/.cache/huggingface
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8880/health')"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 240s   # モデルDL・ロード時間を考慮
     networks:
       - youtube-auto-net
     restart: unless-stopped

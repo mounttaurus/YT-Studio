@@ -1,6 +1,6 @@
 """
 shared/projects/ 以下のプロジェクトファイルを読み書きする。
-schema_version 2.0.0: episodes/ サブディレクトリ構造。
+schema_version 2.1.0: episodes/ サブディレクトリ構造＋多言語 locales/。
 """
 import json
 import os
@@ -13,7 +13,7 @@ from typing import Optional
 
 SHARED_DIR = Path(os.getenv("SHARED_DIR", "/shared"))
 PROJECTS_DIR = SHARED_DIR / "projects"
-SCHEMA_VERSION = "2.0.0"
+SCHEMA_VERSION = "2.1.0"
 DEFAULT_LIMIT = 10
 
 
@@ -299,6 +299,66 @@ def approve_script(project_id: str, episode_number: int = 1) -> Path:
     update_episode_status(project_id, episode_number, "scripting", "done")
     update_project_status(project_id, "scripting", "done")
     return script_file
+
+
+# ─── 多言語 locales/（schema 2.1.0・DATA_SCHEMA §2c） ─────────────────────
+
+def get_locale_dir(project_id: str, episode_number: int, lang: str) -> Path:
+    """episodes/epNN/locales/{lang}/ を返す（なければ作成）。"""
+    if not re.fullmatch(r"[a-z]{2,3}(-[A-Za-z]{2,4})?", lang):
+        raise ValueError(f"不正な言語コード: {lang}")
+    loc_dir = get_episode_dir(project_id, episode_number) / "locales" / lang
+    loc_dir.mkdir(parents=True, exist_ok=True)
+    return loc_dir
+
+
+def read_locale_script(project_id: str, episode_number: int, lang: str) -> Optional[dict]:
+    ep_dir = get_project_dir(project_id) / "episodes" / f"ep{episode_number:02d}"
+    f = ep_dir / "locales" / lang / "script.json"
+    if f.exists():
+        return json.loads(f.read_text(encoding="utf-8"))
+    return None
+
+
+def save_locale_script(project_id: str, episode_number: int, lang: str, script_json: dict) -> Path:
+    loc_dir = get_locale_dir(project_id, episode_number, lang)
+    f = loc_dir / "script.json"
+    f.write_text(json.dumps(script_json, ensure_ascii=False, indent=2), encoding="utf-8")
+    return f
+
+
+def source_script_hash(script_json: dict) -> str:
+    """原語script.jsonの内容ハッシュ（lines[].text の \\n 連結のsha256）。翻訳の鮮度判定に使う。"""
+    import hashlib
+    joined = "\n".join((l.get("text") or "") for l in script_json.get("lines", []))
+    return hashlib.sha256(joined.encode("utf-8")).hexdigest()
+
+
+def update_locale_status(
+    project_id: str, episode_number: int, lang: str,
+    stage: str, status: str, title: Optional[str] = None,
+) -> None:
+    """episodes[].locales[lang] のstatus（＋任意でtitle）を更新する。"""
+    pj_dir = get_project_dir(project_id)
+    pj_file = pj_dir / "project.json"
+    if not pj_file.exists():
+        return
+    pj = json.loads(pj_file.read_text(encoding="utf-8"))
+    for ep in pj.get("episodes", []):
+        if ep["number"] == episode_number:
+            loc = ep.setdefault("locales", {}).setdefault(lang, {})
+            st = loc.setdefault("status", {
+                "translation": "not_started",
+                "tts": "not_started",
+                "editing": "not_started",
+                "video_edit": "not_started",
+            })
+            st[stage] = status
+            if title is not None:
+                loc["title"] = title
+            break
+    pj["updated_at"] = datetime.now(timezone.utc).isoformat()
+    pj_file.write_text(json.dumps(pj, ensure_ascii=False, indent=2), encoding="utf-8")
 
 
 # ─── 名前付きドラフト ────────────────────────────────────────────────

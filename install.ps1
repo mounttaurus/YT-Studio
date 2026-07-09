@@ -124,6 +124,18 @@ if (Test-Path (Join-Path $irodoriSrc 'Dockerfile')) {
 }
 
 # -------------------------------------------------------------------
+Step "2b. Clone omnivoice-server source (multilingual TTS)"
+# -------------------------------------------------------------------
+$omnivoiceSrc = Join-Path $Root 'tts-agent\omnivoice-tts-server-src'
+if (Test-Path (Join-Path $omnivoiceSrc 'Dockerfile.cuda')) {
+    Ok "omnivoice-server source already present (skip clone)"
+} else {
+    Info "git clone omnivoice-server ..."
+    git clone --depth 1 https://github.com/maemreyo/omnivoice-server.git $omnivoiceSrc
+    Ok "cloned -> tts-agent\omnivoice-tts-server-src"
+}
+
+# -------------------------------------------------------------------
 Step "3. Configuration (single root .env)"
 # -------------------------------------------------------------------
 $envPath     = Join-Path $Root '.env'

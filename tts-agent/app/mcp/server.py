@@ -9,7 +9,8 @@ from pathlib import Path
 from fastapi import APIRouter
 from pydantic import BaseModel
 
-from app.core import cache_manager, tts_client
+from app.core import cache_manager
+from app.core.engines import irodori
 from app.core.emotion_mapper import apply_emotion_to_text
 from app.core.project_manager import get_project_dir, list_projects, read_project
 from app.core.script_parser import parse_script_json
@@ -57,7 +58,7 @@ async def tts_generate_project(project_id: str) -> dict:
 async def tts_preview(text: str, voice: str = "", emotion: str = "neutral") -> dict:
     """テキストをプレビュー生成し、キャッシュファイルパスを返す"""
     processed = apply_emotion_to_text(text, emotion)
-    audio_bytes = await tts_client.generate(processed, voice)
+    audio_bytes = await irodori.generate(processed, voice)
     key = cache_manager.get_cache_key(processed, voice, "irodori")
     path = cache_manager.save_to_cache(key, audio_bytes, processed, voice, "irodori")
     return {"file_path": str(path), "processed_text": processed}
@@ -67,7 +68,7 @@ async def tts_list_voices() -> dict:
     """利用可能な参照音声の一覧を返す"""
     voices_dir = Path("/app/voices")
     files = [f.name for f in voices_dir.iterdir() if f.suffix in (".wav", ".mp3", ".flac")] if voices_dir.exists() else []
-    engine_voices = await tts_client.list_voices()
+    engine_voices = await irodori.list_voices()
     return {"local_voices": files, "engine_voices": engine_voices}
 
 

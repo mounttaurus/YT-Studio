@@ -25,6 +25,12 @@ tts-agent/irodori-tts-server-src/
 # Irodori HFモデルキャッシュ（数GB・初回起動でHFから自動DL。バインドマウントで可視化）
 tts-agent/irodori-models/
 
+# omnivoice-server ソース（git clone で取得）
+tts-agent/omnivoice-tts-server-src/
+
+# OmniVoice HFモデルキャッシュ（数GB・初回起動でHFから自動DL。バインドマウントで可視化）
+tts-agent/omnivoice-models/
+
 # Docker
 *.log
 
