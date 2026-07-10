@@ -1382,8 +1382,14 @@
                     <div style="display:flex;align-items:center;gap:10px;background:#0f1117;border:1px solid #374151;border-radius:6px;padding:8px 12px;flex-wrap:wrap">
                       <span style="font-size:14px;font-weight:700;color:#c4b5fd;text-transform:uppercase" x-text="loc.lang"></span>
                       <span style="font-size:12px;color:#94a3b8;flex:1;min-width:120px" x-text="loc.title || '(タイトル未翻訳)'"></span>
-                      <span style="font-size:11px" :style="loc.status?.translation === 'done' ? 'color:#34d399' : 'color:#fbbf24'"
-                            x-text="`翻訳:${loc.status?.translation || '-'} / TTS:${loc.status?.tts || '-'}`"></span>
+                      <div style="display:flex;gap:4px;align-items:center">
+                        <template x-for="stg in [{key:'translation',label:'翻訳'},{key:'tts',label:'TTS'},{key:'editing',label:'編集'}]" :key="stg.key">
+                          <span style="font-size:10px;padding:2px 6px;border-radius:3px;white-space:nowrap"
+                                :style="`background:${localeChip(loc.status?.[stg.key]).color}22;color:${localeChip(loc.status?.[stg.key]).color};border:1px solid ${localeChip(loc.status?.[stg.key]).color}55`"
+                                :title="stg.label + ': ' + (loc.status?.[stg.key] || 'not_started')"
+                                x-text="`${stg.label}:${localeChip(loc.status?.[stg.key]).label}`"></span>
+                        </template>
+                      </div>
                       <span x-show="loc.stale" style="font-size:11px;color:#f87171" title="原語の台本が翻訳後に変更されています">⚠ 原語更新あり</span>
                       <button class="btn btn-ghost btn-sm" @click="viewLocaleScript(loc.lang)"
                               x-text="viewingLocale === loc.lang ? '閉じる' : '表示'"></button>
@@ -1393,15 +1399,47 @@
                               title="この言語の翻訳・音声・編集情報を削除">✕</button>
                     </div>
                   </template>
-                  <!-- 翻訳プレビュー（読み取り専用） -->
+                  <!-- 翻訳プレビュー（インライン編集可・要再生成バッジ） -->
                   <div x-show="viewingLocale && localeScript" style="background:#0f1117;border:1px solid #374151;border-radius:6px;padding:10px;max-height:340px;overflow-y:auto">
                     <template x-for="line in localeScript?.lines || []" :key="line.id">
-                      <div style="display:flex;gap:10px;padding:4px 0;border-bottom:1px solid #1f2937;font-size:12px">
+                      <div style="display:flex;gap:10px;padding:4px 0;border-bottom:1px solid #1f2937;font-size:12px;align-items:center">
                         <span style="color:#4b5563;min-width:24px;text-align:right" x-text="line.order"></span>
                         <span style="color:#a5b4fc;min-width:80px" x-text="line.speaker_name"></span>
-                        <span style="color:#e2e8f0" x-text="line.text"></span>
+                        <template x-if="editingLocaleLineId !== line.id">
+                          <div style="flex:1;display:flex;gap:6px;align-items:center;flex-wrap:wrap">
+                            <span style="color:#e2e8f0;cursor:text" title="クリックして編集" @click="startEditLocaleLine(line)" x-text="line.text"></span>
+                            <span x-show="localeLineNeedsRegen(line)" style="font-size:10px;color:#fbbf24;border:1px solid #fbbf2455;background:#fbbf2422;padding:1px 5px;border-radius:3px">要再生成</span>
+                            <button x-show="localeLineNeedsRegen(line)" class="btn btn-ghost btn-sm" style="padding:1px 6px;font-size:10px"
+                                    :disabled="regeneratingLocaleLineId === line.id"
+                                    @click="retakeLocaleLine(line.id)"
+                                    x-text="regeneratingLocaleLineId === line.id ? '生成中…' : '🔁 リテイク'"></button>
+                          </div>
+                        </template>
+                        <template x-if="editingLocaleLineId === line.id">
+                          <div style="flex:1;display:flex;gap:6px;align-items:center">
+                            <input type="text" x-model="editingLocaleLineText" style="flex:1;font-size:12px;padding:3px 6px"
+                                   @keydown.enter="saveLocaleLineEdit(line.id)" @keydown.escape="cancelLocaleLineEdit()">
+                            <button class="btn btn-primary btn-sm" style="padding:1px 8px;font-size:11px" @click="saveLocaleLineEdit(line.id)">保存</button>
+                            <button class="btn btn-ghost btn-sm" style="padding:1px 8px;font-size:11px" @click="cancelLocaleLineEdit()">取消</button>
+                          </div>
+                        </template>
                       </div>
                     </template>
+                  </div>
+                  <!-- 翻訳設定（モデル・訳調指示） -->
+                  <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">
+                    <select x-model="localeModel" style="padding:6px 10px;font-size:12px;width:auto;max-width:220px">
+                      <option value="">既定（台本生成のモデルを使用）</option>
+                      <template x-for="p in llmProviders.filter(p => p.available)" :key="p.id">
+                        <optgroup :label="p.label">
+                          <template x-for="m in p.models" :key="m.id">
+                            <option :value="m.id" x-text="m.label"></option>
+                          </template>
+                        </optgroup>
+                      </template>
+                    </select>
+                    <input type="text" x-model="localeInstructions" placeholder="訳調指示（任意・例: カジュアルに）"
+                           style="padding:6px 10px;font-size:12px;flex:1;min-width:160px">
                   </div>
                   <!-- 言語追加 -->
                   <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">
@@ -1443,13 +1481,34 @@
           <div style="display:flex;flex-direction:column;gap:16px">
 
             <!-- サブモード切替＋エンジン状態 -->
-            <div style="display:flex;align-items:center;gap:8px">
+            <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">
               <div class="mode-tabs">
                 <button class="mode-btn" :class="{ active: ttsMode === 'gen' }" @click="ttsMode = 'gen'">🎬 生成</button>
                 <button class="mode-btn" :class="{ active: ttsMode === 'voices' }" @click="ttsMode = 'voices'; loadVoiceRefs()">🎤 参照音声</button>
               </div>
               <span class="engine-badge" :class="ttsEngineOk ? 'engine-ok' : 'engine-err'"
                     x-text="ttsEngineOk ? '● エンジン接続中' : '● エンジン未接続'"></span>
+              <template x-if="ttsMode === 'gen'">
+                <div style="display:flex;align-items:center;gap:6px;margin-left:8px">
+                  <span style="font-size:11px;color:#4b5563">🌐 言語:</span>
+                  <select x-model="ttsLang" @change="onTtsLangChange()" style="padding:4px 8px;font-size:12px;width:auto">
+                    <option value="">原語（<span x-text="localesInfo?.source_language || 'ja'"></span>）</option>
+                    <template x-for="loc in (localesInfo?.locales || []).filter(l => l.status?.translation === 'done')" :key="loc.lang">
+                      <option :value="loc.lang" x-text="loc.lang.toUpperCase()"></option>
+                    </template>
+                  </select>
+                  <span x-show="ttsLang" style="font-size:10px;padding:2px 6px;border-radius:3px"
+                        :style="ttsEngineBadgeReachable ? 'background:#34d39922;color:#34d399;border:1px solid #34d39955' : 'background:#f8717122;color:#f87171;border:1px solid #f8717155'"
+                        x-text="`omnivoice ${ttsEngineBadgeReachable ? '接続中' : '未接続'}`"></span>
+                </div>
+              </template>
+            </div>
+            <div x-show="ttsLang && ttsHealth && !ttsHealth.engines?.omnivoice?.reachable" class="tts-offline-hint">
+              ⚠ omnivoice-tts-server に接続できません。<code>docker compose --profile gpu up -d</code> で起動してください。
+            </div>
+            <div x-show="ttsLang && localeVoiceWarnings.length" class="tts-offline-hint">
+              ⚠ 次の声は多言語クローン用の参照（.ref.wav/.ref.txt）が未整備です: <span x-text="localeVoiceWarnings.join(', ')"></span>
+              （このまま生成すると409エラーになります）
             </div>
 
             <!-- ── 生成モード ── -->
@@ -1464,12 +1523,16 @@
                     <span x-show="ttsStatus" class="status-badge" :class="statusClass(ttsStatus)"
                           style="margin-left:8px" x-text="`tts: ${ttsStatus}`"></span>
                   </div>
-                  <div x-show="!ttsEngineOk" class="tts-offline-hint" style="margin-bottom:8px">
+                  <div x-show="!ttsLang && !ttsEngineOk" class="tts-offline-hint" style="margin-bottom:8px">
                     ⚠ TTSエンジン（irodori）に接続できません。tts-agentコンテナとirodoriサーバーの起動を確認してください。
                   </div>
+                  <p class="info-note" x-show="ttsLang" style="margin-bottom:8px">
+                    🌐 翻訳言語の音声は、原語と<b>同じキャラの声</b>でクロスリンガル生成します（声・話者の再設定は不要）。
+                    話者設定・速度/ポーズの既定値は原語のもの。行ごとの速度/ポーズは台本タブ（原語）で調整してください。
+                  </p>
 
                   <!-- 話者設定（参照音声マッピング＋キャプション） -->
-                  <template x-if="ttsSpeakers.length > 0">
+                  <template x-if="!ttsLang && ttsSpeakers.length > 0">
                     <div>
                       <label style="margin-top:8px">話者の割当（役 → キャラ）</label>
                       <p class="info-note">
@@ -1508,13 +1571,13 @@
                       </div>
                     </div>
                   </template>
-                  <template x-if="ttsSpeakers.length === 0">
+                  <template x-if="!ttsLang && ttsSpeakers.length === 0">
                     <div style="font-size:12px;color:#4b5563;margin:8px 0">
                       話者情報がありません（台本を生成すると話者が表示されます）
                     </div>
                   </template>
 
-                  <div style="margin-top:12px;display:flex;gap:16px;align-items:flex-end;flex-wrap:wrap">
+                  <div x-show="!ttsLang" style="margin-top:12px;display:flex;gap:16px;align-items:flex-end;flex-wrap:wrap">
                     <div>
                       <label>デフォルト速度</label>
                       <input type="number" x-model.number="ttsDefaultSpeed" step="0.05" min="0.5" max="2.0" style="width:90px">
@@ -1527,7 +1590,7 @@
                       全行に適用
                     </button>
                   </div>
-                  <p class="info-note" style="margin-top:6px">
+                  <p class="info-note" x-show="!ttsLang" style="margin-top:6px">
                     ここで設定した速度・ポーズは「全セリフ生成」実行時にプロジェクトへ保存されます。
                     「全行に適用」を押すと、現在の台本の全行の速度・ポーズをこの値で一括上書きします
                     （個別の行は後から「セリフ＆音声」一覧で再調整できます）。
@@ -1554,15 +1617,51 @@
                 </div>
 
                 <!-- セリフ＆音声（統合行リスト） -->
-                <div class="card" x-show="draft?.lines?.length">
+                <div class="card" x-show="(ttsLang ? ttsLangScript?.lines : draft?.lines)?.length">
                   <h2>セリフ＆音声
                     <span style="font-weight:400;text-transform:none;color:#4b5563;font-size:11px"
-                          x-text="`（第${activeEpisodeNumber}話 / ${draft?.lines?.length || 0}行 / 生成済み ${ttsEpisodeAudio?.audio_files?.length || 0} / 合計 ${formatDuration(Math.round(ttsEpisodeAudio?.metadata?.total_audio_duration_sec || 0))}）`"></span>
+                          x-text="`（第${activeEpisodeNumber}話${ttsLang ? ' / ' + ttsLang.toUpperCase() : ''} / ${(ttsLang ? ttsLangScript?.lines : draft?.lines)?.length || 0}行 / 生成済み ${ttsEpisodeAudio?.audio_files?.length || 0} / 合計 ${formatDuration(Math.round(ttsEpisodeAudio?.metadata?.total_audio_duration_sec || 0))}）`"></span>
                   </h2>
                   <div x-show="!currentEpisodeHasScript" class="tts-offline-hint" style="margin-bottom:8px">
                     ⚠ このエピソードは未承認です。台本タブで「✓ 承認・確定」すると音声を生成できます（行の編集・追加・削除は可能です）。
                   </div>
-                  <div style="display:flex;flex-direction:column;gap:6px">
+
+                  <!-- 翻訳言語モード: 読み取り専用の簡易行リスト（テキスト編集は🌐多言語カードで） -->
+                  <div x-show="ttsLang" style="display:flex;flex-direction:column;gap:6px">
+                    <template x-for="line in ttsLangScript?.lines || []" :key="line.id">
+                      <div class="audio-line-row" style="align-items:flex-start">
+                        <div class="al-meta">
+                          <div style="display:flex;align-items:center;gap:6px;flex-wrap:wrap">
+                            <span style="font-size:11px;color:#4b5563" x-text="line.order"></span>
+                            <span class="line-speaker" :class="speakerClass(line.speaker_id)" x-text="line.speaker_name"></span>
+                          </div>
+                          <div style="margin-top:4px;display:flex;align-items:center;gap:6px">
+                            <span class="status-badge"
+                                  :class="regeneratingLineId === line.id ? 'status-running' : (localeLineTtsState(line) === 'done' ? 'status-done' : 'status-pending')"
+                                  x-text="regeneratingLineId === line.id ? '⏳ 生成中...' : (localeLineTtsState(line) === 'done' ? '✅ 生成済み' : (localeLineTtsState(line) === 'stale' ? '⚠ 要再生成' : '未生成'))"></span>
+                            <span x-show="ttsEntryFor(line)" style="font-size:10px;color:#4b5563"
+                                  x-text="ttsEntryFor(line) ? `${ttsEntryFor(line).duration_sec}s` : ''"></span>
+                          </div>
+                        </div>
+                        <div style="flex:1;min-width:0">
+                          <div class="line-text" x-text="line.text"></div>
+                          <div class="progress-indeterminate" x-show="regeneratingLineId === line.id"></div>
+                          <template x-if="ttsEntryFor(line) && regeneratingLineId !== line.id">
+                            <audio :src="episodeAudioUrl({ line_id: line.id })" controls preload="none"
+                                   style="width:100%;height:32px;margin-top:6px"></audio>
+                          </template>
+                        </div>
+                        <div style="display:flex;flex-direction:column;gap:4px;flex-shrink:0">
+                          <button class="btn btn-ghost btn-sm" style="white-space:nowrap"
+                                  @click="regenSingleLine(line.id)"
+                                  :disabled="regeneratingLineId === line.id || ttsRunning || !currentEpisodeHasScript"
+                                  x-text="regeneratingLineId === line.id ? '生成中...' : '🎙 この行を生成'"></button>
+                        </div>
+                      </div>
+                    </template>
+                  </div>
+
+                  <div x-show="!ttsLang" style="display:flex;flex-direction:column;gap:6px">
                     <template x-for="line in draft?.lines || []" :key="line.id">
                       <div class="audio-line-row" style="align-items:flex-start"
                            :style="editingLineOrder === line.order ? 'border-color:#7c3aed;background:#13101f' : ''"
@@ -2794,10 +2893,19 @@
     <template x-if="tab === 'editing'">
       <div>
         <div class="card">
-          <h2 style="display:flex;align-items:center;gap:10px">🎞️ 編集情報生成（OTIO/SRT）
+          <h2 style="display:flex;align-items:center;gap:10px;flex-wrap:wrap">🎞️ 編集情報生成（OTIO/SRT）
             <span style="font-size:10px;padding:2px 8px;border-radius:99px"
                   :style="editOk ? 'background:#14532d;color:#bbf7d0' : 'background:#7f1d1d;color:#fecaca'"
                   x-text="editOk ? 'editing-agent 接続OK' : 'editing-agent 接続不可'"></span>
+            <span style="display:flex;align-items:center;gap:6px;margin-left:auto">
+              <span style="font-size:11px;color:#4b5563;font-weight:400">🌐 言語:</span>
+              <select x-model="editLang" @change="loadEditResult()" style="padding:4px 8px;font-size:12px;width:auto">
+                <option value="">原語（<span x-text="localesInfo?.source_language || 'ja'"></span>）</option>
+                <template x-for="loc in (localesInfo?.locales || []).filter(l => l.status?.tts === 'done' || l.status?.editing !== 'not_started')" :key="loc.lang">
+                  <option :value="loc.lang" x-text="loc.lang.toUpperCase()"></option>
+                </template>
+              </select>
+            </span>
           </h2>
           <p style="font-size:13px;color:#94a3b8;margin:8px 0 16px">
             script.json・tts.json・footage.json を統合し、DaVinci Resolve用のラフ編集データ（timeline.otio・subtitles.srt）を生成します。
@@ -3483,6 +3591,12 @@ function app() {
     translating: false,
     viewingLocale: null,
     localeScript: null,
+    localeModel: '',
+    localeInstructions: '',
+    editingLocaleLineId: null,
+    editingLocaleLineText: '',
+    localeTtsTextsCache: {},
+    regeneratingLocaleLineId: null,
     // TTSタブ
     ttsMode: 'gen',
     ttsEngineOk: false,
@@ -3499,6 +3613,11 @@ function app() {
     ttsLogId: 0,
     audioVersion: 0,
     regeneratingLineId: null,
+    // 多言語（TTSタブの言語セレクタ・Docs/08_i18n.md §8b W3）
+    ttsLang: '',
+    ttsLangScript: null,
+    ttsHealth: null,
+    voiceProfiles: [],
     // 参照音声管理
     voiceRefs: [],
     voiceDragOver: false,
@@ -3547,6 +3666,7 @@ function app() {
     editHostMediaRoot: '',
     editResult: null,
     editRunning: false,
+    editLang: '',
     editError: '',
     editFps: 30,
     editSpeakerPrefix: false,
@@ -4326,7 +4446,11 @@ function app() {
           {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ lang }),
+            body: JSON.stringify({
+              lang,
+              model: this.localeModel || this.selectedModel || null,
+              instructions: this.localeInstructions.trim() || null,
+            }),
           },
         );
         const data = await r.json();
@@ -4339,6 +4463,7 @@ function app() {
     },
 
     async viewLocaleScript(lang) {
+      this.editingLocaleLineId = null;
       if (this.viewingLocale === lang) {
         this.viewingLocale = null;
         this.localeScript = null;
@@ -4349,6 +4474,90 @@ function app() {
       if (!r.ok) { alert('翻訳スクリプトを読み込めません'); return; }
       this.localeScript = await r.json();
       this.viewingLocale = lang;
+      await this.loadLocaleTtsTexts(lang);
+    },
+
+    localeChip(val) {
+      const map = {
+        done: { label: '済', color: '#34d399' },
+        running: { label: '中', color: '#fbbf24' },
+        pending: { label: '待', color: '#60a5fa' },
+        error: { label: '✕', color: '#f87171' },
+        not_started: { label: '-', color: '#4b5563' },
+      };
+      return map[val || 'not_started'] || { label: val, color: '#94a3b8' };
+    },
+
+    startEditLocaleLine(line) {
+      this.editingLocaleLineId = line.id;
+      this.editingLocaleLineText = line.text;
+    },
+    cancelLocaleLineEdit() {
+      this.editingLocaleLineId = null;
+      this.editingLocaleLineText = '';
+    },
+    async saveLocaleLineEdit(lineId) {
+      if (!this.currentProject || !this.viewingLocale) return;
+      const ep = this.activeEpisodeNumber || 1;
+      try {
+        const r = await fetch(
+          `${SAPI}/projects/${this.currentProject.id}/episodes/${ep}/locales/${this.viewingLocale}/lines/${lineId}`,
+          {
+            method: 'PATCH',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ text: this.editingLocaleLineText }),
+          },
+        );
+        const data = await r.json();
+        if (!r.ok) { alert('編集の保存に失敗しました: ' + (data.detail || JSON.stringify(data))); return; }
+        this.localeScript = data;
+      } finally {
+        this.editingLocaleLineId = null;
+        this.editingLocaleLineText = '';
+      }
+    },
+
+    // 要再生成バッジ判定: locale tts.json の生成済みテキストと現在の行textが食い違うか
+    async loadLocaleTtsTexts(lang) {
+      if (!this.currentProject) return;
+      const ep = this.activeEpisodeNumber || 1;
+      let map = {};
+      try {
+        const r = await fetch(`${TAPI}/projects/${this.currentProject.id}/tts?episode=${ep}&lang=${lang}`);
+        if (r.ok) {
+          const data = await r.json();
+          for (const af of (data.audio_files || [])) {
+            if (af.line_id) map[af.line_id] = af.text;
+          }
+        }
+      } catch (e) { /* tts.jsonが無ければバッジ無し扱い */ }
+      this.localeTtsTextsCache = { ...this.localeTtsTextsCache, [lang]: map };
+    },
+    localeLineNeedsRegen(line) {
+      const map = this.localeTtsTextsCache[this.viewingLocale];
+      if (!map) return false;
+      const ttsText = map[line.id];
+      return ttsText !== undefined && ttsText !== line.text;
+    },
+    async retakeLocaleLine(lineId) {
+      if (!this.currentProject || this.regeneratingLocaleLineId) return;
+      this.regeneratingLocaleLineId = lineId;
+      try {
+        const r = await fetch(
+          `${TAPI}/projects/${this.currentProject.id}/run/line/${lineId}?episode=${this.activeEpisodeNumber || 1}&lang=${this.viewingLocale}&force=true`,
+          { method: 'POST' },
+        );
+        if (!r.ok) {
+          const err = await r.json().catch(() => ({}));
+          alert(`リテイクに失敗しました: ${err.detail || r.status}`);
+          return;
+        }
+        await this.loadLocaleTtsTexts(this.viewingLocale);
+      } catch (e) {
+        alert('リテイクに失敗しました: ' + e);
+      } finally {
+        this.regeneratingLocaleLineId = null;
+      }
     },
 
     async deleteLocale(lang) {
@@ -4876,7 +5085,7 @@ function app() {
     // ─── 🎞️ 編集情報タブ ────────────────────────────────────────
     async refreshEditingTab() {
       if (!this.currentProject) return;
-      await this.checkEditHealth();
+      await Promise.all([this.checkEditHealth(), this.loadLocales()]);
       await this.loadEditResult();
       await this.loadEditSpeakersAndStyle();
     },
@@ -4954,8 +5163,9 @@ function app() {
 
     async loadEditResult() {
       if (!this.currentProject || !this.activeEpisodeNumber) { this.editResult = null; return; }
+      const langQ = this.editLang ? `?lang=${this.editLang}` : '';
       try {
-        const r = await fetch(`${EAPI}/projects/${this.currentProject.id}/episodes/${this.activeEpisodeNumber}/edit/result`);
+        const r = await fetch(`${EAPI}/projects/${this.currentProject.id}/episodes/${this.activeEpisodeNumber}/edit/result${langQ}`);
         this.editResult = r.ok ? await r.json() : null;
       } catch { this.editResult = null; }
     },
@@ -4974,6 +5184,7 @@ function app() {
             path_style: this.editPathStyle,
             subtitle_format: this.editSubtitleFormat,
             force: this.editForce,
+            lang: this.editLang || null,
           }),
         });
         const data = await r.json();
@@ -6057,16 +6268,56 @@ function app() {
     // ─── 🎙️ TTSタブ ─────────────────────────────────────────────
     async refreshTtsTab() {
       if (!this.currentProject) return;
+      this.ttsLang = '';
+      this.ttsLangScript = null;
       // voiceRefsはloadTtsSpeakersのデフォルト解決に使うため先に読み込む
       await Promise.all([
         this.checkTtsHealth(),
         this.loadVoiceRefs(),
+        this.loadVoiceProfiles(),
+        this.loadLocales(),
       ]);
       await Promise.all([
         this.loadCharas(),       // 役→キャラ割当のドロップダウン用
         this.loadTtsSpeakers(),
         this.loadEpisodeTts(),
       ]);
+    },
+
+    async onTtsLangChange() {
+      this.regeneratingLineId = null;
+      await this.loadEpisodeTts();
+      if (!this.ttsLang) { this.ttsLangScript = null; return; }
+      const ep = this.activeEpisodeNumber || 1;
+      try {
+        const r = await fetch(`${SAPI}/projects/${this.currentProject.id}/episodes/${ep}/locales/${this.ttsLang}/script`);
+        this.ttsLangScript = r.ok ? await r.json() : null;
+      } catch { this.ttsLangScript = null; }
+    },
+
+    async loadVoiceProfiles() {
+      try {
+        const r = await fetch(`${TAPI}/voices/profiles`);
+        const d = await r.json();
+        this.voiceProfiles = d.profiles || [];
+      } catch { this.voiceProfiles = []; }
+    },
+
+    get ttsEngineBadgeReachable() {
+      return !!this.ttsHealth?.engines?.omnivoice?.reachable;
+    },
+
+    // 配役中の声のうち .ref.wav/.ref.txt（多言語クローン用）が未整備なものの名前一覧
+    get localeVoiceWarnings() {
+      if (!this.ttsLang) return [];
+      const names = [];
+      for (const sp of this.ttsSpeakers) {
+        const voiceId = this.speakerResolvedVoice(sp);
+        if (voiceId === 'none') continue;
+        const profile = this.voiceProfiles.find(p => p.id === voiceId);
+        if (profile && profile.has_ref_multilingual === false) names.push(sp.name || sp.id);
+      }
+      return names;
     },
     // 役(speaker)に割り当てたキャラと、そこから解決した声/字幕
     charaForSpeaker(sp) {
@@ -6088,7 +6339,8 @@ function app() {
         const r = await fetch(`${TAPI}/health`);
         const d = await r.json();
         this.ttsEngineOk = !!d.engine_reachable;
-      } catch { this.ttsEngineOk = false; }
+        this.ttsHealth = d;
+      } catch { this.ttsEngineOk = false; this.ttsHealth = null; }
     },
 
     async loadVoiceRefs() {
@@ -6133,15 +6385,17 @@ function app() {
 
     async loadEpisodeTts() {
       if (!this.currentProject || !this.activeEpisodeNumber) { this.ttsEpisodeAudio = null; return; }
+      const langQ = this.ttsLang ? `?lang=${this.ttsLang}` : '';
       try {
-        const r = await fetch(`/projects/${this.currentProject.id}/episodes/${this.activeEpisodeNumber}/tts`);
+        const r = await fetch(`/projects/${this.currentProject.id}/episodes/${this.activeEpisodeNumber}/tts${langQ}`);
         this.ttsEpisodeAudio = r.ok ? await r.json() : null;
       } catch { this.ttsEpisodeAudio = null; }
       this.audioVersion = Date.now();
     },
 
     episodeAudioUrl(f) {
-      return `${TAPI}/audio/project/${this.currentProject.id}/${f.line_id}.wav?episode=${this.activeEpisodeNumber}&v=${this.audioVersion}`;
+      const langQ = this.ttsLang ? `&lang=${this.ttsLang}` : '';
+      return `${TAPI}/audio/project/${this.currentProject.id}/${f.line_id}.wav?episode=${this.activeEpisodeNumber}${langQ}&v=${this.audioVersion}`;
     },
 
     // tts.json内の該当行の生成済みエントリを返す（無ければnull）
@@ -6166,6 +6420,13 @@ function app() {
       return (sameText && sameEmotion && sameSpeed && sameVoice && sameCaption) ? 'done' : 'stale';
     },
 
+    // 翻訳言語モード用の簡易版: text一致のみで判定（速度/感情/声はキャラ本籍から自動でlineTtsStateの対象外）
+    localeLineTtsState(line) {
+      const e = this.ttsEntryFor(line);
+      if (!e) return 'pending';
+      return e.text === line.text ? 'done' : 'stale';
+    },
+
     get currentEpisodeHasScript() {
       const ep = this.episodes.find(e => e.number === this.activeEpisodeNumber);
       return !!ep?.has_script;
@@ -6182,9 +6443,10 @@ function app() {
     async runTtsAll() {
       if (!this.currentProject || !this.activeEpisodeNumber || this.ttsRunning) return;
       const ep = this.activeEpisodeNumber;
+      const langQ = this.ttsLang ? `&lang=${this.ttsLang}` : '';
 
-      // ① 話者設定（voice + caption）を先にプロジェクトに保存
-      if (this.ttsSpeakers.length > 0) {
+      // ① 話者設定（voice + caption）を先にプロジェクトに保存（原語のみ・翻訳言語は同じキャラの声を継承）
+      if (!this.ttsLang && this.ttsSpeakers.length > 0) {
         const sr = await fetch(`${TAPI}/projects/${this.currentProject.id}/speakers`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
@@ -6205,8 +6467,8 @@ function app() {
       this.ttsLogs = [];
       this.ttsProgress = 0;
       this.ttsProgressLabel = '';
-      this.addTtsLog(`${this.currentProject.id} 第${ep}話 の生成を開始...`, 'info');
-      const r = await fetch(`${TAPI}/projects/${this.currentProject.id}/run?episode=${ep}`, { method: 'POST' }).catch(() => null);
+      this.addTtsLog(`${this.currentProject.id} 第${ep}話${this.ttsLang ? ' ' + this.ttsLang.toUpperCase() : ''} の生成を開始...`, 'info');
+      const r = await fetch(`${TAPI}/projects/${this.currentProject.id}/run?episode=${ep}${langQ}`, { method: 'POST' }).catch(() => null);
       if (!r || !r.ok) {
         this.ttsRunning = false;
         const err = r ? await r.json().catch(() => ({})) : {};
@@ -6254,7 +6516,8 @@ function app() {
 
     async cancelTtsRun() {
       if (!this.currentProject) return;
-      await fetch(`${TAPI}/projects/${this.currentProject.id}/cancel?episode=${this.activeEpisodeNumber}`, { method: 'POST' }).catch(() => null);
+      const langQ = this.ttsLang ? `&lang=${this.ttsLang}` : '';
+      await fetch(`${TAPI}/projects/${this.currentProject.id}/cancel?episode=${this.activeEpisodeNumber}${langQ}`, { method: 'POST' }).catch(() => null);
       this.stopTtsPolling();
       this.addTtsLog('中断しました', 'warn');
     },
@@ -6272,7 +6535,8 @@ function app() {
     },
     async pollTtsStatus() {
       if (!this.currentProject) { this.stopTtsPolling(); return; }
-      const r = await fetch(`${TAPI}/projects/${this.currentProject.id}/status`).catch(() => null);
+      const langQ = this.ttsLang ? `?lang=${this.ttsLang}` : '';
+      const r = await fetch(`${TAPI}/projects/${this.currentProject.id}/status${langQ}`).catch(() => null);
       if (!r || !r.ok) return;
       const data = await r.json();
       const s = data.status?.tts || null;
@@ -6299,7 +6563,8 @@ function app() {
       try {
         // force=true: キャッシュをバイパスし常に新規生成する（TTSはガチャ要素があり、
         // 同条件での再生成（生成失敗時のリトライ等）でも新しい結果を得られるようにする）
-        const r = await fetch(`${TAPI}/projects/${this.currentProject.id}/run/line/${lineId}?episode=${this.activeEpisodeNumber}&force=true`, { method: 'POST' });
+        const langQ = this.ttsLang ? `&lang=${this.ttsLang}` : '';
+        const r = await fetch(`${TAPI}/projects/${this.currentProject.id}/run/line/${lineId}?episode=${this.activeEpisodeNumber}&force=true${langQ}`, { method: 'POST' });
         if (!r.ok) {
           const err = await r.json().catch(() => ({}));
           alert(`再生成に失敗しました: ${err.detail || r.status}`);

@@ -100,12 +100,16 @@ def append_director_log(project_id: str, entry: dict) -> None:
     log_file.write_text(json.dumps(logs, ensure_ascii=False, indent=2), encoding="utf-8")
 
 
-def get_episode_tts(project_id: str, episode_number: int) -> dict | None:
-    """エピソードのtts.json（生成済み音声一覧・タイムライン）を返す。無ければNone。"""
+def get_episode_tts(project_id: str, episode_number: int, lang: str | None = None) -> dict | None:
+    """エピソードのtts.json（生成済み音声一覧・タイムライン）を返す。無ければNone。
+
+    lang指定時は locales/{lang}/tts.json を対象にする（Docs/08_i18n.md §8b W3）。
+    """
     matches = list(PROJECTS_DIR.glob(f"{project_id}*"))
     if not matches:
         return None
-    f = matches[0] / "episodes" / f"ep{episode_number:02d}" / "tts.json"
+    ep_dir = matches[0] / "episodes" / f"ep{episode_number:02d}"
+    f = (ep_dir / "locales" / lang / "tts.json") if lang else (ep_dir / "tts.json")
     if not f.exists():
         return None
     return _read_json(f)

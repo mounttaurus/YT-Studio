@@ -963,8 +963,14 @@
               <div style="display:flex;align-items:center;gap:10px;background:#0f1117;border:1px solid #374151;border-radius:6px;padding:8px 12px;flex-wrap:wrap">
                 <span style="font-size:14px;font-weight:700;color:#c4b5fd;text-transform:uppercase" x-text="loc.lang"></span>
                 <span style="font-size:12px;color:#94a3b8;flex:1;min-width:120px" x-text="loc.title || '(タイトル未翻訳)'"></span>
-                <span style="font-size:11px" :style="loc.status?.translation === 'done' ? 'color:#34d399' : 'color:#fbbf24'"
-                      x-text="`翻訳:${loc.status?.translation || '-'} / TTS:${loc.status?.tts || '-'}`"></span>
+                <div style="display:flex;gap:4px;align-items:center">
+                  <template x-for="stg in [{key:'translation',label:'翻訳'},{key:'tts',label:'TTS'},{key:'editing',label:'編集'}]" :key="stg.key">
+                    <span style="font-size:10px;padding:2px 6px;border-radius:3px;white-space:nowrap"
+                          :style="`background:${localeChip(loc.status?.[stg.key]).color}22;color:${localeChip(loc.status?.[stg.key]).color};border:1px solid ${localeChip(loc.status?.[stg.key]).color}55`"
+                          :title="stg.label + ': ' + (loc.status?.[stg.key] || 'not_started')"
+                          x-text="`${stg.label}:${localeChip(loc.status?.[stg.key]).label}`"></span>
+                  </template>
+                </div>
                 <span x-show="loc.stale" style="font-size:11px;color:#f87171" title="原語の台本が翻訳後に変更されています">⚠ 原語更新あり</span>
                 <button class="btn btn-ghost btn-sm" @click="viewLocaleScript(loc.lang)"
                         x-text="viewingLocale === loc.lang ? '閉じる' : '表示'"></button>
@@ -974,15 +980,44 @@
                         title="この言語の翻訳・音声・編集情報を削除">✕</button>
               </div>
             </template>
-            <!-- 翻訳プレビュー（読み取り専用） -->
+            <!-- 翻訳プレビュー（インライン編集可・要再生成バッジは表示のみ＝リテイクはdirector UIで） -->
             <div x-show="viewingLocale && localeScript" style="background:#0f1117;border:1px solid #374151;border-radius:6px;padding:10px;max-height:340px;overflow-y:auto">
               <template x-for="line in localeScript?.lines || []" :key="line.id">
-                <div style="display:flex;gap:10px;padding:4px 0;border-bottom:1px solid #1f2937;font-size:12px">
+                <div style="display:flex;gap:10px;padding:4px 0;border-bottom:1px solid #1f2937;font-size:12px;align-items:center">
                   <span style="color:#4b5563;min-width:24px;text-align:right" x-text="line.order"></span>
                   <span style="color:#a5b4fc;min-width:80px" x-text="line.speaker_name"></span>
-                  <span style="color:#e2e8f0" x-text="line.text"></span>
+                  <template x-if="editingLocaleLineId !== line.id">
+                    <div style="flex:1;display:flex;gap:6px;align-items:center;flex-wrap:wrap">
+                      <span style="color:#e2e8f0;cursor:text" title="クリックして編集" @click="startEditLocaleLine(line)" x-text="line.text"></span>
+                      <span x-show="localeLineNeedsRegen(line)" style="font-size:10px;color:#fbbf24;border:1px solid #fbbf2455;background:#fbbf2422;padding:1px 5px;border-radius:3px"
+                            title="director UIのTTSタブでリテイクできます">要再生成</span>
+                    </div>
+                  </template>
+                  <template x-if="editingLocaleLineId === line.id">
+                    <div style="flex:1;display:flex;gap:6px;align-items:center">
+                      <input type="text" x-model="editingLocaleLineText" style="flex:1;font-size:12px;padding:3px 6px"
+                             @keydown.enter="saveLocaleLineEdit(line.id)" @keydown.escape="cancelLocaleLineEdit()">
+                      <button class="btn btn-primary btn-sm" style="padding:1px 8px;font-size:11px" @click="saveLocaleLineEdit(line.id)">保存</button>
+                      <button class="btn btn-ghost btn-sm" style="padding:1px 8px;font-size:11px" @click="cancelLocaleLineEdit()">取消</button>
+                    </div>
+                  </template>
                 </div>
               </template>
+            </div>
+            <!-- 翻訳設定（モデル・訳調指示） -->
+            <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">
+              <select x-model="localeModel" style="padding:6px 10px;font-size:12px;width:auto;max-width:220px">
+                <option value="">既定（台本生成のモデルを使用）</option>
+                <template x-for="p in llmProviders.filter(p => p.available)" :key="p.id">
+                  <optgroup :label="p.label">
+                    <template x-for="m in p.models" :key="m.id">
+                      <option :value="m.id" x-text="m.label"></option>
+                    </template>
+                  </optgroup>
+                </template>
+              </select>
+              <input type="text" x-model="localeInstructions" placeholder="訳調指示（任意・例: カジュアルに）"
+                     style="padding:6px 10px;font-size:12px;flex:1;min-width:160px">
             </div>
             <!-- 言語追加 -->
             <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">
@@ -1336,6 +1371,11 @@ function app() {
     translating: false,
     viewingLocale: null,
     localeScript: null,
+    localeModel: '',
+    localeInstructions: '',
+    editingLocaleLineId: null,
+    editingLocaleLineText: '',
+    localeTtsTextsCache: {},
 
     // 算出プロパティ相当
     get currentProviderModels() {
@@ -2251,7 +2291,11 @@ function app() {
           {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ lang }),
+            body: JSON.stringify({
+              lang,
+              model: this.localeModel || this.selectedModel || null,
+              instructions: this.localeInstructions.trim() || null,
+            }),
           },
         );
         const data = await r.json();
@@ -2264,6 +2308,7 @@ function app() {
     },
 
     async viewLocaleScript(lang) {
+      this.editingLocaleLineId = null;
       if (this.viewingLocale === lang) {
         this.viewingLocale = null;
         this.localeScript = null;
@@ -2274,6 +2319,70 @@ function app() {
       if (!r.ok) { alert('翻訳スクリプトを読み込めません'); return; }
       this.localeScript = await r.json();
       this.viewingLocale = lang;
+      await this.loadLocaleTtsTexts(lang);
+    },
+
+    localeChip(val) {
+      const map = {
+        done: { label: '済', color: '#34d399' },
+        running: { label: '中', color: '#fbbf24' },
+        pending: { label: '待', color: '#60a5fa' },
+        error: { label: '✕', color: '#f87171' },
+        not_started: { label: '-', color: '#4b5563' },
+      };
+      return map[val || 'not_started'] || { label: val, color: '#94a3b8' };
+    },
+
+    startEditLocaleLine(line) {
+      this.editingLocaleLineId = line.id;
+      this.editingLocaleLineText = line.text;
+    },
+    cancelLocaleLineEdit() {
+      this.editingLocaleLineId = null;
+      this.editingLocaleLineText = '';
+    },
+    async saveLocaleLineEdit(lineId) {
+      if (!this.currentProject || !this.viewingLocale) return;
+      const ep = this.activeEpisodeNumber || 1;
+      try {
+        const r = await fetch(
+          `/projects/${this.currentProject.id}/episodes/${ep}/locales/${this.viewingLocale}/lines/${lineId}`,
+          {
+            method: 'PATCH',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ text: this.editingLocaleLineText }),
+          },
+        );
+        const data = await r.json();
+        if (!r.ok) { alert('編集の保存に失敗しました: ' + (data.detail || JSON.stringify(data))); return; }
+        this.localeScript = data;
+      } finally {
+        this.editingLocaleLineId = null;
+        this.editingLocaleLineText = '';
+      }
+    },
+
+    // 要再生成バッジ判定: locale tts.json の生成済みテキストと現在の行textが食い違うか（表示のみ・リテイクはdirector UI）
+    async loadLocaleTtsTexts(lang) {
+      if (!this.currentProject) return;
+      const ep = this.activeEpisodeNumber || 1;
+      let map = {};
+      try {
+        const r = await fetch(`/projects/${this.currentProject.id}/episodes/${ep}/locales/${lang}/tts-texts`);
+        if (r.ok) {
+          const data = await r.json();
+          for (const af of (data.audio_files || [])) {
+            if (af.line_id) map[af.line_id] = af.text;
+          }
+        }
+      } catch (e) { /* tts.jsonが無ければバッジ無し扱い */ }
+      this.localeTtsTextsCache = { ...this.localeTtsTextsCache, [lang]: map };
+    },
+    localeLineNeedsRegen(line) {
+      const map = this.localeTtsTextsCache[this.viewingLocale];
+      if (!map) return false;
+      const ttsText = map[line.id];
+      return ttsText !== undefined && ttsText !== line.text;
     },
 
     async deleteLocale(lang) {

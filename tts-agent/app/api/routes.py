@@ -221,6 +221,19 @@ async def project_status(project_id: str, episode: int = 1, lang: Optional[str] 
     }
 
 
+@router.get("/projects/{project_id}/tts")
+async def get_project_tts(project_id: str, episode: int = 1, lang: Optional[str] = None):
+    """tts.json をそのまま返す（director UIの「要再生成」バッジ判定用・Docs/08_i18n.md §8b W1）。"""
+    try:
+        read_project(project_id)
+    except FileNotFoundError:
+        raise HTTPException(404, f"Project not found: {project_id}")
+    tts_path = get_tts_json_path(project_id, episode, lang)
+    if not tts_path.exists():
+        raise HTTPException(404, f"tts.json not found: episode={episode} lang={lang or '(source)'}")
+    return json.loads(tts_path.read_text(encoding="utf-8"))
+
+
 @router.post("/projects/{project_id}/speakers")
 async def update_speakers(project_id: str, body: dict):
     """話者設定（voice, caption）とTTS生成のデフォルト値（速度・ポーズ）を保存する。生成前に呼び出す。"""

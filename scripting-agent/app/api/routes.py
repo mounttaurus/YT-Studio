@@ -156,6 +156,31 @@ async def get_tts_voices():
         return {"profiles": [], "count": 0, "error": "TTS-agentに接続できません"}
 
 
+@router.get("/projects/{project_id}/episodes/{episode_number}/locales/{lang}/tts-texts")
+async def get_locale_tts_texts(project_id: str, episode_number: int, lang: str):
+    """翻訳言語のtts.json（生成済み音声のテキスト）をtts-agentから中継する。
+
+    scripting UIの「要再生成」バッジ判定用（Docs/08_i18n.md §8b W1・director UIと同じ判定をscripting側でも表示のみ提供）。
+    tts-agentに接続できない/未生成の場合は空配列を返す（バッジ非表示扱い＝呼び出し側で安全側に倒す）。
+    """
+    try:
+        async with httpx.AsyncClient(timeout=4.0) as client:
+            resp = await client.get(
+                f"{TTS_AGENT_URL}/projects/{project_id}/tts",
+                params={"episode": episode_number, "lang": lang},
+            )
+            if resp.status_code == 404:
+                return {"audio_files": []}
+            resp.raise_for_status()
+            data = resp.json()
+            return {"audio_files": [
+                {"line_id": f.get("line_id"), "text": f.get("text")}
+                for f in data.get("audio_files", [])
+            ]}
+    except Exception:
+        return {"audio_files": []}
+
+
 @router.get("/llm-models")
 async def get_llm_models():
     return {"models": llm_client.get_available_models(), "default": llm_client.get_default_model()}
@@ -893,6 +918,33 @@ async def delete_locale(project_id: str, episode_number: int, lang: str):
         pj["updated_at"] = datetime.now(timezone.utc).isoformat()
         pj_file.write_text(json.dumps(pj, ensure_ascii=False, indent=2), encoding="utf-8")
     return {"deleted": lang, "project_id": project_id, "episode_number": episode_number}
+
+
+class LocaleLinePatchRequest(BaseModel):
+    text: str
+
+
+@router.patch("/projects/{project_id}/episodes/{episode_number}/locales/{lang}/lines/{line_id}")
+async def patch_locale_line(
+    project_id: str, episode_number: int, lang: str, line_id: str, req: LocaleLinePatchRequest,
+):
+    """翻訳済み行の text のみを編集する（Docs/08_i18n.md §8b W1）。
+
+    行の挿入・削除・並べ替えは意図的に提供しない（line_id構造の保護＝Aロール/素材共有の前提を守る
+    ガードレール）。source_script_hash は触らない（鮮度判定は原語変更の検知であり、翻訳側の手修正は
+    「古さ」ではない）。
+    """
+    loc_script = project_manager.read_locale_script(project_id, episode_number, lang)
+    if loc_script is None:
+        raise HTTPException(status_code=404, detail=f"{lang} の翻訳スクリプトがありません")
+
+    target = next((l for l in loc_script.get("lines", []) if l.get("id") == line_id), None)
+    if target is None:
+        raise HTTPException(status_code=404, detail=f"行が見つかりません: {line_id}")
+
+    target["text"] = req.text
+    project_manager.save_locale_script(project_id, episode_number, lang, loc_script)
+    return _apply_live_speaker_names(project_id, loc_script)
 
 
 # ─── 行操作（ライトスルー同期） ───────────────────────────────────────

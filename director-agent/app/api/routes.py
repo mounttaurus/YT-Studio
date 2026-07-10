@@ -45,9 +45,9 @@ async def get_episode_script(project_id: str, episode_number: int):
 
 
 @router.get("/projects/{project_id}/episodes/{episode_number}/tts")
-async def get_episode_tts(project_id: str, episode_number: int):
+async def get_episode_tts(project_id: str, episode_number: int, lang: str | None = None):
     """エピソードのtts.json（生成済み音声一覧）を読み取り専用で返す。"""
-    data = project_manager.get_episode_tts(project_id, episode_number)
+    data = project_manager.get_episode_tts(project_id, episode_number, lang=lang)
     if data is None:
         raise HTTPException(status_code=404, detail="tts.json not found")
     return data
