@@ -1181,6 +1181,37 @@
             <!-- 右カラム：台本コンテンツ -->
             <div class="script-content">
 
+              <!-- 言語タブ -->
+              <div class="mode-tabs" style="flex-wrap:wrap;align-items:center;gap:6px" x-init="loadLocales()">
+                <button class="mode-btn" :class="{ active: !viewingLocale }" @click="selectScriptLang('')">
+                  日本語 <span style="opacity:.65">(原語)</span>
+                </button>
+                <template x-for="loc in (localesInfo?.locales || []).filter(l => l.has_script)" :key="loc.lang">
+                  <button class="mode-btn" :class="{ active: viewingLocale === loc.lang }" @click="selectScriptLang(loc.lang)">
+                    <span x-text="loc.lang.toUpperCase()"></span>
+                    <span x-show="loc.stale" title="原語の台本が翻訳後に変更されています" style="color:#f87171">&nbsp;⚠</span>
+                  </button>
+                </template>
+                <div style="display:flex;align-items:center;gap:4px;margin-left:4px" x-show="localesInfo?.has_source_script">
+                  <select x-model="localeLangInput" style="padding:4px 6px;font-size:11px;width:auto">
+                    <option value="en">English (en)</option>
+                    <option value="es">Español (es)</option>
+                    <option value="zh">中文 (zh)</option>
+                    <option value="ko">한국어 (ko)</option>
+                    <option value="fr">Français (fr)</option>
+                    <option value="de">Deutsch (de)</option>
+                    <option value="pt">Português (pt)</option>
+                  </select>
+                  <button class="btn btn-ghost btn-sm" style="padding:5px 10px;font-size:11px"
+                          @click="translateEpisode(localeLangInput, false)" :disabled="translating">
+                    <span x-text="translating ? '翻訳中…' : '＋ 翻訳を追加'"></span>
+                  </button>
+                </div>
+              </div>
+
+              <!-- 原語（日本語）タブの内容 -->
+              <div x-show="!viewingLocale" style="display:flex;flex-direction:column;gap:16px">
+
               <!-- 統計 -->
               <div class="stats-row" x-show="draft">
                 <div class="stat">
@@ -1265,7 +1296,18 @@
                       <div class="line-emotion" x-text="line.emotion"></div>
                       <div>
                         <template x-if="editingLineOrder !== line.order">
-                          <div class="line-text" x-text="line.text"></div>
+                          <div>
+                            <div class="line-text" x-text="line.text"></div>
+                            <div x-show="missingLocalesForLine(line).length" style="display:flex;gap:4px;flex-wrap:wrap;margin-top:4px" @click.stop>
+                              <template x-for="lang in missingLocalesForLine(line)" :key="lang">
+                                <button class="btn btn-ghost btn-sm" style="padding:1px 8px;font-size:10px;color:#a78bfa"
+                                        :disabled="translatingNewLineKey === `${line.id}:${lang}`"
+                                        @click="translateNewLineToLocale(line.id, lang)"
+                                        :title="`この新しい行を${lang.toUpperCase()}へ追加翻訳`"
+                                        x-text="translatingNewLineKey === `${line.id}:${lang}` ? '翻訳中…' : `→ ${lang.toUpperCase()} 翻訳`"></button>
+                              </template>
+                            </div>
+                          </div>
                         </template>
                         <template x-if="editingLineOrder === line.order">
                           <div style="display:flex;flex-direction:column;gap:6px" @click.stop>
@@ -1367,40 +1409,37 @@
                 </div>
               </div>
 
-              <!-- 🌐 多言語（行保存翻訳） -->
-              <div class="card" x-init="loadLocales()">
-                <h2>🌐 多言語
-                  <span style="font-weight:400;text-transform:none;color:#4b5563;font-size:11px">
-                    — 確定台本を行保存翻訳（パネル・素材は言語間で共有）
-                  </span>
-                </h2>
-                <div x-show="!localesInfo?.has_source_script" style="font-size:12px;color:#fbbf24;margin-bottom:8px">
+              </div>
+              <!-- /原語タブ -->
+
+              <!-- 翻訳言語タブの内容（EN/ES/…） -->
+              <div x-show="viewingLocale" style="display:flex;flex-direction:column;gap:16px">
+                <div x-show="!localesInfo?.has_source_script" style="font-size:12px;color:#fbbf24">
                   ⚠ 確定台本（script.json）がありません。先に「✓ 承認・確定」すると翻訳できます。
                 </div>
-                <div style="display:flex;flex-direction:column;gap:8px">
-                  <template x-for="loc in localesInfo?.locales || []" :key="loc.lang">
-                    <div style="display:flex;align-items:center;gap:10px;background:#0f1117;border:1px solid #374151;border-radius:6px;padding:8px 12px;flex-wrap:wrap">
-                      <span style="font-size:14px;font-weight:700;color:#c4b5fd;text-transform:uppercase" x-text="loc.lang"></span>
-                      <span style="font-size:12px;color:#94a3b8;flex:1;min-width:120px" x-text="loc.title || '(タイトル未翻訳)'"></span>
-                      <div style="display:flex;gap:4px;align-items:center">
-                        <template x-for="stg in [{key:'translation',label:'翻訳'},{key:'tts',label:'TTS'},{key:'editing',label:'編集'}]" :key="stg.key">
-                          <span style="font-size:10px;padding:2px 6px;border-radius:3px;white-space:nowrap"
-                                :style="`background:${localeChip(loc.status?.[stg.key]).color}22;color:${localeChip(loc.status?.[stg.key]).color};border:1px solid ${localeChip(loc.status?.[stg.key]).color}55`"
-                                :title="stg.label + ': ' + (loc.status?.[stg.key] || 'not_started')"
-                                x-text="`${stg.label}:${localeChip(loc.status?.[stg.key]).label}`"></span>
-                        </template>
-                      </div>
-                      <span x-show="loc.stale" style="font-size:11px;color:#f87171" title="原語の台本が翻訳後に変更されています">⚠ 原語更新あり</span>
-                      <button class="btn btn-ghost btn-sm" @click="viewLocaleScript(loc.lang)"
-                              x-text="viewingLocale === loc.lang ? '閉じる' : '表示'"></button>
-                      <button class="btn btn-ghost btn-sm" @click="translateEpisode(loc.lang, true)"
-                              :disabled="translating" title="再翻訳（上書き）">↺ 再翻訳</button>
-                      <button class="btn btn-ghost btn-sm" style="color:#f87171" @click="deleteLocale(loc.lang)"
-                              title="この言語の翻訳・音声・編集情報を削除">✕</button>
+                <div class="card" x-show="viewingLocale">
+                  <h2 style="display:flex;align-items:center;gap:10px;flex-wrap:wrap">
+                    <span x-text="viewingLocale.toUpperCase()"></span>
+                    <div style="display:flex;gap:4px;align-items:center">
+                      <template x-for="stg in [{key:'translation',label:'翻訳'},{key:'tts',label:'TTS'},{key:'editing',label:'編集'}]" :key="stg.key">
+                        <span style="font-size:10px;padding:2px 6px;border-radius:3px;white-space:nowrap;font-weight:400;text-transform:none"
+                              :style="`background:${localeChip(currentLocaleMeta?.status?.[stg.key]).color}22;color:${localeChip(currentLocaleMeta?.status?.[stg.key]).color};border:1px solid ${localeChip(currentLocaleMeta?.status?.[stg.key]).color}55`"
+                              :title="stg.label + ': ' + (currentLocaleMeta?.status?.[stg.key] || 'not_started')"
+                              x-text="`${stg.label}:${localeChip(currentLocaleMeta?.status?.[stg.key]).label}`"></span>
+                      </template>
                     </div>
-                  </template>
+                    <span x-show="currentLocaleMeta?.stale" style="font-size:11px;color:#f87171;font-weight:400" title="原語の台本が翻訳後に変更されています">⚠ 原語更新あり</span>
+                    <span style="margin-left:auto;display:flex;gap:6px">
+                      <button class="btn btn-ghost btn-sm" @click="translateEpisode(viewingLocale, true)"
+                              :disabled="translating" title="再翻訳（上書き）">↺ 再翻訳</button>
+                      <button class="btn btn-ghost btn-sm" style="color:#f87171" @click="deleteLocale(viewingLocale)"
+                              title="この言語の翻訳・音声・編集情報を削除">✕ 削除</button>
+                    </span>
+                  </h2>
+                  <div style="font-size:12px;color:#94a3b8;margin-bottom:10px" x-text="currentLocaleMeta?.title || '(タイトル未翻訳)'"></div>
+
                   <!-- 翻訳プレビュー（インライン編集可・要再生成バッジ） -->
-                  <div x-show="viewingLocale && localeScript" style="background:#0f1117;border:1px solid #374151;border-radius:6px;padding:10px;max-height:340px;overflow-y:auto">
+                  <div x-show="localeScript" style="background:#0f1117;border:1px solid #374151;border-radius:6px;padding:10px;max-height:440px;overflow-y:auto">
                     <template x-for="line in localeScript?.lines || []" :key="line.id">
                       <div style="display:flex;gap:10px;padding:4px 0;border-bottom:1px solid #1f2937;font-size:12px;align-items:center">
                         <span style="color:#4b5563;min-width:24px;text-align:right" x-text="line.order"></span>
@@ -1426,8 +1465,9 @@
                       </div>
                     </template>
                   </div>
-                  <!-- 翻訳設定（モデル・訳調指示） -->
-                  <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">
+
+                  <!-- 翻訳設定（モデル・訳調指示。この言語の再翻訳・新規行の追従翻訳の両方に使う） -->
+                  <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-top:10px">
                     <select x-model="localeModel" style="padding:6px 10px;font-size:12px;width:auto;max-width:220px">
                       <option value="">既定（台本生成のモデルを使用）</option>
                       <template x-for="p in llmProviders.filter(p => p.available)" :key="p.id">
@@ -1441,25 +1481,9 @@
                     <input type="text" x-model="localeInstructions" placeholder="訳調指示（任意・例: カジュアルに）"
                            style="padding:6px 10px;font-size:12px;flex:1;min-width:160px">
                   </div>
-                  <!-- 言語追加 -->
-                  <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">
-                    <select x-model="localeLangInput" style="padding:6px 10px;font-size:13px;width:auto">
-                      <option value="en">English (en)</option>
-                      <option value="es">Español (es)</option>
-                      <option value="zh">中文 (zh)</option>
-                      <option value="ko">한국어 (ko)</option>
-                      <option value="fr">Français (fr)</option>
-                      <option value="de">Deutsch (de)</option>
-                      <option value="pt">Português (pt)</option>
-                    </select>
-                    <button class="btn btn-primary btn-sm" @click="translateEpisode(localeLangInput, false)"
-                            :disabled="translating || !localesInfo?.has_source_script">
-                      <span x-text="translating ? '翻訳中…' : '🌐 翻訳を作成'"></span>
-                    </button>
-                    <span style="font-size:11px;color:#4b5563">LLM行保存翻訳（line_id維持・約10〜30秒）</span>
-                  </div>
                 </div>
               </div>
+              <!-- /翻訳言語タブ -->
 
             </div>
           </div>
@@ -1489,18 +1513,19 @@
               <span class="engine-badge" :class="ttsEngineOk ? 'engine-ok' : 'engine-err'"
                     x-text="ttsEngineOk ? '● エンジン接続中' : '● エンジン未接続'"></span>
               <template x-if="ttsMode === 'gen'">
-                <div style="display:flex;align-items:center;gap:6px;margin-left:8px">
-                  <span style="font-size:11px;color:#4b5563">🌐 言語:</span>
-                  <select x-model="ttsLang" @change="onTtsLangChange()" style="padding:4px 8px;font-size:12px;width:auto">
-                    <option value="">原語（<span x-text="localesInfo?.source_language || 'ja'"></span>）</option>
-                    <template x-for="loc in (localesInfo?.locales || []).filter(l => l.status?.translation === 'done')" :key="loc.lang">
-                      <option :value="loc.lang" x-text="loc.lang.toUpperCase()"></option>
-                    </template>
-                  </select>
-                  <span x-show="ttsLang" style="font-size:10px;padding:2px 6px;border-radius:3px"
-                        :style="ttsEngineBadgeReachable ? 'background:#34d39922;color:#34d399;border:1px solid #34d39955' : 'background:#f8717122;color:#f87171;border:1px solid #f8717155'"
-                        x-text="`omnivoice ${ttsEngineBadgeReachable ? '接続中' : '未接続'}`"></span>
+                <div class="mode-tabs" style="margin-left:8px">
+                  <button class="mode-btn" :class="{ active: !ttsLang }" @click="ttsLang = ''; onTtsLangChange()">
+                    日本語 <span style="opacity:.65">(原語)</span>
+                  </button>
+                  <template x-for="loc in (localesInfo?.locales || []).filter(l => l.status?.translation === 'done')" :key="loc.lang">
+                    <button class="mode-btn" :class="{ active: ttsLang === loc.lang }" @click="ttsLang = loc.lang; onTtsLangChange()">
+                      <span x-text="loc.lang.toUpperCase()"></span>
+                    </button>
+                  </template>
                 </div>
+                <span x-show="ttsLang" style="font-size:10px;padding:2px 6px;border-radius:3px"
+                      :style="ttsEngineBadgeReachable ? 'background:#34d39922;color:#34d399;border:1px solid #34d39955' : 'background:#f8717122;color:#f87171;border:1px solid #f8717155'"
+                      x-text="`omnivoice ${ttsEngineBadgeReachable ? '接続中' : '未接続'}`"></span>
               </template>
             </div>
             <div x-show="ttsLang && ttsHealth && !ttsHealth.engines?.omnivoice?.reachable" class="tts-offline-hint">
@@ -2897,15 +2922,16 @@
             <span style="font-size:10px;padding:2px 8px;border-radius:99px"
                   :style="editOk ? 'background:#14532d;color:#bbf7d0' : 'background:#7f1d1d;color:#fecaca'"
                   x-text="editOk ? 'editing-agent 接続OK' : 'editing-agent 接続不可'"></span>
-            <span style="display:flex;align-items:center;gap:6px;margin-left:auto">
-              <span style="font-size:11px;color:#4b5563;font-weight:400">🌐 言語:</span>
-              <select x-model="editLang" @change="loadEditResult()" style="padding:4px 8px;font-size:12px;width:auto">
-                <option value="">原語（<span x-text="localesInfo?.source_language || 'ja'"></span>）</option>
-                <template x-for="loc in (localesInfo?.locales || []).filter(l => l.status?.tts === 'done' || l.status?.editing !== 'not_started')" :key="loc.lang">
-                  <option :value="loc.lang" x-text="loc.lang.toUpperCase()"></option>
-                </template>
-              </select>
-            </span>
+            <div class="mode-tabs" style="margin-left:auto">
+              <button class="mode-btn" :class="{ active: !editLang }" @click="editLang = ''; loadEditResult()">
+                日本語 <span style="opacity:.65">(原語)</span>
+              </button>
+              <template x-for="loc in (localesInfo?.locales || []).filter(l => l.status?.tts === 'done' || l.status?.editing !== 'not_started')" :key="loc.lang">
+                <button class="mode-btn" :class="{ active: editLang === loc.lang }" @click="editLang = loc.lang; loadEditResult()">
+                  <span x-text="loc.lang.toUpperCase()"></span>
+                </button>
+              </template>
+            </div>
           </h2>
           <p style="font-size:13px;color:#94a3b8;margin:8px 0 16px">
             script.json・tts.json・footage.json を統合し、DaVinci Resolve用のラフ編集データ（timeline.otio・subtitles.srt）を生成します。
@@ -3585,11 +3611,11 @@ function app() {
     // 名前付きドラフト
     namedDrafts: [],
     saveNameInput: '',
-    // 多言語（行保存翻訳）
+    // 多言語（行保存翻訳・言語タブ）
     localesInfo: null,
     localeLangInput: 'en',
     translating: false,
-    viewingLocale: null,
+    viewingLocale: '',          // ''=原語タブ / 'en'等=翻訳言語タブ
     localeScript: null,
     localeModel: '',
     localeInstructions: '',
@@ -3597,6 +3623,8 @@ function app() {
     editingLocaleLineText: '',
     localeTtsTextsCache: {},
     regeneratingLocaleLineId: null,
+    localeLineIdSets: {},       // {lang: Set(line_id)} — 原語タブでの「未翻訳行」判定に使う
+    translatingNewLineKey: null,
     // TTSタブ
     ttsMode: 'gen',
     ttsEngineOk: false,
@@ -4335,6 +4363,8 @@ function app() {
       const r = await fetch(`${SAPI}/projects/${this.currentProject.id}/episodes/${episodeNumber}/script?draft=true`);
       this.activeEpisodeNumber = episodeNumber;
       localStorage.setItem('director_last_episode', String(episodeNumber));
+      this.viewingLocale = '';   // 話が変わったら言語タブは原語へ戻す（別話に同じ言語があるとは限らない）
+      this.localeScript = null;
       if (r.ok) {
         this.draft = await r.json();
         this.warnings = [];
@@ -4423,7 +4453,7 @@ function app() {
     // ─── 多言語（行保存翻訳） ───────────────────────────────
 
     async loadLocales() {
-      if (!this.currentProject) { this.localesInfo = null; return; }
+      if (!this.currentProject) { this.localesInfo = null; this.localeLineIdSets = {}; return; }
       const ep = this.activeEpisodeNumber || 1;
       try {
         const r = await fetch(`${SAPI}/projects/${this.currentProject.id}/episodes/${ep}/locales`);
@@ -4431,8 +4461,28 @@ function app() {
       } catch (e) {
         this.localesInfo = null;
       }
-      this.viewingLocale = null;
-      this.localeScript = null;
+      // 各翻訳済み言語の行id集合をキャッシュ（原語タブの「未翻訳行」ボタン判定に使う）
+      const sets = {};
+      for (const loc of (this.localesInfo?.locales || [])) {
+        if (!loc.has_script) continue;
+        try {
+          const r2 = await fetch(`${SAPI}/projects/${this.currentProject.id}/episodes/${ep}/locales/${loc.lang}/script`);
+          if (r2.ok) {
+            const d = await r2.json();
+            sets[loc.lang] = new Set((d.lines || []).map(l => l.id));
+          }
+        } catch (e) { /* 失敗した言語はボタン非表示扱い */ }
+      }
+      this.localeLineIdSets = sets;
+      // 選択中の言語タブが削除等で消えていたら原語タブへ戻す（それ以外はタブ選択を維持＝loadLocalesはタブ切替のたびに再実行される）
+      if (this.viewingLocale && !this.localesInfo?.locales?.some(l => l.lang === this.viewingLocale && l.has_script)) {
+        this.viewingLocale = '';
+        this.localeScript = null;
+      }
+    },
+
+    get currentLocaleMeta() {
+      return (this.localesInfo?.locales || []).find(l => l.lang === this.viewingLocale) || null;
     },
 
     async translateEpisode(lang, force) {
@@ -4455,25 +4505,21 @@ function app() {
         );
         const data = await r.json();
         if (!r.ok) { alert('翻訳エラー: ' + (data.detail || JSON.stringify(data))); return; }
-        alert(`${lang} 翻訳完了！ ${data.translated_count}/${data.line_count}行\nタイトル: ${data.title}`);
         await this.loadLocales();
+        await this.selectScriptLang(lang);   // 完成した言語タブへ切り替える
       } finally {
         this.translating = false;
       }
     },
 
-    async viewLocaleScript(lang) {
+    async selectScriptLang(lang) {
       this.editingLocaleLineId = null;
-      if (this.viewingLocale === lang) {
-        this.viewingLocale = null;
-        this.localeScript = null;
-        return;
-      }
+      this.viewingLocale = lang;
+      if (!lang) return;   // 原語タブは追加読み込み不要
       const ep = this.activeEpisodeNumber || 1;
       const r = await fetch(`${SAPI}/projects/${this.currentProject.id}/episodes/${ep}/locales/${lang}/script`);
-      if (!r.ok) { alert('翻訳スクリプトを読み込めません'); return; }
+      if (!r.ok) { alert('翻訳スクリプトを読み込めません'); this.localeScript = null; return; }
       this.localeScript = await r.json();
-      this.viewingLocale = lang;
       await this.loadLocaleTtsTexts(lang);
     },
 
@@ -4557,6 +4603,47 @@ function app() {
         alert('リテイクに失敗しました: ' + e);
       } finally {
         this.regeneratingLocaleLineId = null;
+      }
+    },
+
+    // 原語タブ用: この行がまだ翻訳されていない（既に翻訳済みの）言語一覧
+    missingLocalesForLine(line) {
+      const out = [];
+      for (const loc of (this.localesInfo?.locales || [])) {
+        if (!loc.has_script) continue;
+        const set = this.localeLineIdSets[loc.lang];
+        if (set && !set.has(line.id)) out.push(loc.lang);
+      }
+      return out;
+    },
+
+    async translateNewLineToLocale(lineId, lang) {
+      if (!this.currentProject) return;
+      const key = `${lineId}:${lang}`;
+      if (this.translatingNewLineKey) return;
+      this.translatingNewLineKey = key;
+      const ep = this.activeEpisodeNumber || 1;
+      try {
+        const r = await fetch(
+          `${SAPI}/projects/${this.currentProject.id}/episodes/${ep}/locales/${lang}/lines/${lineId}/translate`,
+          {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              model: this.localeModel || this.selectedModel || null,
+              instructions: this.localeInstructions.trim() || null,
+            }),
+          },
+        );
+        const data = await r.json();
+        if (!r.ok) { alert('翻訳に失敗しました: ' + (data.detail || JSON.stringify(data))); return; }
+        if (!this.localeLineIdSets[lang]) this.localeLineIdSets[lang] = new Set();
+        this.localeLineIdSets[lang].add(lineId);
+        if (this.viewingLocale === lang) this.localeScript = data;
+      } catch (e) {
+        alert('翻訳に失敗しました: ' + e);
+      } finally {
+        this.translatingNewLineKey = null;
       }
     },
 

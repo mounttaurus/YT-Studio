@@ -852,6 +852,75 @@ async def translate_episode(
     }
 
 
+class TranslateLineRequest(BaseModel):
+    model: Optional[str] = None
+    instructions: Optional[str] = None
+
+
+@router.post("/projects/{project_id}/episodes/{episode_number}/locales/{lang}/lines/{line_id}/translate")
+async def translate_new_line(
+    project_id: str, episode_number: int, lang: str, line_id: str, req: TranslateLineRequest,
+):
+    """確定scriptで新しく追加された行を、既存の翻訳へ1行だけ追従翻訳して挿入する（Docs/08_i18n.md §8b後継）。
+
+    翻訳側は行の挿入・削除・並べ替えAPIを持たない設計（line_id構造の保護）を維持したまま、
+    「原語に既に存在し翻訳側にだけ無い行」を追いつかせる narrow scope な同期API。
+    既存行の再翻訳はスコープ外（訳文の手直しは既存のPATCH行編集を使う）。
+    """
+    script = project_manager.read_script(project_id, episode_number)
+    if script is None:
+        raise HTTPException(status_code=409, detail="確定 script.json がありません")
+    source_lines = script.get("lines", [])
+    source_line = next((l for l in source_lines if l.get("id") == line_id), None)
+    if source_line is None:
+        raise HTTPException(status_code=404, detail=f"行が見つかりません: {line_id}")
+
+    loc_script = project_manager.read_locale_script(project_id, episode_number, lang)
+    if loc_script is None:
+        raise HTTPException(status_code=409, detail=f"{lang} の翻訳がまだありません。先に全体翻訳を作成してください")
+    loc_lines = loc_script.get("lines", [])
+    if any(l.get("id") == line_id for l in loc_lines):
+        raise HTTPException(status_code=409, detail="この行は既に翻訳済みです（インライン編集で修正してください）")
+
+    text = source_line.get("text") or ""
+    translated_text = ""
+    if text.strip():
+        results = await translator._translate_chunk([text], lang, req.model, req.instructions)
+        translated_text = results[0]
+
+    new_line = dict(source_line)
+    new_line["text"] = translated_text
+
+    # 挿入位置: 確定scriptの行順で見て、locale側に既に存在する直近の行の直後（無ければ先頭）
+    anchor_id = None
+    for l in source_lines:
+        if l.get("id") == line_id:
+            break
+        if any(ll.get("id") == l.get("id") for ll in loc_lines):
+            anchor_id = l.get("id")
+
+    if anchor_id is None:
+        loc_lines.insert(0, new_line)
+    else:
+        idx = next((i for i, l in enumerate(loc_lines) if l.get("id") == anchor_id), None)
+        loc_lines.insert((idx + 1) if idx is not None else len(loc_lines), new_line)
+    loc_script["lines"] = loc_lines
+    _renumber_lines(loc_script)
+
+    for s in loc_script.get("sections") or []:
+        ids = s.get("line_ids") or []
+        if source_line.get("section") == s.get("id"):
+            if anchor_id is not None and anchor_id in ids:
+                ids.insert(ids.index(anchor_id) + 1, line_id)
+            elif line_id not in ids:
+                ids.insert(0, line_id)
+            s["line_ids"] = ids
+            break
+
+    project_manager.save_locale_script(project_id, episode_number, lang, loc_script)
+    return _apply_live_speaker_names(project_id, loc_script)
+
+
 @router.get("/projects/{project_id}/episodes/{episode_number}/locales")
 async def list_locales(project_id: str, episode_number: int):
     """このエピソードの言語別状態（原語＋翻訳済み言語＋鮮度）を返す。"""
@@ -974,6 +1043,19 @@ def _renumber_lines(doc: dict) -> None:
     for i, l in enumerate(doc.get("lines", []), 1):
         l["order"] = i
     doc.setdefault("metadata", {})["line_count"] = len(doc.get("lines", []))
+
+
+def _remove_line_from_doc(doc: dict, line_id: str) -> bool:
+    """doc['lines'] からline_idを除去し、order振り直し＋sections同期する。除去できたかを返す。"""
+    before = len(doc.get("lines", []))
+    doc["lines"] = [l for l in doc.get("lines", []) if l.get("id") != line_id]
+    removed = len(doc["lines"]) < before
+    if removed:
+        _renumber_lines(doc)
+        for s in doc.get("sections") or []:
+            if s.get("line_ids"):
+                s["line_ids"] = [i for i in s["line_ids"] if i != line_id]
+    return removed
 
 
 def _next_line_id(*docs) -> str:
@@ -1128,6 +1210,8 @@ async def delete_line(
     episode: int = Query(1),
 ):
     """特定行を削除する（ドラフトと確定版script.jsonの両方から）。
+    確定scriptに存在した行なら、既存の翻訳（locales/{lang}/script.json）からも同じ行を自動で取り除く
+    （孤立した翻訳行を残さない・ユーザーヒアリング済み＝Docs/08_i18n.md後継の言語タブ化プラン参照）。
     対応する音声の削除は呼び出し側が tts-agent の DELETE /projects/{id}/audio/line/{line_id} で行う。
     """
     primary, draft, script = _load_script_docs(project_id, episode)
@@ -1138,21 +1222,25 @@ async def delete_line(
     if line is None:
         raise HTTPException(status_code=404, detail=f"order={order} の行が見つかりません")
     line_id = line.get("id")
-
-    def remove_from(doc: dict) -> None:
-        before = len(doc.get("lines", []))
-        doc["lines"] = [l for l in doc.get("lines", []) if l.get("id") != line_id]
-        if len(doc["lines"]) < before:
-            _renumber_lines(doc)
-            for s in doc.get("sections") or []:
-                if s.get("line_ids"):
-                    s["line_ids"] = [i for i in s["line_ids"] if i != line_id]
+    was_confirmed = script is not None and any(l.get("id") == line_id for l in script.get("lines", []))
 
     if draft is not None:
-        remove_from(draft)
+        _remove_line_from_doc(draft, line_id)
     if script is not None:
-        remove_from(script)
+        _remove_line_from_doc(script, line_id)
     _save_script_docs(project_id, episode, draft, script)
+
+    if was_confirmed:
+        pj = project_manager.read_project(project_id)
+        ep_locales = {}
+        for ep in pj.get("episodes", []):
+            if ep.get("number") == episode:
+                ep_locales = ep.get("locales", {}) or {}
+                break
+        for lang in ep_locales:
+            loc_script = project_manager.read_locale_script(project_id, episode, lang)
+            if loc_script is not None and _remove_line_from_doc(loc_script, line_id):
+                project_manager.save_locale_script(project_id, episode, lang, loc_script)
 
     return {"project_id": project_id, "episode_number": episode, "deleted_line_id": line_id}
 
