@@ -156,6 +156,9 @@ POST /projects/{id}/generate              ← 台本生成
 POST /projects/{id}/regenerate            ← フィードバック付き再生成
      body: { feedback, llm_model? }
 POST /projects/{id}/approve               ← 承認 → script.json確定
+POST /projects/{id}/episodes/{n}/import   ← 外部で書いた完成台本を取り込む（LLM生成スキップ）
+     body: { script, title?, confirm? }   ← confirm=false(既定)はドラフト保存のみ・true は即時確定
+     query: force?                        ← 確定済み話への上書きは force=true 必須
 GET  /projects/{id}/script                ← 現在の台本取得
 PATCH /projects/{id}/script/line/{order} ← 行単位直接編集
 GET  /projects                            ← プロジェクト一覧
@@ -170,6 +173,8 @@ GET  /docs                                ← FastAPI自動生成ドキュメン
 scripting_generate(project_id, style_id, llm_model?)  → script_draft
 scripting_regenerate(project_id, feedback)             → script_draft
 scripting_approve(project_id)                          → script.json path
+import_script(project_id, episode_number, script, title?, confirm?, force?)  ← 外部台本取込（mcp-agent/tools.py）
+get_script(project_id, episode_number?, draft?)        → script JSON（mcp-agent/tools.py）
 scripting_get_script(project_id)                       → script JSON
 scripting_list_styles()                                → styles[]
 scripting_list_projects()                              → projects[]

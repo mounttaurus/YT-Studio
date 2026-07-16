@@ -191,6 +191,36 @@ async def approve_script(project_id: str, episode_number: int) -> dict:
     )
 
 
+async def import_script(project_id: str, episode_number: int, script: dict,
+                        title: Optional[str] = None, confirm: bool = False,
+                        force: bool = False) -> dict:
+    """コンテナ外（呼び出し元エージェント自身の執筆など）で作った完成台本を取り込む。
+
+    script は {"lines": [...], "sections": [...]} 形式（generate_script が返す script と同じ構造）。
+    lines[] の各要素には最低限 line_id / order / speaker_id / text / section が必要。
+    speaker_id は project_status や list_characters/assign_cast で確認した配役済みの役ID
+    （例 "speaker_a"）を使うこと。キャラ名や自作IDは不可＝タイムライン生成時に未割当扱いになる。
+
+    confirm=false（既定）はドラフト保存のみ（可逆）。この後 approve_script で確定する想定。
+    confirm=true は即時確定し、既に確定済み台本がある話への上書きは force=true が必要。
+    """
+    body = {"script": script, "confirm": confirm}
+    if title is not None:
+        body["title"] = title
+    return await dc.request(
+        "POST", f"api/scripting/projects/{project_id}/episodes/{episode_number}/import",
+        json=body, params={"force": force},
+    )
+
+
+async def get_script(project_id: str, episode_number: int = 1, draft: bool = True) -> dict:
+    """指定話のドラフトまたは確定済み台本を返す（import_script後の取り込み確認等に使う）。"""
+    return await dc.get(
+        f"api/scripting/projects/{project_id}/script",
+        params={"draft": draft, "episode": episode_number},
+    )
+
+
 async def generate_series_script(project_id: str, style_id: str,
                                   episode_count: Optional[int] = None,
                                   extra_instruction: Optional[str] = None,
@@ -651,6 +681,8 @@ TOOLS = [
     {"fn": generate_script,      "side_effects": [S.WRITE]},
     {"fn": generate_series_script, "side_effects": [S.WRITE]},
     {"fn": approve_script,       "side_effects": [S.WRITE]},
+    {"fn": import_script,        "side_effects": [S.WRITE]},
+    {"fn": get_script,           "side_effects": [S.READ]},
     {"fn": generate_queries,     "side_effects": [S.WRITE]},
     {"fn": search_footage,       "side_effects": [S.WRITE, S.COST]},
     {"fn": auto_select_footage,  "side_effects": [S.WRITE]},

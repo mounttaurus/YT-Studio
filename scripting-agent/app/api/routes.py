@@ -118,6 +118,7 @@ class StyleDefaultRequest(BaseModel):
 class ImportScriptRequest(BaseModel):
     script: dict
     title: Optional[str] = None
+    confirm: bool = False  # false=ドラフト保存のみ（既定・可逆） / true=即時確定
 
 
 class ImportStyleRequest(BaseModel):
@@ -570,11 +571,13 @@ async def import_script(
     project_id: str, episode_number: int, req: ImportScriptRequest,
     force: bool = Query(False, description="既に確定済み台本がある話でも上書きする"),
 ):
-    """完成台本を直接インポートして script.json として確定する（LLM生成をスキップ）。
+    """完成台本を直接インポートする（LLM生成をスキップ）。
 
     封筒形式（{"kind":"yt-studio-script","script":{...}}）と、script.json生の中身
     （{"lines":[...], ...}）の両方を受理する＝ファイル名やラップの有無に依存しない。
-    既に確定済み台本がある話への上書きは force=true を明示した時のみ許可する。
+    confirm=false（既定）はドラフト保存のみ（可逆・approve_scriptで別途確定する前提）。
+    confirm=true は即時確定し、既に確定済み台本がある話への上書きは force=true を
+    明示した時のみ許可する。
     """
     script = req.script
     if script.get("kind") == "yt-studio-script" and isinstance(script.get("script"), dict):
@@ -582,14 +585,27 @@ async def import_script(
     if "lines" not in script or not isinstance(script.get("lines"), list):
         raise HTTPException(status_code=400, detail="script.lines が必要です")
 
+    script.setdefault("project_id", project_id)
+    script.setdefault("schema_version", "1.0.0")
+
+    if not req.confirm:
+        project_manager.save_draft(project_id, script, episode_number)
+        project_manager.ensure_episode_in_project_json(project_id, episode_number, req.title or "")
+        project_manager.update_episode_status(project_id, episode_number, "scripting", "pending")
+        project_manager.update_project_status(project_id, "scripting", "pending")
+        return {
+            "project_id": project_id,
+            "episode_number": episode_number,
+            "status": "draft_saved",
+            "line_count": len(script["lines"]),
+        }
+
     if not force and project_manager.read_script(project_id, episode_number) is not None:
         raise HTTPException(
             status_code=409,
             detail=f"第{episode_number}話には既に確定済み台本があります。force=true で上書きできます",
         )
 
-    script.setdefault("project_id", project_id)
-    script.setdefault("schema_version", "1.0.0")
     script.setdefault("metadata", {})
     script["metadata"]["checked_by_director"] = True
     script["metadata"]["check_passed"] = True
