@@ -122,13 +122,14 @@
     .mode-long  { font-size: 9px; background: #2d1a4a; color: #c084fc; border: 1px solid #6d28d9; padding: 1px 5px; border-radius: 9999px; }
     .edit-style-btn { font-size: 10px; background: none; border: 1px solid #374151; border-radius: 4px; color: #64748b; padding: 2px 7px; cursor: pointer; }
     .edit-style-btn:hover { border-color: #7c3aed; color: #c4b5fd; }
-    .voice-select-wrap { display: flex; flex-direction: column; gap: 4px; }
-    .voice-option { display: flex; align-items: center; gap: 8px; background: #0f1117; border: 1px solid #374151; border-radius: 5px; padding: 6px 10px; cursor: pointer; transition: border-color 0.12s; }
-    .voice-option:hover { border-color: #7c3aed; }
-    .voice-option.selected { border-color: #7c3aed; background: #1a1040; }
-    .voice-option .vname { font-size: 12px; color: #e2e8f0; font-weight: 600; }
-    .voice-option .vdesc { font-size: 10px; color: #64748b; }
-    .voice-option .vrole { font-size: 9px; padding: 1px 5px; border-radius: 9999px; }
+    .chara-chip-wrap { display: flex; flex-wrap: wrap; gap: 6px; }
+    .chara-chip { display: inline-flex; align-items: center; gap: 6px; background: #0f1117; border: 1px solid #374151; border-radius: 9999px; padding: 5px 12px; cursor: pointer; transition: border-color 0.12s; font-size: 12px; color: #e2e8f0; }
+    .chara-chip:hover { border-color: #7c3aed; }
+    .chara-chip.selected { border-color: #7c3aed; background: #1a1040; }
+    .chip-dot { width: 7px; height: 7px; border-radius: 50%; flex-shrink: 0; }
+    .chip-dot.dot-ok { background: #4ade80; }
+    .chip-dot.dot-warn { background: #fb923c; }
+    .style-id-badge { font-size: 9px; font-family: monospace; background: #1a1d2e; color: #94a3b8; border: 1px solid #374151; padding: 1px 6px; border-radius: 4px; }
     .vrole-regular { background: #1e3a2f; color: #4ade80; }
     .vrole-guest { background: #3b2a1e; color: #fb923c; }
     .tts-offline-hint { font-size: 11px; color: #d97706; background: #2d1b00; border: 1px solid #92400e; border-radius: 4px; padding: 6px 8px; }
@@ -905,6 +906,7 @@
                           <span class="name" x-text="s.style_name"></span>
                           <span x-show="!s.is_builtin" class="user-style-badge">カスタム</span>
                           <span x-show="s.is_default" class="default-badge">デフォルト</span>
+                          <span class="style-id-badge" x-text="s.style_id" title="MCP経由の指示で使えるID"></span>
                         </div>
                         <button class="expand-btn" @click.stop="toggleStyleDetail(s.style_id)"
                                 x-text="expandedStyleId === s.style_id ? '▲ 閉じる' : '▼ 詳細'"></button>
@@ -3224,9 +3226,18 @@
 </div>
 
 <!-- 新規スタイル作成モーダル -->
-<div class="modal-overlay" x-show="showNewStyleModal" x-cloak>
+<div class="modal-overlay" x-show="showNewStyleModal" x-cloak
+     @click.self="showNewStyleModal = false"
+     @keydown.escape.window="showNewStyleModal = false">
   <div class="modal-box">
-    <h3 x-text="editingStyleId ? `✏ スタイルを編集${editingBuiltin ? '（複製して保存）' : ''}` : '＋ 新規スタイルを作成'"></h3>
+    <div style="display:flex;justify-content:space-between;align-items:center;gap:12px">
+      <h3 style="margin:0" x-text="editingStyleId ? `✏ スタイルを編集${editingBuiltin ? '（複製して保存）' : ''}` : '＋ 新規スタイルを作成'"></h3>
+      <button class="btn btn-ghost btn-sm" style="padding:2px 8px" @click="showNewStyleModal = false" title="閉じる">✕</button>
+    </div>
+    <div x-show="editingStyleId" style="font-size:11px;color:#64748b">
+      style_id: <span class="style-id-badge" x-text="editingStyleId"></span>
+      <span style="color:#475569"> — 台本生成をMCP経由で指示する時にこのIDを使えます</span>
+    </div>
     <div x-show="editingBuiltin" style="font-size:11px;color:#fbbf24;background:#2d1b00;border:1px solid #92400e;border-radius:5px;padding:8px">
       ⚠ 組み込みスタイルは直接編集できません。変更内容は<strong>カスタムスタイルとして新規保存</strong>されます。
     </div>
@@ -3340,20 +3351,15 @@
               <p style="font-size:11px;color:#64748b;margin:2px 0 6px">
                 🎭 この役を演じるキャラを選びます。<b>名前・声・字幕・性格はキャラ設定をそのまま使用</b>（声の変更は🎭キャラタブで）。
               </p>
-              <div class="voice-select-wrap">
+              <div class="chara-chip-wrap">
                 <template x-for="c in charas" :key="c.char_id">
-                  <div class="voice-option"
+                  <div class="chara-chip"
                        :class="{ selected: sp.character_id === c.char_id }"
+                       :title="(c.caption ? `字幕: ${c.caption}` : (c.description || '')) + ((c.voice && c.voice.voice_id) ? ` / 🔊${c.voice.voice_id}` : ' / ⚠声未割当')"
                        @click="sp.character_id = c.char_id; sp.name = c.name">
-                    <div style="flex:1">
-                      <div style="display:flex;align-items:center;gap:6px">
-                        <span class="vname" x-text="c.name || c.char_id"></span>
-                        <span class="vrole" :class="(c.voice && c.voice.voice_id) ? 'vrole-regular' : 'vrole-guest'"
-                              x-text="(c.voice && c.voice.voice_id) ? `🔊 ${c.voice.voice_id}` : '⚠ 声未割当'"></span>
-                      </div>
-                      <div class="vdesc" x-text="c.caption ? `字幕: ${c.caption}` : (c.description || '')"></div>
-                    </div>
-                    <div x-show="sp.character_id === c.char_id" style="color:#7c3aed;font-size:14px">✓</div>
+                    <span class="chip-dot" :class="(c.voice && c.voice.voice_id) ? 'dot-ok' : 'dot-warn'"></span>
+                    <span x-text="c.name || c.char_id"></span>
+                    <span x-show="sp.character_id === c.char_id" style="color:#7c3aed">✓</span>
                   </div>
                 </template>
               </div>

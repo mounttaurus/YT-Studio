@@ -87,7 +87,9 @@ def _slugify(text: str) -> str:
     text = re.sub(r"[^\w\s-]", "", text, flags=re.UNICODE)
     text = re.sub(r"[\s_-]+", "_", text).strip("_")
     slug = re.sub(r"[^\x00-\x7F]", "", text).lower()
-    if not slug:
+    # 日本語名は非ASCII除去後にほぼ空になる（例:「3章構成」→"3"）。
+    # 短すぎるslugは他スタイルと衝突しやすい紛らわしいIDになるため時刻ベースにフォールバックする
+    if len(slug) < 3:
         slug = f"style_{datetime.now(timezone.utc).strftime('%Y%m%d%H%M%S')}"
     return slug[:40]
 
