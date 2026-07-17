@@ -422,4 +422,103 @@ def _build_series_continuity_instruction(
             "- この話自体は完結させつつ、最後に次回への興味を引く一言を添えてください。",
         ]
 
+
+# ─── 行単位の再生成 ─────────────────────────────────────────────────────
+# 台本全体を作り直すregenerate()と異なり、指定した行だけをLLMに書き直させ、
+# それ以外の行（順序・話者・セクション含む）には一切触れない。台本全文を再生成
+# コンテキストとして渡すため文脈は保たれる（飛び飛びの行選択でも成立する）。
+
+LINE_ID_PATTERN = re.compile(
+    r"\[LINE_ID:(?P<id>\S+)\]\s*\[EMOTION:(?P<emotion>[^\]]+)\]\s*(?P<text>.+)"
+)
+
+
+async def regenerate_lines(
+    project_id: str,
+    episode_number: int,
+    line_ids: list[str],
+    feedback: str,
+    model: Optional[str] = None,
+) -> tuple[dict, list[str], list[str]]:
+    """既存ドラフトの指定行だけをLLMで書き直す（他行は変更しない）。
+
+    Returns: (更新後のscript_json, warnings, 実際に書き換えられたline_idのリスト)
+    """
+    from app.core import project_manager
+
+    draft = project_manager.read_draft(project_id, episode_number)
+    if draft is None:
+        raise ValueError(f"第{episode_number}話のドラフトが見つかりません")
+
+    lines = draft.get("lines", [])
+    by_id = {l["id"]: l for l in lines}
+    missing = [lid for lid in line_ids if lid not in by_id]
+    if missing:
+        raise ValueError(f"指定された行が見つかりません: {', '.join(missing)}")
+
+    model = model or llm_client.get_default_model()
+
+    # スタイルが分かれば話者トーンを渡す（import_script由来の台本はstyle_idを持たないことがあるため任意）。
+    style_id = draft.get("metadata", {}).get("style")
+    style = style_registry.get_style(style_id) if style_id else None
+    speaker_desc = ""
+    if style:
+        speaker_desc = "\n".join(
+            f"- {sp['id']}（{sp.get('name', '')}）: {sp.get('tone', '')}"
+            for sp in style.get("speakers", [])
+        )
+
+    script_dump = "\n".join(
+        f"[LINE_ID:{l['id']}] [SPEAKER:{l['speaker_id']}] [SECTION:{l.get('section', '')}] {l['text']}"
+        for l in lines
+    )
+
+    prompt_parts = [
+        "以下はYouTube動画台本の全文です（話の流れを理解するために渡します。"
+        "指定されたline_id以外の行は絶対に変更しないでください）。",
+        "",
+        script_dump,
+        "",
+    ]
+    if speaker_desc:
+        prompt_parts += [f"## 話者のトーン\n{speaker_desc}", ""]
+    prompt_parts += [
+        f"## 書き換え対象\n次のline_idの行だけを、下記の指示に従って書き直してください: {', '.join(line_ids)}",
+        "",
+        f"## 指示\n{feedback}",
+        "",
+        "## 出力形式\n対象の行だけを、次の形式で出力してください（他の行は一切出力しない。"
+        "話者・セクションは変更しない・書き直した行数は対象と同じにする）:",
+        "[LINE_ID:xxx] [EMOTION:感情] セリフ内容",
+        "EMOTIONは次のいずれか1語のみ使用してください（日本語の説明語や複合語は不可）: "
+        + ", ".join(sorted(script_validator.VALID_EMOTIONS)),
+    ]
+
+    raw_output = await llm_client.chat(
+        prompt="\n".join(prompt_parts), model=model, system=SCRIPT_SYSTEM_PROMPT,
+    )
+
+    rewritten: dict[str, dict] = {}
+    for raw_line in raw_output.strip().splitlines():
+        raw_line = raw_line.strip()
+        m = LINE_ID_PATTERN.match(raw_line)
+        if not m or m.group("id") not in by_id:
+            continue
+        emotion = m.group("emotion").lower()
+        if emotion not in script_validator.VALID_EMOTIONS:
+            emotion = "neutral"
+        rewritten[m.group("id")] = {"text": m.group("text").strip(), "emotion": emotion}
+
+    warnings: list[str] = []
+    applied: list[str] = []
+    for lid in line_ids:
+        if lid in rewritten:
+            by_id[lid]["text"] = rewritten[lid]["text"]
+            by_id[lid]["emotion"] = rewritten[lid]["emotion"]
+            applied.append(lid)
+        else:
+            warnings.append(f"{lid} はLLM出力に含まれておらず、書き換えられませんでした")
+
+    return draft, warnings, applied
+
     return "\n".join(lines)

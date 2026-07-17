@@ -147,7 +147,9 @@
     .episode-item .ep-title { font-size: 12px; color: #e2e8f0; font-weight: 600; }
     .episode-item .ep-sub { display: flex; gap: 4px; align-items: center; margin-top: 3px; flex-wrap: wrap; }
     .script-lines { display: flex; flex-direction: column; gap: 2px; }
-    .script-line { display: grid; grid-template-columns: 36px 100px 90px 1fr auto; gap: 8px; align-items: start; padding: 8px; border-radius: 6px; border: 1px solid transparent; }
+    .script-line { display: grid; grid-template-columns: 20px 36px 100px 90px 1fr auto; gap: 8px; align-items: start; padding: 8px; border-radius: 6px; border: 1px solid transparent; }
+    .script-line.line-selected { background: rgba(124,58,237,.1); border-color: #7c3aed; }
+    .script-line .line-select-cb { margin-top: 3px; cursor: pointer; accent-color: #7c3aed; }
     .script-line:hover { background: #1a1d2e; border-color: #374151; }
     .script-line.editing { background: #1e1040; border-color: #7c3aed; }
     .line-num { font-size: 11px; color: #4b5563; text-align: right; padding-top: 2px; }
@@ -1301,13 +1303,38 @@
 
               <!-- 台本プレビュー -->
               <div class="card" x-show="draft">
-                <h2>台本プレビュー <span style="font-weight:400;text-transform:none;color:#4b5563;font-size:11px">（行をクリックで編集）</span></h2>
+                <h2>台本プレビュー <span style="font-weight:400;text-transform:none;color:#4b5563;font-size:11px">（行をクリックで編集・チェックボックスで選択／Shift+クリックで範囲選択）</span></h2>
+
+                <!-- 選択行の一括再生成バー -->
+                <div x-show="selectedLineIds.length > 0"
+                     style="display:flex;gap:8px;align-items:flex-start;margin-bottom:12px;padding:10px;background:#160d2e;border:1px solid #6d28d9;border-radius:8px">
+                  <div style="flex:1">
+                    <div style="font-size:11px;color:#c4b5fd;margin-bottom:4px" x-text="`${selectedLineIds.length}行を選択中`"></div>
+                    <textarea x-model="lineRegenFeedback" rows="2" style="font-size:12px"
+                              placeholder="この選択行への修正指示を入力（例：もっとテンポよく／SEOキーワード『〜』を自然に入れて）"></textarea>
+                  </div>
+                  <div style="display:flex;flex-direction:column;gap:6px;flex-shrink:0">
+                    <button class="btn btn-primary btn-sm" style="white-space:nowrap"
+                            :disabled="!lineRegenFeedback.trim() || regeneratingLines"
+                            @click="regenerateSelectedLines()">
+                      <span x-text="regeneratingLines ? '生成中...' : `✎ 選択行を再生成 (${selectedLineIds.length})`"></span>
+                    </button>
+                    <button class="btn btn-ghost btn-sm" @click="selectedLineIds = []; lineRegenFeedback = ''">選択解除</button>
+                  </div>
+                </div>
+
                 <div class="script-lines">
                   <template x-if="!draft?.lines?.length">
                     <div class="empty">台本がありません</div>
                   </template>
                   <template x-for="line in draft?.lines || []" :key="line.id">
-                    <div class="script-line" :class="{ editing: editingLineOrder === line.order }" @click="toggleEdit(line)">
+                    <div class="script-line"
+                         :class="{ editing: editingLineOrder === line.order, 'line-selected': selectedLineIds.includes(line.id) }"
+                         @click="toggleEdit(line)">
+                      <input type="checkbox" class="line-select-cb"
+                             :checked="selectedLineIds.includes(line.id)"
+                             @click.stop="toggleLineSelect(line, $event)"
+                             title="選択（Shift+クリックで範囲選択）">
                       <div class="line-num" x-text="line.order"></div>
                       <div>
                         <span class="line-speaker" :class="speakerClass(line.speaker_id)" x-text="line.speaker_name"></span>
@@ -3657,6 +3684,11 @@ function app() {
     feedbackText: '',
     editingLineOrder: null,
     editBuffer: {},
+    // 複数行選択・一括再生成
+    selectedLineIds: [],
+    lastClickedLineOrder: null,
+    lineRegenFeedback: '',
+    regeneratingLines: false,
     modelFilter: '',
     showPendingProviders: false,
     // 名前付きドラフト
@@ -4418,6 +4450,8 @@ function app() {
       localStorage.setItem('director_last_episode', String(episodeNumber));
       this.viewingLocale = '';   // 話が変わったら言語タブは原語へ戻す（別話に同じ言語があるとは限らない）
       this.localeScript = null;
+      this.selectedLineIds = [];  // 話が変わったら行選択もリセット（別話のline_idを引き継がない）
+      this.lastClickedLineOrder = null;
       if (r.ok) {
         this.draft = await r.json();
         this.warnings = [];
@@ -4841,6 +4875,52 @@ function app() {
           speaker_choice: inCast ? line.speaker_id : '',
           voice: this.voiceForSpeaker(line.speaker_id),
         };
+      }
+    },
+
+    // ─── 複数行選択・一括再生成 ─────────────────────────────────────
+    toggleLineSelect(line, event) {
+      const id = line.id;
+      const lines = this.draft?.lines || [];
+      if (event.shiftKey && this.lastClickedLineOrder != null) {
+        const lo = Math.min(this.lastClickedLineOrder, line.order);
+        const hi = Math.max(this.lastClickedLineOrder, line.order);
+        const rangeIds = lines.filter(l => l.order >= lo && l.order <= hi).map(l => l.id);
+        const allSelected = rangeIds.every(rid => this.selectedLineIds.includes(rid));
+        this.selectedLineIds = allSelected
+          ? this.selectedLineIds.filter(sid => !rangeIds.includes(sid))
+          : [...new Set([...this.selectedLineIds, ...rangeIds])];
+      } else {
+        this.selectedLineIds = this.selectedLineIds.includes(id)
+          ? this.selectedLineIds.filter(sid => sid !== id)
+          : [...this.selectedLineIds, id];
+      }
+      this.lastClickedLineOrder = line.order;
+    },
+
+    async regenerateSelectedLines() {
+      if (!this.currentProject || !this.selectedLineIds.length || !this.lineRegenFeedback.trim()) return;
+      this.regeneratingLines = true;
+      try {
+        const r = await fetch(`${SAPI}/projects/${this.currentProject.id}/episodes/${this.activeEpisodeNumber}/regenerate-lines`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            line_ids: this.selectedLineIds,
+            feedback: this.lineRegenFeedback,
+            llm_model: this.selectedModel || null,
+          }),
+        });
+        const data = await r.json();
+        if (!r.ok) { alert('再生成に失敗しました: ' + (data.detail || r.status)); return; }
+        this.draft = data.script;
+        if (data.warnings?.length) alert('一部の行が書き換えられませんでした:\n' + data.warnings.join('\n'));
+        this.selectedLineIds = [];
+        this.lineRegenFeedback = '';
+      } catch (e) {
+        alert('再生成に失敗しました: ' + e);
+      } finally {
+        this.regeneratingLines = false;
       }
     },
 

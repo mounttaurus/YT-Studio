@@ -207,6 +207,20 @@ async def approve_script(project_id: str, episode_number: int) -> dict:
     )
 
 
+async def regenerate_lines(project_id: str, episode_number: int, line_ids: list[str],
+                           feedback: str, llm_model: Optional[str] = None) -> dict:
+    """既存ドラフトの指定行だけをLLMで書き直す（他行・順序・話者・セクションは変更しない・可逆WRITE）。
+
+    generate_script/regenerate（台本全体をゼロから作り直す）よりトークンコストが低い
+    （台本全文をコンテキストに渡すが、出力は変更対象の行だけ）。line_idsは飛び飛びでもよい
+    （台本全文を毎回渡すため文脈は保たれる）。line_idはget_scriptで確認する。
+    """
+    return await dc.request(
+        "POST", f"api/scripting/projects/{project_id}/episodes/{episode_number}/regenerate-lines",
+        json={"line_ids": line_ids, "feedback": feedback, "llm_model": llm_model},
+    )
+
+
 async def import_script(project_id: str, episode_number: int, script: dict,
                         title: Optional[str] = None, confirm: bool = False,
                         force: bool = False, style_name: Optional[str] = None,
@@ -720,6 +734,7 @@ TOOLS = [
     {"fn": generate_script,      "side_effects": [S.WRITE]},
     {"fn": generate_series_script, "side_effects": [S.WRITE]},
     {"fn": approve_script,       "side_effects": [S.WRITE]},
+    {"fn": regenerate_lines,     "side_effects": [S.WRITE]},
     {"fn": import_script,        "side_effects": [S.WRITE]},
     {"fn": get_script,           "side_effects": [S.READ]},
     {"fn": generate_queries,     "side_effects": [S.WRITE]},

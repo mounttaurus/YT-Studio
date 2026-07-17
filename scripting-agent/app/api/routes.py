@@ -51,6 +51,12 @@ class RegenerateRequest(BaseModel):
     episode_number: int = 1
 
 
+class RegenerateLinesRequest(BaseModel):
+    line_ids: list[str]
+    feedback: str
+    llm_model: Optional[str] = None
+
+
 class LineEditRequest(BaseModel):
     text: Optional[str] = None
     emotion: Optional[str] = None
@@ -793,6 +799,40 @@ async def regenerate_script(project_id: str, req: RegenerateRequest):
     except Exception as e:
         project_manager.update_project_status(project_id, "scripting", "error", str(e))
         raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.post("/projects/{project_id}/episodes/{episode_number}/regenerate-lines")
+async def regenerate_script_lines(project_id: str, episode_number: int, req: RegenerateLinesRequest):
+    """既存ドラフトの指定行だけをLLMで書き直す（他行・順序・話者・セクションは変更しない・可逆）。
+
+    regenerate_script（台本全体をゼロから作り直す）と違い、台本全文をコンテキストとして渡しつつ
+    指定line_idの行だけを書き換えるため、re-generateよりトークンコストが低い（出力は変更行のみ）。
+    """
+    if not req.line_ids:
+        raise HTTPException(status_code=400, detail="line_idsが空です")
+    try:
+        script_json, warnings, applied = await script_generator.regenerate_lines(
+            project_id=project_id,
+            episode_number=episode_number,
+            line_ids=req.line_ids,
+            feedback=req.feedback,
+            model=req.llm_model,
+        )
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+
+    project_manager.save_draft(project_id, script_json, episode_number)
+    project_manager.update_episode_status(project_id, episode_number, "scripting", "pending")
+    project_manager.update_project_status(project_id, "scripting", "pending")
+
+    return {
+        "project_id": project_id,
+        "episode_number": episode_number,
+        "status": "draft_saved",
+        "applied_line_ids": applied,
+        "warnings": warnings,
+        "script": script_json,
+    }
 
 
 @router.post("/projects/{project_id}/approve")
