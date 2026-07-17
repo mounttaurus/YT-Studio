@@ -76,6 +76,10 @@ class LineInsertRequest(BaseModel):
     pause_after_sec: float = 0.4
 
 
+class LineMoveRequest(BaseModel):
+    direction: str  # "up" | "down"
+
+
 class NewProjectRequest(BaseModel):
     title: str
     slug: Optional[str] = None
@@ -1137,6 +1141,34 @@ def _remove_line_from_doc(doc: dict, line_id: str) -> bool:
     return removed
 
 
+def _move_line_in_doc(doc: dict, line_id: str, direction: str) -> Optional[str]:
+    """doc内でline_idを隣接行と入れ替える（同一section内のみ）。order・sections.line_idsも同期する。
+
+    成功時 None、失敗理由があればその文字列を返す（呼び出し側でHTTPExceptionに変換）。
+    """
+    lines = doc.get("lines", [])
+    idx = next((i for i, l in enumerate(lines) if l.get("id") == line_id), None)
+    if idx is None:
+        return None  # このdocにその行が無いだけ＝正常（draft/script間の差分は許容）
+    swap_idx = idx - 1 if direction == "up" else idx + 1
+    if swap_idx < 0 or swap_idx >= len(lines):
+        return "これ以上移動できません（先頭/末尾です）"
+    if lines[idx].get("section") != lines[swap_idx].get("section"):
+        return "セクションをまたぐ移動はできません"
+
+    lines[idx], lines[swap_idx] = lines[swap_idx], lines[idx]
+    _renumber_lines(doc)
+    for s in doc.get("sections") or []:
+        ids = s.get("line_ids") or []
+        if line_id in ids:
+            other_id = lines[idx]["id"] if lines[swap_idx]["id"] == line_id else lines[swap_idx]["id"]
+            i1, i2 = ids.index(line_id), ids.index(other_id) if other_id in ids else None
+            if i2 is not None:
+                ids[i1], ids[i2] = ids[i2], ids[i1]
+            break
+    return None
+
+
 def _next_line_id(*docs) -> str:
     mx = 0
     for doc in docs:
@@ -1203,6 +1235,41 @@ async def edit_line(
 
     _save_script_docs(project_id, episode, draft, script)
     return {"project_id": project_id, "episode_number": episode, "updated_line": line}
+
+
+@router.patch("/projects/{project_id}/script/line/{order}/move")
+async def move_line(
+    project_id: str,
+    order: int,
+    req: LineMoveRequest,
+    episode: int = Query(1),
+):
+    """行を隣（同一セクション内）と入れ替える（ドラフト・確定版script.json両方に反映・可逆）。
+
+    セクション境界をまたぐ移動は拒否する（行のsectionタグと実際の並び位置がズレるのを防ぐため）。
+    """
+    if req.direction not in ("up", "down"):
+        raise HTTPException(status_code=400, detail="direction は up か down を指定してください")
+
+    primary, draft, script = _load_script_docs(project_id, episode)
+    if primary is None:
+        raise HTTPException(status_code=404, detail=f"第{episode}話の台本が見つかりません")
+    line = next((l for l in primary["lines"] if l["order"] == order), None)
+    if line is None:
+        raise HTTPException(status_code=404, detail=f"order={order} の行が見つかりません")
+    line_id = line["id"]
+
+    for doc in (draft, script):
+        if doc is None:
+            continue
+        err = _move_line_in_doc(doc, line_id, req.direction)
+        if err is not None:
+            raise HTTPException(status_code=400, detail=err)
+
+    _save_script_docs(project_id, episode, draft, script)
+    primary2, _, _ = _load_script_docs(project_id, episode)
+    new_order = next(l["order"] for l in primary2["lines"] if l["id"] == line_id)
+    return {"project_id": project_id, "episode_number": episode, "line_id": line_id, "new_order": new_order}
 
 
 @router.post("/projects/{project_id}/script/line")

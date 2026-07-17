@@ -1303,7 +1303,13 @@
 
               <!-- 台本プレビュー -->
               <div class="card" x-show="draft">
-                <h2>台本プレビュー <span style="font-weight:400;text-transform:none;color:#4b5563;font-size:11px">（行をクリックで編集・チェックボックスで選択／Shift+クリックで範囲選択）</span></h2>
+                <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px">
+                  <h2 style="margin-bottom:0">台本プレビュー <span style="font-weight:400;text-transform:none;color:#4b5563;font-size:11px">（行をクリックで編集・チェックボックスで選択／Shift+クリックで範囲選択）</span></h2>
+                  <button class="btn btn-ghost btn-sm" x-show="undoSnapshot" :disabled="undoing" @click="undoLastChange()"
+                          title="直前の1回の行操作（編集・削除・追加・移動・選択行再生成）を取り消します">
+                    <span x-text="undoing ? '元に戻しています...' : '↺ 元に戻す'"></span>
+                  </button>
+                </div>
 
                 <!-- 選択行の一括再生成バー -->
                 <div x-show="selectedLineIds.length > 0"
@@ -1402,6 +1408,8 @@
                               <button class="btn btn-ghost btn-sm" @click.stop="cancelEdit()">キャンセル</button>
                               <button class="btn btn-ghost btn-sm" style="color:#f87171" @click.stop="deleteLine(line.order)">🗑 削除</button>
                               <button class="btn btn-ghost btn-sm" @click.stop="insertLineAfter(line.order)">＋ 下に行を追加</button>
+                              <button class="btn btn-ghost btn-sm" @click.stop="moveLine(line.order, 'up')">▲ 上へ</button>
+                              <button class="btn btn-ghost btn-sm" @click.stop="moveLine(line.order, 'down')">▼ 下へ</button>
                             </div>
                           </div>
                         </template>
@@ -3528,7 +3536,7 @@ const EAPI = '/api/editing';
 function app() {
   return {
     // サイドバー幅（ドラッグ可変・200〜420pxに制限・localStorageで記憶）
-    sidebarWidth: parseInt(localStorage.getItem('director_sidebar_w')) || 280,
+    sidebarWidth: Math.min(420, Math.max(280, parseInt(localStorage.getItem('director_sidebar_w')) || 280)),
     resizingSidebar: false,
     startSidebarResize(e) {
       e.preventDefault();
@@ -3536,7 +3544,7 @@ function app() {
     },
     onSidebarResizeMove(e) {
       if (!this.resizingSidebar) return;
-      this.sidebarWidth = Math.min(420, Math.max(200, e.clientX));
+      this.sidebarWidth = Math.min(420, Math.max(280, e.clientX));
     },
     stopSidebarResize() {
       if (!this.resizingSidebar) return;
@@ -3689,6 +3697,9 @@ function app() {
     lastClickedLineOrder: null,
     lineRegenFeedback: '',
     regeneratingLines: false,
+    // 行操作のUndo（直前の1回のみ・import_scriptの仕組みを再利用して復元する）
+    undoSnapshot: null,
+    undoing: false,
     modelFilter: '',
     showPendingProviders: false,
     // 名前付きドラフト
@@ -4452,6 +4463,7 @@ function app() {
       this.localeScript = null;
       this.selectedLineIds = [];  // 話が変わったら行選択もリセット（別話のline_idを引き継がない）
       this.lastClickedLineOrder = null;
+      this.undoSnapshot = null;   // Undoスナップショットも話をまたいで持ち越さない
       if (r.ok) {
         this.draft = await r.json();
         this.warnings = [];
@@ -4898,8 +4910,58 @@ function app() {
       this.lastClickedLineOrder = line.order;
     },
 
+    // ─── Undo（直前の1回のみ）─────────────────────────────────────
+    // 台本を変更する操作の直前に、その時点のdraft全体をスナップショットしておく。
+    // 元に戻す時はimport_script(既存の外部台本取込み機構)へそのまま投げ直すだけで良い
+    // ＝Undo専用のバックエンドを新設していない。
+    captureUndoSnapshot() {
+      this.undoSnapshot = this.draft ? JSON.parse(JSON.stringify(this.draft)) : null;
+    },
+
+    async undoLastChange() {
+      if (!this.undoSnapshot || !this.currentProject) return;
+      this.undoing = true;
+      const ep = this.activeEpisodeNumber || 1;
+      try {
+        const wasConfirmed = !!this.episodes.find(e => e.number === ep)?.has_script;
+        const body = { script: this.undoSnapshot, confirm: wasConfirmed };
+        const url = `${SAPI}/projects/${this.currentProject.id}/episodes/${ep}/import`
+          + (wasConfirmed ? '?force=true' : '');
+        const r = await fetch(url, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(body),
+        });
+        const data = await r.json().catch(() => ({}));
+        if (!r.ok) { alert('元に戻せませんでした: ' + (data.detail || r.status)); return; }
+        this.undoSnapshot = null;
+        this.cancelEdit();
+        this.selectedLineIds = [];
+        await this.loadEpisode(ep);
+        await this.loadEpisodes();
+      } finally {
+        this.undoing = false;
+      }
+    },
+
+    async moveLine(order, direction) {
+      if (!this.currentProject) return;
+      this.captureUndoSnapshot();
+      const ep = this.activeEpisodeNumber || 1;
+      const r = await fetch(`${SAPI}/projects/${this.currentProject.id}/script/line/${order}/move?episode=${ep}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ direction }),
+      });
+      const data = await r.json().catch(() => ({}));
+      if (!r.ok) { alert(data.detail || '移動できませんでした'); this.undoSnapshot = null; return; }
+      this.cancelEdit();
+      await this.loadEpisode(ep);
+    },
+
     async regenerateSelectedLines() {
       if (!this.currentProject || !this.selectedLineIds.length || !this.lineRegenFeedback.trim()) return;
+      this.captureUndoSnapshot();
       this.regeneratingLines = true;
       try {
         const r = await fetch(`${SAPI}/projects/${this.currentProject.id}/episodes/${this.activeEpisodeNumber}/regenerate-lines`, {
@@ -4965,6 +5027,7 @@ function app() {
       }
       const opt = this.castSpeakerOptions().find(o => o.id === speakerId);
       const speakerName = opt?.name ?? speakerId;
+      this.captureUndoSnapshot();
       const r = await fetch(`${SAPI}/projects/${this.currentProject.id}/script/line/${order}?episode=${ep}`, {
         method: 'PATCH',
         headers: { 'Content-Type': 'application/json' },
@@ -4994,6 +5057,7 @@ function app() {
       if (!line) return;
       const head = (line.text || '').slice(0, 24);
       if (!confirm(`${order}行目「${head}${line.text?.length > 24 ? '…' : ''}」を削除しますか？\n（確定済み台本と生成済み音声からも削除されます）`)) return;
+      this.captureUndoSnapshot();
       const r = await fetch(`${SAPI}/projects/${this.currentProject.id}/script/line/${order}?episode=${ep}`, { method: 'DELETE' });
       const data = await r.json().catch(() => ({}));
       if (!r.ok) { alert('削除エラー: ' + (data.detail || r.status)); return; }
@@ -5009,6 +5073,7 @@ function app() {
       if (!this.currentProject) return;
       const ep = this.activeEpisodeNumber || 1;
       // 完全な空行を追加する（話者はコピーしない＝挿入後に配役キャラから選ぶ）
+      this.captureUndoSnapshot();
       const r = await fetch(`${SAPI}/projects/${this.currentProject.id}/script/line?episode=${ep}`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
