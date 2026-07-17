@@ -151,33 +151,67 @@ LiteLLM を使用し、以下のプロバイダーを統一インターフェー
 GET  /health
 GET  /styles                              ← 利用可能スタイル一覧
 GET  /llm-models                          ← 利用可能LLM一覧
+POST /styles                              ← スタイル新規作成（series_mode含む）
+PUT  /styles/{style_id}                   ← スタイル更新
+PATCH /projects/{id}/style                ← プロジェクトにスタイルを紐付ける
+     body: { style_id }                   ← 副作用: style.speakers[]をconfig.tts.speakers[]の
+                                             初期値として同期する（generate_script以外の経路でも
+                                             配役の入れ物が空にならないように・2026-07-17修正）
 POST /projects/{id}/generate              ← 台本生成
-     body: { style_id, llm_model, rough_script? }
-POST /projects/{id}/regenerate            ← フィードバック付き再生成
-     body: { feedback, llm_model? }
+     body: { style_id, llm_model, rough_script?, extra_instruction?, target_line_count? }
+POST /projects/{id}/generate-series       ← シリーズ（複数話）生成。各話を独立episodes/epNN/へ保存
+     body: { style_id, llm_model?, rough_script?, episode_count?, extra_instruction? }
+     ※ style.series_modeはUIのボタン表示だけをゲートする値でこのAPI自体はチェックしない
+POST /projects/{id}/regenerate            ← フィードバックを元に台本全体をゼロから再生成
+     body: { feedback, llm_model?, episode_number }
+     ※ 既存ドラフトの本文はプロンプトに含まれない（ラフ台本+SEOキーワード+feedbackから作り直す）
+       ＝フル生成とほぼ同じトークンコストが毎回かかる。部分修正なら下のregenerate-linesを使う
+POST /projects/{id}/episodes/{n}/regenerate-lines  ← 指定行だけをLLMで書き直す（可逆・低コスト）
+     body: { line_ids: [...], feedback, llm_model? }
+     ※ 台本全文をコンテキストに渡すが出力は変更行のみ＝regenerateよりトークンコストが低い。
+       line_idsは飛び飛びでも良い（全文脈を毎回渡すため文脈は崩れない・実機検証済み）。
+       行の追加・削除はできない（既存行の書き換え専用）
 POST /projects/{id}/approve               ← 承認 → script.json確定
 POST /projects/{id}/episodes/{n}/import   ← 外部で書いた完成台本を取り込む（LLM生成スキップ）
-     body: { script, title?, confirm? }   ← confirm=false(既定)はドラフト保存のみ・true は即時確定
+     body: { script, title?, confirm?, style_name?, estimated_duration_sec?, llm_model? }
+     ← confirm=false(既定)はドラフト保存のみ・true は即時確定
+     ← style_name/estimated_duration_sec/llm_modelは台本タブ(スタイル/推定時間/使用LLM)の
+       表示用メタデータ（自己申告値・検証されない）。style_name未指定時は「オリジナル」と表示
      query: force?                        ← 確定済み話への上書きは force=true 必須
 GET  /projects/{id}/script                ← 現在の台本取得
 PATCH /projects/{id}/script/line/{order} ← 行単位直接編集
+POST /projects/{id}/script/line           ← 行挿入（after_orderの直後。0で先頭）
+DELETE /projects/{id}/script/line/{order} ← 行削除
+PATCH /projects/{id}/script/line/{order}/move  ← 隣接行と入れ替え（同一section内のみ・2026-07-17追加）
+     body: { direction: "up"|"down" }     ← セクション境界をまたぐ移動は400で拒否
 GET  /projects                            ← プロジェクト一覧
 GET  /docs                                ← FastAPI自動生成ドキュメント
 ```
+
+行挿入/削除/移動/直接編集の4つはDirector-Agent UI専用の機能でMCPツール化していない
+（人間が台本プレビューで直接いじる操作という位置づけ・2026-07-17時点）。
 
 ---
 
 ## 8. MCPツール一覧
 
+外部からの実際の呼び名は `mcp-agent/tools.py` が正（このセクションの関数名はそれに合わせてある）。
+
 ```
-scripting_generate(project_id, style_id, llm_model?)  → script_draft
-scripting_regenerate(project_id, feedback)             → script_draft
-scripting_approve(project_id)                          → script.json path
-import_script(project_id, episode_number, script, title?, confirm?, force?)  ← 外部台本取込（mcp-agent/tools.py）
-get_script(project_id, episode_number?, draft?)        → script JSON（mcp-agent/tools.py）
-scripting_get_script(project_id)                       → script JSON
-scripting_list_styles()                                → styles[]
-scripting_list_projects()                              → projects[]
+list_styles()                                          → styles[]
+create_style(style_name, description, speakers, structure, ...)  → 新規スタイル
+update_style(style_id, ...)                            → スタイル更新
+set_project_style(project_id, style_id)                → プロジェクトへスタイル紐付け＋配役初期化
+create_project(title, channel?, slug?)                 → 新規プロジェクト
+generate_script(project_id, episode_number, style_id, ...)  → script_draft
+generate_series_script(project_id, style_id, episode_count?, ...)  → 各話のscript_draft
+approve_script(project_id, episode_number)              → script.json path
+import_script(project_id, episode_number, script, title?, confirm?, force?,
+               style_name?, estimated_duration_sec?, llm_model?)  ← 外部台本取込
+get_script(project_id, episode_number?, draft?)         → script JSON
+regenerate_lines(project_id, episode_number, line_ids, feedback, llm_model?)  ← 部分再生成（低コスト）
+list_projects()                                          → projects[]
+project_status(project_id)                               → 話ごとの進捗
 ```
 
 ---
