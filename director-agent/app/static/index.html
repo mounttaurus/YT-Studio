@@ -1164,6 +1164,12 @@
               </button>
 
               <!-- 生成ボタン（シリーズ） -->
+              <div x-show="isSeriesStyle()" style="display:flex;align-items:center;gap:8px;margin-bottom:4px">
+                <label style="font-size:11px;color:#9ca3af;white-space:nowrap">話数</label>
+                <input type="number" x-model.number="seriesEpisodeCount" min="1" max="30"
+                       placeholder="LLM任せ" style="width:80px;padding:4px 8px;font-size:12px">
+                <span style="font-size:11px;color:#4b5563">空欄なら内容に応じてLLMが話数を判断します</span>
+              </div>
               <button class="btn btn-primary"
                       x-show="isSeriesStyle()"
                       :disabled="!currentProject || !selectedStyleId || generating"
@@ -3450,6 +3456,15 @@
         <span style="font-size:12px;color:#e2e8f0">デフォルトスタイルとして登録する</span>
       </label>
       <div style="font-size:11px;color:#4b5563">チェックを入れると、スタイル一覧で「デフォルト」バッジが表示されます</div>
+
+      <label style="display:flex;align-items:center;gap:8px;cursor:pointer;margin-top:10px">
+        <input type="checkbox" x-model="newStyle.series_mode" style="width:14px;height:14px;accent-color:#7c3aed">
+        <span style="font-size:12px;color:#e2e8f0">シリーズスタイルにする（複数話に分けて生成）</span>
+      </label>
+      <div style="font-size:11px;color:#4b5563">
+        チェックを入れると、このスタイルを選択した時に台本タブへ「シリーズを生成」ボタンが表示されます
+        （1話ぶんの構成セクションを話数分繰り返し、各話を個別ファイルとして保存）。話数は生成実行時に指定します。
+      </div>
     </div>
 
     <!-- フッター -->
@@ -3586,6 +3601,7 @@ function app() {
     episodes: [],
     seriesGenerating: false,
     seriesGenError: '',
+    seriesEpisodeCount: null,  // 空=LLM任せ。「シリーズを生成」の話数入力欄
     activeEpisodeNumber: 1,
     // 新規/編集スタイルモーダル
     showNewStyleModal: false,
@@ -3596,6 +3612,7 @@ function app() {
     ttsVoices: [],
     newStyle: {
       style_name: '', description: '', target_line_count: 60, line_count_mode: 'auto', is_default: false,
+      series_mode: false,
       speakers: [{ name: '', voice_id: '', role: '', tone: '', default_emotion: 'neutral' }],
       structure: [
         { id: 'intro',  label: 'イントロ', desc_text: 'テーマ紹介・視聴者への問いかけ', min_lines: 2, max_lines: 4,  lines_free: false },
@@ -3954,7 +3971,7 @@ function app() {
     _defaultNewStyle() {
       return {
         style_name: '', description: '', target_line_count: 60, line_count_mode: 'auto',
-        content_mode: 'long', is_default: false,
+        content_mode: 'long', is_default: false, series_mode: false,
         speakers: [{ name: '', voice_id: '', character_id: '', role: '', tone: '', default_emotion: 'neutral' }],
         structure: [
           { id: 'intro',  label: 'イントロ', desc_text: 'テーマ紹介・視聴者への問いかけ', min_lines: 2, max_lines: 4,  lines_free: false },
@@ -4019,6 +4036,7 @@ function app() {
         line_count_mode: s.line_count_mode || 'auto',
         content_mode: s.content_mode || 'long',
         is_default: false,
+        series_mode: !!s.series_mode,
         speakers: s.speakers.map(sp => ({
           name: sp.name, voice_id: sp.voice_id || '', character_id: sp.character_id || '',
           role: sp.role, tone: sp.tone || '', default_emotion: sp.default_emotion || 'neutral'
@@ -4330,6 +4348,7 @@ function app() {
           llm_model: this.selectedModel || null,
           rough_script: this.roughScript || null,
           extra_instruction: this.extraInstruction || null,
+          episode_count: this.seriesEpisodeCount || null,
         };
         const r = await fetch(`${SAPI}/projects/${this.currentProject.id}/generate-series`, {
           method: 'POST',
