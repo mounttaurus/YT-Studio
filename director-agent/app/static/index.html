@@ -12,8 +12,11 @@
     .header { background: #1a1d2e; border-bottom: 1px solid #2d3748; padding: 12px 24px; display: flex; align-items: center; gap: 12px; }
     .header h1 { font-size: 18px; font-weight: 600; color: #fbbf24; }
     .header .badge { background: #2d2614; color: #fbbf24; border: 1px solid #92400e; padding: 2px 8px; border-radius: 9999px; font-size: 11px; }
-    .layout { display: grid; grid-template-columns: 280px 1fr; height: calc(100vh - 49px); }
-    .sidebar { background: #141622; border-right: 1px solid #2d3748; padding: 16px; overflow-y: auto; display: flex; flex-direction: column; gap: 16px; }
+    .layout { display: grid; grid-template-columns: var(--sidebar-w, 280px) 6px 1fr; height: calc(100vh - 49px); }
+    .sidebar { background: #141622; border-right: 1px solid #2d3748; padding: 16px; overflow-y: auto; display: flex; flex-direction: column; gap: 16px; min-width: 0; }
+    .sidebar-resize-handle { cursor: col-resize; background: transparent; position: relative; }
+    .sidebar-resize-handle::after { content: ''; position: absolute; top: 0; bottom: 0; left: 2px; width: 2px; background: #2d3748; }
+    .sidebar-resize-handle:hover::after, .sidebar-resize-handle.resizing::after { background: #7c3aed; }
     .main { overflow-y: auto; padding: 20px; display: flex; flex-direction: column; gap: 16px; }
     .card { background: #1a1d2e; border: 1px solid #2d3748; border-radius: 8px; padding: 16px; }
     .card h2 { font-size: 13px; font-weight: 600; color: #94a3b8; text-transform: uppercase; letter-spacing: 0.05em; margin-bottom: 12px; }
@@ -293,7 +296,8 @@
     .llm-summary .val { color: #c4b5fd; font-weight: 600; }
   </style>
 </head>
-<body x-data="app()" x-init="init()">
+<body x-data="app()" x-init="init()"
+      @mousemove.window="onSidebarResizeMove($event)" @mouseup.window="stopSidebarResize()">
 
 <div class="header">
   <h1>🎬 Director Agent</h1>
@@ -301,7 +305,7 @@
   <span x-show="currentProject" class="badge" x-text="currentProject?.id || ''"></span>
 </div>
 
-<div class="layout">
+<div class="layout" :style="`--sidebar-w: ${sidebarWidth}px`">
   <!-- サイドバー：プロジェクト／エピソード -->
   <div class="sidebar">
 
@@ -353,7 +357,8 @@
                :class="{ selected: currentProject?.id === pj.id }"
                @click="selectProject(pj)">
             <div style="min-width:0">
-              <div style="font-size:12px;color:#e2e8f0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis" x-text="pj.title || pj.id"></div>
+              <div style="font-size:12px;color:#e2e8f0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis"
+                   :title="pj.title || pj.id" x-text="pj.title || pj.id"></div>
               <div style="display:flex;gap:4px;align-items:center;margin-top:2px">
                 <span class="channel-tag" x-text="pj.channel || 'default'"></span>
                 <span style="font-size:10px;color:#4b5563" x-text="pj.id.slice(0,13)"></span>
@@ -470,6 +475,13 @@
     </div>
 
   </div>
+
+  <!-- サイドバー幅リサイズハンドル（ドラッグで可変・右パネル保護のため200〜420pxに制限） -->
+  <div class="sidebar-resize-handle"
+       :class="{ resizing: resizingSidebar }"
+       @mousedown="startSidebarResize($event)"
+       @dblclick="sidebarWidth = 280; localStorage.setItem('director_sidebar_w', 280)"
+       title="ドラッグでサイドバー幅を調整（ダブルクリックでリセット）"></div>
 
   <!-- メイン：タブエリア -->
   <div class="main">
@@ -3488,6 +3500,22 @@ const EAPI = '/api/editing';
 
 function app() {
   return {
+    // サイドバー幅（ドラッグ可変・200〜420pxに制限・localStorageで記憶）
+    sidebarWidth: parseInt(localStorage.getItem('director_sidebar_w')) || 280,
+    resizingSidebar: false,
+    startSidebarResize(e) {
+      e.preventDefault();
+      this.resizingSidebar = true;
+    },
+    onSidebarResizeMove(e) {
+      if (!this.resizingSidebar) return;
+      this.sidebarWidth = Math.min(420, Math.max(200, e.clientX));
+    },
+    stopSidebarResize() {
+      if (!this.resizingSidebar) return;
+      this.resizingSidebar = false;
+      localStorage.setItem('director_sidebar_w', this.sidebarWidth);
+    },
     // タブ
     tab: 'script',
     // 🔎 リサーチ（プロジェクト単位・ラフ台本ダイジェスト）
