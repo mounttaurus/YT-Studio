@@ -4454,16 +4454,21 @@ function app() {
       }
     },
 
-    async loadEpisode(episodeNumber) {
+    // keepUndo=true: 同じ話のデータ再取得(行の移動/削除/追加後のリロード)用。話を実際に切り替える
+    // 呼び出し(タブクリック・セッション復元・生成後など)ではfalseのまま=Undoスナップショットをリセットする。
+    async loadEpisode(episodeNumber, keepUndo = false) {
       if (!this.currentProject) return;
       const r = await fetch(`${SAPI}/projects/${this.currentProject.id}/episodes/${episodeNumber}/script?draft=true`);
+      const isSameEpisode = this.activeEpisodeNumber === episodeNumber;
       this.activeEpisodeNumber = episodeNumber;
       localStorage.setItem('director_last_episode', String(episodeNumber));
       this.viewingLocale = '';   // 話が変わったら言語タブは原語へ戻す（別話に同じ言語があるとは限らない）
       this.localeScript = null;
-      this.selectedLineIds = [];  // 話が変わったら行選択もリセット（別話のline_idを引き継がない）
-      this.lastClickedLineOrder = null;
-      this.undoSnapshot = null;   // Undoスナップショットも話をまたいで持ち越さない
+      if (!(keepUndo && isSameEpisode)) {
+        this.selectedLineIds = [];  // 話が変わったら行選択もリセット（別話のline_idを引き継がない）
+        this.lastClickedLineOrder = null;
+        this.undoSnapshot = null;   // Undoスナップショットも話をまたいで持ち越さない
+      }
       if (r.ok) {
         this.draft = await r.json();
         this.warnings = [];
@@ -4956,7 +4961,7 @@ function app() {
       const data = await r.json().catch(() => ({}));
       if (!r.ok) { alert(data.detail || '移動できませんでした'); this.undoSnapshot = null; return; }
       this.cancelEdit();
-      await this.loadEpisode(ep);
+      await this.loadEpisode(ep, true);
     },
 
     async regenerateSelectedLines() {
@@ -5064,7 +5069,7 @@ function app() {
       // 対応する生成済み音声も削除（未生成なら何も起きない）
       await fetch(`${TAPI}/projects/${this.currentProject.id}/audio/line/${line.id}?episode=${ep}`, { method: 'DELETE' }).catch(() => null);
       this.cancelEdit();
-      await this.loadEpisode(ep);   // orderが振り直されるためサーバーから再取得
+      await this.loadEpisode(ep, true);   // orderが振り直されるためサーバーから再取得
       await this.loadEpisodes();    // サイドバーの行数を更新
       await this.loadEpisodeTts();
     },
@@ -5082,7 +5087,7 @@ function app() {
       const data = await r.json().catch(() => ({}));
       if (!r.ok) { alert('行追加エラー: ' + (data.detail || r.status)); return; }
       this.cancelEdit();
-      await this.loadEpisode(ep);   // orderが振り直されるためサーバーから再取得
+      await this.loadEpisode(ep, true);   // orderが振り直されるためサーバーから再取得
       await this.loadEpisodes();
       // 追加した行をすぐ編集モードにする
       const nl = this.draft?.lines?.find(l => l.id === data.new_line?.id);
