@@ -471,10 +471,14 @@ async def import_style(req: ImportStyleRequest):
 
 @router.patch("/projects/{project_id}/style")
 async def save_style(project_id: str, req: StyleSaveRequest):
-    if not style_registry.get_style(req.style_id):
+    style = style_registry.get_style(req.style_id)
+    if not style:
         raise HTTPException(status_code=404, detail=f"スタイル '{req.style_id}' が見つかりません")
     try:
         project_manager.save_project_style(project_id, req.style_id)
+        # スタイルの話者を配役の初期値として同期する（generate_script以外の経路でも
+        # config.tts.speakers[] が空のままにならないように）。既存の手動配役は温存される。
+        project_manager.sync_tts_speakers(project_id, style.get("speakers", []))
         return {"project_id": project_id, "style_id": req.style_id, "status": "saved"}
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
@@ -584,6 +588,13 @@ async def import_script(
         script = script["script"]
     if "lines" not in script or not isinstance(script.get("lines"), list):
         raise HTTPException(status_code=400, detail="script.lines が必要です")
+    if script["lines"] and not all(isinstance(l, dict) and l.get("id") for l in script["lines"]):
+        raise HTTPException(
+            status_code=400,
+            detail="script.lines[].id が必要です（行の主キー。'line_id' ではなく 'id'。"
+                   "Director-Agent UIの台本プレビューは line.id をキーに描画するため、無いと全行が"
+                   "最終行1件に潰れて表示される）",
+        )
 
     script.setdefault("project_id", project_id)
     script.setdefault("schema_version", "1.0.0")

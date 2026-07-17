@@ -95,6 +95,22 @@ async def list_styles() -> list[dict]:
     return data.get("styles", data) if isinstance(data, dict) else data
 
 
+async def set_project_style(project_id: str, style_id: str) -> dict:
+    """プロジェクトにスタイルを紐付ける。スタイルの話者定義を config.tts.speakers[] の初期値として
+    同期する副作用がある（既存の手動配役は上書きしない・可逆WRITE）。
+
+    generate_script/generate_series_script は生成の副作用として自動でこれを行うが、
+    import_script で外部台本を取り込む場合はこれを先に呼ばないと、配役(assign_cast)が
+    「unknown speaker_id」で失敗する（config.tts.speakers[] が空のため）。
+    外部台本モードでは create_style → set_project_style → (必要なら assign_cast) →
+    import_script の順で呼ぶこと。
+    """
+    return await dc.request(
+        "PATCH", f"api/scripting/projects/{project_id}/style",
+        json={"style_id": style_id},
+    )
+
+
 async def create_style(style_name: str, description: str,
                        speakers: list[dict], structure: list[dict],
                        target_line_count: int = 30,
@@ -197,7 +213,10 @@ async def import_script(project_id: str, episode_number: int, script: dict,
     """コンテナ外（呼び出し元エージェント自身の執筆など）で作った完成台本を取り込む。
 
     script は {"lines": [...], "sections": [...]} 形式（generate_script が返す script と同じ構造）。
-    lines[] の各要素には最低限 line_id / order / speaker_id / text / section が必要。
+    lines[] の各要素には最低限 id / order / speaker_id / text / section が必要。
+    id は行の一意識別子（例 "line_001"。"line_id" ではない＝Director-Agent UIの行プレビューは
+    line.id をキーにレンダリングするため、id が無い/別名だと全行が最終行1件に潰れて表示される）。
+    sections[].line_ids はこの id 値の配列。
     speaker_id は project_status や list_characters/assign_cast で確認した配役済みの役ID
     （例 "speaker_a"）を使うこと。キャラ名や自作IDは不可＝タイムライン生成時に未割当扱いになる。
 
@@ -674,6 +693,7 @@ TOOLS = [
     {"fn": list_projects,        "side_effects": [S.READ]},
     {"fn": project_status,       "side_effects": [S.READ]},
     {"fn": list_styles,          "side_effects": [S.READ]},
+    {"fn": set_project_style,    "side_effects": [S.WRITE]},
     {"fn": create_style,         "side_effects": [S.WRITE]},
     {"fn": update_style,         "side_effects": [S.WRITE]},
     {"fn": delete_style,         "side_effects": [S.WRITE]},
