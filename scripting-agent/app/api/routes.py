@@ -611,8 +611,10 @@ async def import_script(
         script["metadata"]["llm_model"] = req.llm_model
 
     if not req.confirm:
-        project_manager.save_draft(project_id, script, episode_number)
+        # ensure_episode_in_project_jsonをtitle付きで先に呼ぶ（save_draft内部でもtitle無しで
+        # 呼ばれるが、番号が既存なら何もしないため、先着=タイトル付きの方を勝たせる）。
         project_manager.ensure_episode_in_project_json(project_id, episode_number, req.title or "")
+        project_manager.save_draft(project_id, script, episode_number)
         project_manager.update_episode_status(project_id, episode_number, "scripting", "pending")
         project_manager.update_project_status(project_id, "scripting", "pending")
         return {
