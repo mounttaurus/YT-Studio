@@ -209,7 +209,9 @@ async def approve_script(project_id: str, episode_number: int) -> dict:
 
 async def import_script(project_id: str, episode_number: int, script: dict,
                         title: Optional[str] = None, confirm: bool = False,
-                        force: bool = False) -> dict:
+                        force: bool = False, style_name: Optional[str] = None,
+                        estimated_duration_sec: Optional[float] = None,
+                        llm_model: Optional[str] = None) -> dict:
     """コンテナ外（呼び出し元エージェント自身の執筆など）で作った完成台本を取り込む。
 
     script は {"lines": [...], "sections": [...]} 形式（generate_script が返す script と同じ構造）。
@@ -222,10 +224,27 @@ async def import_script(project_id: str, episode_number: int, script: dict,
 
     confirm=false（既定）はドラフト保存のみ（可逆）。この後 approve_script で確定する想定。
     confirm=true は即時確定し、既に確定済み台本がある話への上書きは force=true が必要。
+
+    style_name / estimated_duration_sec / llm_model は台本タブ（行数/スタイル/推定時間/使用LLM）の
+    表示用メタデータ。コンテナ側では検証しない自己申告値：
+    - style_name: ユーザーが list_styles 由来の既存スタイルを指定してそれに従って書いた場合はその
+      style_name を渡す。特定のスタイルを指定されず自由に構成した場合は省略可（未指定時はUIに
+      「オリジナル」と表示される）。
+    - estimated_duration_sec: 台本行の文字数とpause_after_secから見積もった秒数
+      （irodoriエンジン実測較正値: 約263字/分。Docs/05_scripting.md参照）。
+    - llm_model: 台本を実際に執筆したモデルの識別子（例 "claude-code/claude-sonnet-5"）。
+      generate_script のllm_model（コンテナ内でAPIを叩くモデル名）とは別物＝呼び出し元エージェント
+      自身の自己申告。
     """
     body = {"script": script, "confirm": confirm}
     if title is not None:
         body["title"] = title
+    if style_name is not None:
+        body["style_name"] = style_name
+    if estimated_duration_sec is not None:
+        body["estimated_duration_sec"] = estimated_duration_sec
+    if llm_model is not None:
+        body["llm_model"] = llm_model
     return await dc.request(
         "POST", f"api/scripting/projects/{project_id}/episodes/{episode_number}/import",
         json=body, params={"force": force},

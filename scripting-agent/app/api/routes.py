@@ -119,6 +119,11 @@ class ImportScriptRequest(BaseModel):
     script: dict
     title: Optional[str] = None
     confirm: bool = False  # false=ドラフト保存のみ（既定・可逆） / true=即時確定
+    # 台本タブ（行数/スタイル/推定時間/使用LLM）の表示用メタデータ。呼び出し元エージェントが
+    # 自己申告する値で、コンテナ側では検証しない（表示専用・パイプラインの動作には影響しない）。
+    style_name: Optional[str] = None          # 未指定なら「オリジナル」と表示
+    estimated_duration_sec: Optional[float] = None
+    llm_model: Optional[str] = None
 
 
 class ImportStyleRequest(BaseModel):
@@ -598,6 +603,12 @@ async def import_script(
 
     script.setdefault("project_id", project_id)
     script.setdefault("schema_version", "1.0.0")
+    script.setdefault("metadata", {})
+    script["metadata"]["style_name"] = req.style_name or "オリジナル"
+    if req.estimated_duration_sec is not None:
+        script["metadata"]["estimated_duration_sec"] = req.estimated_duration_sec
+    if req.llm_model is not None:
+        script["metadata"]["llm_model"] = req.llm_model
 
     if not req.confirm:
         project_manager.save_draft(project_id, script, episode_number)
@@ -617,7 +628,6 @@ async def import_script(
             detail=f"第{episode_number}話には既に確定済み台本があります。force=true で上書きできます",
         )
 
-    script.setdefault("metadata", {})
     script["metadata"]["checked_by_director"] = True
     script["metadata"]["check_passed"] = True
 
