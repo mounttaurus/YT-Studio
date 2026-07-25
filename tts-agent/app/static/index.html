@@ -399,6 +399,7 @@ function app() {
     logs: [],
     logId: 0,
     pollTimer: null,
+    ttsLogSeen: 0,
 
     // テキストモード
     textFmt: 'colon',
@@ -491,7 +492,7 @@ function app() {
       });
 
       // ② 生成開始
-      this.running = true; this.logs = []; this.progress = 0;
+      this.running = true; this.logs = []; this.progress = 0; this.ttsLogSeen = 0;
       this.addLog(`${this.selectedProject} の生成を開始...`, 'info');
       await fetch(`/projects/${this.selectedProject}/run`, {method:'POST'});
       this.pollStatus(this.selectedProject);
@@ -503,6 +504,15 @@ function app() {
           const r = await fetch(`/projects/${projectId}/status`);
           const d = await r.json();
           const s = d.status?.tts;
+          const p = d.progress;
+          if (p) {
+            (p.log || []).slice(this.ttsLogSeen).forEach(l => this.addLog(l, l.startsWith('✘') ? 'err' : 'ok'));
+            this.ttsLogSeen = (p.log || []).length;
+            if (p.total) {
+              this.progress = Math.round(((p.done || 0) / p.total) * 100);
+              this.progressLabel = `生成中... (${p.done}/${p.total})` + (p.current_line_id ? ` — ${p.current_line_id} を生成中` : '');
+            }
+          }
           if (s === 'done') {
             this.progress = 100; this.progressLabel = '完了！';
             this.addLog('✅ 全セリフ生成完了', 'ok');
@@ -513,9 +523,6 @@ function app() {
             this.addLog('❌ エラーが発生しました', 'err');
             (d.errors||[]).forEach(e => this.addLog(`  ${e.code}: ${e.message}`, 'err'));
             this.running = false; clearInterval(this.pollTimer);
-          } else if (s === 'running') {
-            this.progress = Math.min(this.progress + 5, 90);
-            this.progressLabel = '生成中...';
           }
         } catch {}
       }, 2000);

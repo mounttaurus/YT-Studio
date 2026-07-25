@@ -76,7 +76,31 @@ WebUI（Alpine.js の `fetch`）や Python httpx は UTF-8 で送信するため
 
 ---
 
-## 2. その他（随時追記）
+## 2. docker exec に絶対パスを渡すと Git Bash が書き換えてしまう
+
+### 症状
+Git Bash から `docker exec <container> <command> /app/app/...` のようにコンテナ内の絶対パスを
+引数で渡すと、存在しないパスとしてエラーになる：
+```
+grep: C:/Program Files/Git/app/app/api/routes.py: No such file or directory
+```
+
+### 原因
+Git Bash（MSYS2）は `/` で始まる引数をUNIXパスとみなし、自動的にWindowsパスへ変換する。
+コンテナ内パスの `/app/...` まで誤ってホスト側パス（Git のインストール先基準）に書き換えてしまう。
+
+### 解決策
+`MSYS_NO_PATHCONV=1` を先頭に付けてパス変換を無効化する：
+```bash
+MSYS_NO_PATHCONV=1 docker exec <container> grep -n "pattern" /app/app/api/routes.py
+```
+
+### 本番動作への影響
+なし。docker exec でホストから対話的にコンテナ内を調査する時のみ発生する。
+
+---
+
+## 3. その他（随時追記）
 
 <!-- 今後 Windows 特有の問題が見つかった場合、このセクションに追記する -->
 

@@ -27,6 +27,10 @@ RETRY_BACKOFF_SEC = [5, 15, 45]
 # 固定サフィックス: 吹き出しはユーザーが後乗せするため画像内の文字を禁止する
 PROMPT_SUFFIX = "No text, no letters, no speech bubbles, no watermark in the image."
 
+# 背景はLLMに書かせず常にこれで統一する（時間帯/シチュエーションのブレを防ぐ）。
+# ユーザーが後から背景だけ別途生成して合成する運用が前提（2026-07-25方針）。
+BACKGROUND_FRAGMENT = "plain solid pastel background, flat single color, no scenery"
+
 _RETRYABLE_MARKERS = ("429", "RESOURCE_EXHAUSTED", "500", "502", "503", "504",
                       "timeout", "Timeout", "timed out")
 
@@ -197,7 +201,9 @@ def _compose_prompt(panel: dict, style_name: str) -> str:
             char_parts.append(f"{c.get('name') or cid} — {c['appearance_prompt'].strip()}")
     char_block = ("Featured characters: " + "; ".join(char_parts) + ". ") if char_parts else ""
     prefix = (style.get("prefix") or "").strip()
-    return f"{prefix} {char_block}{panel.get('prompt', '')} {PROMPT_SUFFIX}".strip()
+    return (
+        f"{prefix} {char_block}{panel.get('prompt', '')}, {BACKGROUND_FRAGMENT}. {PROMPT_SUFFIX}"
+    ).strip()
 
 
 def _resolve_refs(characters: list[str]) -> list[tuple[bytes, str, str]]:

@@ -754,7 +754,7 @@ async def _run_project(project_id: str, episode_number: int = 1, lang: Optional[
 
         lines = parse_script_json(script_path)
         update_status(project_id, "tts", "running", episode_number=episode_number, lang=lang)
-        _progress[run_key] = {"total": len(lines), "done": 0, "current_line_id": None}
+        _progress[run_key] = {"total": len(lines), "done": 0, "current_line_id": None, "log": []}
 
         audio_dir = get_audio_dir(project_id, episode_number, lang=lang)
 
@@ -764,6 +764,7 @@ async def _run_project(project_id: str, episode_number: int = 1, lang: Optional[
 
         for line in lines:
             if not _running.get(run_key):
+                _progress[run_key]["log"].append(f"中断しました（{_progress[run_key]['done']}件生成済み）")
                 update_status(project_id, "tts", "pending", episode_number=episode_number, lang=lang)
                 return
 
@@ -775,6 +776,7 @@ async def _run_project(project_id: str, episode_number: int = 1, lang: Optional[
                 append_error(project_id, "tts", "SPEAKER_UNASSIGNED",
                              f"{lang_prefix}{line.id}: 話者 {line.speaker_id} にキャラ/声が未割当のためスキップしました",
                              recoverable=True)
+                _progress[run_key]["log"].append(f"✘ {line.id} スキップ: 話者未割当")
                 continue
             processed_text = apply_emotion_to_text(line.text, line.emotion)
             key = cache_manager.get_cache_key(
@@ -799,10 +801,12 @@ async def _run_project(project_id: str, episode_number: int = 1, lang: Optional[
                 except MissingRefAudioError as e:
                     append_error(project_id, "tts", "REF_AUDIO_MISSING",
                                  f"{lang_prefix}{line.id}: {e}", recoverable=True)
+                    _progress[run_key]["log"].append(f"✘ {line.id} 失敗: 参照音声なし")
                     continue
                 except Exception as e:
                     logger.error("Line %s generation failed: %s", line.id, e, exc_info=True)
                     append_error(project_id, "tts", "GENERATE_FAILED", f"{lang_prefix}{line.id}: {e}", recoverable=True)
+                    _progress[run_key]["log"].append(f"✘ {line.id} 失敗: {str(e)[:120]}")
                     continue
 
             file_path = _tts_audio_file_path(episode_number, line.id, lang=lang)
@@ -827,6 +831,9 @@ async def _run_project(project_id: str, episode_number: int = 1, lang: Optional[
             })
             current_time += duration + line.pause_after_sec
             _progress[run_key]["done"] += 1
+            _progress[run_key]["log"].append(
+                f"✔ {line.id} 完了 ({_progress[run_key]['done']}/{_progress[run_key]['total']})"
+            )
 
         tts_json = {
             "schema_version": "1.0.0", "project_id": project_id,

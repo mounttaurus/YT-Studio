@@ -22,8 +22,14 @@ from app.core.query_generator import _parse_llm_json, group_lines_by_section
 SYSTEM_PROMPT = (
     "You are a storyboard artist and prompt engineer for a manga-style YouTube video. "
     "For each dialogue line you write ONE image-generation prompt describing a single manga panel: "
-    "the featured character(s) by name, their emotion, pose, camera shot (close-up / bust shot / "
-    "waist-up / wide shot), camera angle, and a simple background. "
+    "the featured character(s) by name, their emotion, pose, and camera shot (close-up / bust shot / "
+    "waist-up / wide shot). "
+    "Camera angle matters a lot for manga energy: don't default to eye-level. Mix in low-angle shots "
+    "(camera looking up at the character — dramatic, powerful) and high-angle / bird's-eye shots (camera "
+    "looking down — vulnerable, overview); use one of these strong angles every few panels, not only at "
+    "emotional peaks. "
+    "Do NOT describe or invent a background, location or setting — panels are composited onto a plain "
+    "background separately, so describe only the character(s) and the shot. "
     "The image model also receives labeled reference images of the characters, so refer to characters "
     "by name only — never describe hair, face or clothing. "
     "Vary shots and angles across consecutive lines like a real manga page. "
@@ -38,7 +44,9 @@ PROMPT_TEMPLATE = """以下はYouTube動画の台本の1章分です。各セリ
 
 ルール:
 - "characters" は映すキャラの char_id を1〜2人。基本はその行の話者。会話の掛け合いで聞き手のリアクションや対面カット(two shot)が効果的な行では2人にする。
-- "prompt" は英語。表情・ポーズ・ショット・アングル・簡素な背景を含める。髪型・服装・顔立ちは書かない（参照画像が担保する）。
+- "prompt" は英語。表情・ポーズ・ショットを含める。髪型・服装・顔立ちは書かない（参照画像が担保する）。
+- 背景・場所・シチュエーションは一切描写しない（合成時に単色背景を自動で付与するため）。
+- アングルは正面(eye-level)に偏らせない。煽り(low-angle、見上げる)・俯瞰(high-angle、見下ろす)を数コマに1回は積極的に混ぜ、感情の起伏が大きい行ほど強いアングルを使う。
 - 吹き出しを後から載せるため、キャラを画面の片側に寄せて余白を作る構図指示を入れてよい。画像内に文字・吹き出しは絶対に描かせない。
 - 連続する行で同じ構図を繰り返さない（ショット/アングルを切り替える）。
 {extra}
