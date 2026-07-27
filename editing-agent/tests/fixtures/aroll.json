@@ -1,0 +1,16 @@
+{
+  "schema_version": "1.0.0",
+  "project_id": "ラリーの秘密",
+  "episode": 1,
+  "aspect": "16:9",
+  "style": "kamishibai",
+  "generated_at": "2026-07-25T06:39:42.836949+00:00",
+  "panels": [
+    {"line_id": "line_001", "order": 1, "section": "intro", "speaker_id": "speaker_a", "speaker_name": "ずんだもん", "text": "みんな！ラリー・シルバースタインって名前、覚えてるのだ？", "characters": ["char_a"], "prompt": "...", "prompt_source": "llm", "status": "done", "image": "panel_001_line_001.png", "provider": "nanobanana", "error": null, "generated_at": "2026-07-25T06:39:42.836949+00:00"},
+    {"line_id": "line_002", "order": 2, "section": "intro", "speaker_id": "speaker_b", "speaker_name": "四国めたん", "text": "ええ、2001年9月11日...", "characters": ["char_b"], "prompt": "...", "prompt_source": "llm", "status": "done", "image": "panel_002_line_002.png", "provider": "nanobanana", "error": null, "generated_at": "2026-07-25T06:39:42.836949+00:00"},
+    {"line_id": "line_003", "order": 3, "section": "intro", "speaker_id": "speaker_a", "speaker_name": "ずんだもん", "text": "...", "characters": ["char_a"], "prompt": "...", "prompt_source": "llm", "status": "done", "image": "panel_003_line_003.png", "provider": "nanobanana", "error": null, "generated_at": "2026-07-25T06:39:42.836949+00:00"},
+    {"line_id": "line_004", "order": 4, "section": "intro", "speaker_id": "speaker_b", "speaker_name": "四国めたん", "text": "...", "characters": ["char_b"], "prompt": "...", "prompt_source": "llm", "status": "done", "image": "panel_004_line_004.png", "provider": "nanobanana", "error": null, "generated_at": "2026-07-25T06:39:42.836949+00:00"},
+    {"line_id": "line_005", "order": 5, "section": "intro", "speaker_id": "speaker_a", "speaker_name": "ずんだもん", "text": "...", "characters": ["char_a"], "prompt": "...", "prompt_source": "llm", "status": "done", "image": "panel_005_line_005.png", "provider": "nanobanana", "error": null, "generated_at": "2026-07-25T06:39:42.836949+00:00"},
+    {"line_id": "line_020", "order": 20, "section": "main_topic", "speaker_id": "speaker_b", "speaker_name": "四国めたん", "text": "...", "characters": ["char_b"], "prompt": "...", "prompt_source": "llm", "status": "pending", "image": "panel_020_line_020.png", "provider": null, "error": null, "generated_at": null}
+  ]
+}

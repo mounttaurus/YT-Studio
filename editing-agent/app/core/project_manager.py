@@ -1,6 +1,6 @@
 """
 shared/projects/ の読み書きヘルパー。
-editing-agent が読むもの: episodes/epNN/script.json, tts.json, footage.json
+editing-agent が読むもの: episodes/epNN/script.json, tts.json, footage.json, a_roll/aroll.json(任意)
 editing-agent が書くもの: episodes/epNN/edit/timeline.otio, subtitles.srt, edit.json
                           project.json の episodes[n].status.editing / video_edit, errors[]
 """
@@ -159,6 +159,17 @@ def get_episode_footage(project_id: str, episode_number: int) -> dict | None:
     if ep_dir is None:
         return None
     f = ep_dir / "footage.json"
+    if not f.exists():
+        return None
+    return _read_json(f)
+
+
+def get_episode_aroll(project_id: str, episode_number: int) -> dict | None:
+    """a_roll/aroll.json を返す（Aロール未導入プロジェクトはNone＝任意入力）。"""
+    ep_dir = episode_dir(project_id, episode_number)
+    if ep_dir is None:
+        return None
+    f = ep_dir / "a_roll" / "aroll.json"
     if not f.exists():
         return None
     return _read_json(f)

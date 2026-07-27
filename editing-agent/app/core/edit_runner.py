@@ -26,8 +26,9 @@ def run_edit(
     """script/tts/footageを統合し編集情報を生成する。
 
     lang指定時は原語ではなく locales/{lang}/tts.json（翻訳音声）を使い、
-    出力も locales/{lang}/edit/ へ書く（Docs/08_i18n.md §6）。footage.json は
+    出力も locales/{lang}/edit/ へ書く（Docs/08_i18n.md §6）。footage.json / aroll.json は
     言語に依らず常に原語のもの（原語と翻訳語でAロール/Bロールを共有するため）。
+    aroll.json は任意入力＝無くても（未生成・一部欠損でも）編集データ生成は続行する。
     """
     project_dir = project_manager.find_project_dir(project_id)
     episode_dir = project_manager.episode_dir(project_id, episode_number)
@@ -38,12 +39,14 @@ def run_edit(
     footage = project_manager.get_episode_footage(project_id, episode_number)
     if tts is None or footage is None:
         raise FileNotFoundError(f"{'locales/' + lang + '/' if lang else ''}tts.json or footage.json not found")
+    aroll = project_manager.get_episode_aroll(project_id, episode_number)
 
     project_manager.update_episode_status(project_id, episode_number, lang=lang, editing="running")
 
     try:
         timeline, warnings = timeline_builder.build_timeline(
             project_id, episode_number, tts, footage, project_dir, episode_dir, fps=fps, path_style=path_style,
+            aroll=aroll,
         )
         otio_text = otio.adapters.write_to_string(timeline, adapter_name="otio_json")
         srt_text = srt_writer.build_srt(tts, speaker_prefix=speaker_prefix)

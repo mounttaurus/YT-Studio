@@ -1,13 +1,17 @@
 """
-script.json / tts.json / footage.json から OTIO Timeline を構築する。
+script.json / tts.json / footage.json / aroll.json から OTIO Timeline を構築する。
 DATA_SCHEMA.md 6c / Docs/06_editing.md セクション5 のアルゴリズムを実装。
 
 - A1, A2, ... (Audio): tts.json の timeline[] を実測の絶対秒で配置（フレーム変換は丸めのみ、
   累積しない）。話者(speaker_id)ごとに別トラックへ分割する。Resolve側でトラック単位の
   Pan/Volumeを設定しやすくするため（OTIOにpan情報を埋め込んでもResolveのネイティブ.otio
   インポータは解釈しない＝実機確認済。トラック分割が唯一の実用解）
-- V1 (Video): footage.json の clips[] をsectionでグループ化し、tts.jsonから算出した
+- V1 (Video/Bロール): footage.json の clips[] をsectionでグループ化し、tts.jsonから算出した
   セクション区間を等分割して配置
+- V2 (Video/Aロール・任意): aroll.json がある場合のみ追加。tts.json の timeline[] に合わせ
+  セリフ1行=1コマをA1と同じ絶対秒で配置（未生成/欠損行はGap）。V1より上に重なるため、
+  Resolve上ではAロールが無い区間・行だけV1のBロールが透けて見える＝台本追加でAロールが
+  一部欠けても編集データ生成自体は破綻しない（欠損はwarningsに列挙されるのみ）
 - 各セクション先頭のクリップ/ギャップに Marker（色=GREEN, name=section）を付与
 """
 from datetime import datetime, timezone
@@ -20,6 +24,7 @@ from app.core import path_mapper
 
 MEDIA_NOT_FOUND = "MEDIA_NOT_FOUND"
 LINE_NOT_IN_TIMELINE = "LINE_NOT_IN_TIMELINE"
+AROLL_MISSING = "AROLL_MISSING"
 
 
 def _sec_to_frame(sec: float, fps: int) -> int:
@@ -175,6 +180,69 @@ def _place_footage_clip(
     return clip
 
 
+def _build_aroll_track(
+    aroll: dict,
+    tts: dict,
+    project_dir: Path,
+    episode_dir: Path,
+    fps: int,
+    path_style: str,
+    warnings: list[dict],
+) -> "otio.schema.Track":
+    """Aロール（セリフ1行=1コマ）をA1音声トラックと同じ絶対秒でV2に配置する。
+
+    未生成/画像欠損の行はGapにする。V2はV1(Bロール)より上に重なる前提のため、
+    Gap区間はResolve上でV1がそのまま透けて見える＝欠損の自然なフォールバックになる。
+    """
+    track = otio.schema.Track(name="V2_Aroll", kind=otio.schema.TrackKind.Video)
+    panels_by_line = {p.get("line_id"): p for p in aroll.get("panels", [])}
+
+    prev_end_frame = 0
+    for entry in tts.get("timeline", []):
+        line_id = entry["line_id"]
+        start_f = _sec_to_frame(entry["start_sec"], fps)
+        end_f = _sec_to_frame(entry["end_sec"], fps)
+
+        if start_f > prev_end_frame:
+            gap_range = _frame_range(0, start_f - prev_end_frame, fps)
+            track.append(otio.schema.Gap(source_range=gap_range))
+
+        dur = end_f - start_f
+        if dur <= 0:
+            prev_end_frame = max(prev_end_frame, end_f)
+            continue
+
+        tr = _frame_range(0, dur, fps)
+        panel = panels_by_line.get(line_id)
+        resolved = None
+        if panel and panel.get("image"):
+            resolved = path_mapper.resolve_media_path(f"a_roll/{panel['image']}", project_dir, episode_dir)
+
+        if resolved is None:
+            reason = "aroll.jsonに存在しません" if panel is None else "画像が未生成/見つかりません"
+            warnings.append({
+                "code": AROLL_MISSING,
+                "message": f"{line_id} のAロールが{reason}（Bロールへフォールバック）",
+            })
+            track.append(otio.schema.Gap(source_range=tr))
+        else:
+            ref = otio.schema.ExternalReference(
+                target_url=path_mapper.to_target_url(resolved, path_style),
+                available_range=tr,
+            )
+            clip = otio.schema.Clip(name=line_id, media_reference=ref, source_range=tr)
+            clip.metadata["youtube_auto"] = {
+                "line_id": line_id,
+                "speaker_name": panel.get("speaker_name", ""),
+                "text": panel.get("text", ""),
+            }
+            track.append(clip)
+
+        prev_end_frame = end_f
+
+    return track
+
+
 def _build_video_track(
     footage: dict,
     tts: dict,
@@ -262,6 +330,7 @@ def build_timeline(
     episode_dir: Path,
     fps: int = 30,
     path_style: str = "file_uri",
+    aroll: dict | None = None,
 ) -> tuple["otio.schema.Timeline", list[dict]]:
     warnings: list[dict] = []
 
@@ -270,6 +339,8 @@ def build_timeline(
 
     timeline = otio.schema.Timeline(name=f"{project_id}_ep{episode_number:02d}")
     timeline.tracks.append(video_track)
+    if aroll is not None:
+        timeline.tracks.append(_build_aroll_track(aroll, tts, project_dir, episode_dir, fps, path_style, warnings))
     for t in audio_tracks:
         timeline.tracks.append(t)
 
@@ -284,9 +355,14 @@ def build_timeline(
 
 
 def timeline_stats(timeline: "otio.schema.Timeline") -> dict:
-    """edit.jsonのtimeline統計を計算する。"""
+    """edit.jsonのtimeline統計を計算する。
+
+    video_clip_count はV1(Bロール)+V2(Aロール、有れば)の合算（後方互換のため既存キーは維持）。
+    aroll_clip_count はV2単独の内訳（Aロール未導入プロジェクトでは0）。
+    """
     durations_sec = []
     video_clip_count = 0
+    aroll_clip_count = 0
     audio_clip_count = 0
     marker_count = 0
 
@@ -296,6 +372,8 @@ def timeline_stats(timeline: "otio.schema.Timeline") -> dict:
             if isinstance(item, otio.schema.Clip):
                 if track.kind == otio.schema.TrackKind.Video:
                     video_clip_count += 1
+                    if track.name == "V2_Aroll":
+                        aroll_clip_count += 1
                 else:
                     audio_clip_count += 1
             marker_count += len(item.markers)
@@ -303,6 +381,7 @@ def timeline_stats(timeline: "otio.schema.Timeline") -> dict:
     return {
         "duration_sec": max(durations_sec) if durations_sec else 0.0,
         "video_clip_count": video_clip_count,
+        "aroll_clip_count": aroll_clip_count,
         "audio_clip_count": audio_clip_count,
         "marker_count": marker_count,
     }

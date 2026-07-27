@@ -52,6 +52,27 @@ def _audio_tracks(timeline):
     return [t for t in timeline.tracks if t.kind == otio.schema.TrackKind.Audio]
 
 
+def _video_tracks(timeline):
+    return [t for t in timeline.tracks if t.kind == otio.schema.TrackKind.Video]
+
+
+def _add_aroll(episode_dir: Path, *, omit_image: str | None = None) -> dict:
+    """aroll.json フィクスチャを読み込み、パネル画像ファイルを episode_dir/a_roll/ に作る。
+
+    line_020 は panels に存在するがomit_imageで画像ファイルだけ欠損させられる
+    （バッチ生成が未完了/失敗のケース）。line_010等は元々panelsに無い
+    （台本追加でAロール未生成のまま増えた行のケース）。
+    """
+    aroll = _load("aroll.json")
+    aroll_dir = episode_dir / "a_roll"
+    aroll_dir.mkdir(parents=True, exist_ok=True)
+    for panel in aroll["panels"]:
+        if panel["image"] == omit_image:
+            continue
+        (aroll_dir / panel["image"]).touch()
+    return aroll
+
+
 def _audio_clip_starts(audio_track) -> dict:
     cursor = 0
     starts = {}
@@ -174,6 +195,60 @@ def test_section_markers_count(tmp_path, monkeypatch):
     # footage.json 内のsection: intro, main_topic, discussion, summary, outro
     assert set(marker_names) == {"intro", "main_topic", "discussion", "summary", "outro"}
     assert len(marker_names) == 5
+
+
+def test_no_aroll_track_when_aroll_omitted(tmp_path, monkeypatch):
+    """aroll未指定(既定None)なら従来通りV1のみ＝Aロール未導入プロジェクトへの後方互換。"""
+    tts, footage, project_dir, episode_dir = _build_layout(tmp_path, monkeypatch)
+
+    timeline, _ = build_timeline("ラリーの秘密", 1, tts, footage, project_dir, episode_dir, fps=FPS)
+
+    assert [t.name for t in _video_tracks(timeline)] == ["V1_Footage"]
+
+
+def test_aroll_track_placed_on_tts_timeline(tmp_path, monkeypatch):
+    tts, footage, project_dir, episode_dir = _build_layout(tmp_path, monkeypatch)
+    aroll = _add_aroll(episode_dir)
+
+    timeline, warnings = build_timeline(
+        "ラリーの秘密", 1, tts, footage, project_dir, episode_dir, fps=FPS, aroll=aroll,
+    )
+
+    video_tracks = _video_tracks(timeline)
+    assert [t.name for t in video_tracks] == ["V1_Footage", "V2_Aroll"]
+
+    aroll_track = video_tracks[1]
+    clip_names = [item.name for item in aroll_track if isinstance(item, otio.schema.Clip)]
+    assert clip_names == ["line_001", "line_002", "line_003", "line_004", "line_005", "line_020"]
+
+    # A1音声トラックと同じ絶対位置にクリップが乗ることを確認
+    audio_starts = _audio_clip_starts(_audio_tracks(timeline)[0])
+    aroll_starts = _audio_clip_starts(aroll_track)
+    for name in clip_names:
+        if name in audio_starts:
+            assert aroll_starts[name] == audio_starts[name]
+
+    stats = timeline_stats(timeline)
+    assert stats["aroll_clip_count"] == 6
+    assert stats["video_clip_count"] == 19 + 6
+
+
+def test_aroll_missing_panel_or_image_falls_back_to_gap(tmp_path, monkeypatch):
+    """台本追加でAロール未生成の行、および生成失敗/未完了の行はGapになりBロールへフォールバックする。"""
+    tts, footage, project_dir, episode_dir = _build_layout(tmp_path, monkeypatch)
+    aroll = _add_aroll(episode_dir, omit_image="panel_020_line_020.png")
+
+    timeline, warnings = build_timeline(
+        "ラリーの秘密", 1, tts, footage, project_dir, episode_dir, fps=FPS, aroll=aroll,
+    )
+
+    aroll_track = _video_tracks(timeline)[1]
+    clip_names = [item.name for item in aroll_track if isinstance(item, otio.schema.Clip)]
+    assert "line_020" not in clip_names  # panelはあるが画像ファイルが無い
+    assert "line_010" not in clip_names  # panels自体に無い(未生成)
+
+    assert any(w["code"] == "AROLL_MISSING" and "line_020" in w["message"] for w in warnings)
+    assert any(w["code"] == "AROLL_MISSING" and "line_010" in w["message"] for w in warnings)
 
 
 def test_otio_roundtrip_and_stats(tmp_path, monkeypatch):

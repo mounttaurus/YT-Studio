@@ -736,9 +736,11 @@ AI生成素材（source=ai）は確定時に `shared/footage_pool/ai_generated/{
 **書き手:** editing-agent
 **読み手:** video-edit（ホスト側 / DaVinci Resolve操作者）
 
-tts.json（音声・実測タイムライン。`lang`指定時は`locales/{lang}/tts.json`＝翻訳音声）・footage.json（映像素材。**常に原語のもの**＝言語間で共有）を統合し、
+tts.json（音声・実測タイムライン。`lang`指定時は`locales/{lang}/tts.json`＝翻訳音声）・footage.json（映像素材＝Bロール。**常に原語のもの**＝言語間で共有）・
+a_roll/aroll.json（任意・§6d。**常に原語のもの**）を統合し、
 同ディレクトリに生成した `timeline.otio` / `subtitles.srt` / `subtitles.fcpxml`（任意）のマニフェストを記録する。
 `files.fcpxml` は `subtitle_format` が `fcpxml`/`both` のときのみ存在する（任意キー＝後方互換）。
+`aroll.json` が無い（Aロール未導入）プロジェクトはV2トラック自体が生成されない＝完全後方互換。
 
 ```json
 {
@@ -758,6 +760,7 @@ tts.json（音声・実測タイムライン。`lang`指定時は`locales/{lang}
   "timeline": {
     "duration_sec": 257.85,
     "video_clip_count": 19,
+    "aroll_clip_count": 0,
     "audio_clip_count": 31,
     "subtitle_count": 31,
     "marker_count": 5
@@ -775,7 +778,9 @@ tts.json（音声・実測タイムライン。`lang`指定時は`locales/{lang}
 | `fps` | OTIO構築時のフレームレート（既定30、リクエストで24/60に変更可） |
 | `path_style` | `file_uri`（`file:///D:/...`形式、既定） / `windows`（生のWindowsパス、日本語パスでfile_uriが機能しない場合のフォールバック） |
 | `host_media_root` | `HOST_SHARED_DIR`環境変数の値。OTIO内のメディア参照の生成元パス |
-| `warnings[].code` | `MEDIA_NOT_FOUND`（音声/素材ファイルが見つからずGapで代替） / `LINE_NOT_IN_TIMELINE`（footageのline_idsがtts.jsonのtimelineに無くセクション尺を算出できない） |
+| `timeline.video_clip_count` | **2026-07-27〜**V1(Bロール)+V2(Aロール、有れば)の合算（後方互換のため既存キーの意味は変えていない） |
+| `timeline.aroll_clip_count` | **2026-07-27新規**。V2単独の内訳（Aロール未導入プロジェクトは常に0） |
+| `warnings[].code` | `MEDIA_NOT_FOUND`（音声/素材ファイルが見つからずGapで代替） / `LINE_NOT_IN_TIMELINE`（footageのline_idsがtts.jsonのtimelineに無くセクション尺を算出できない） / `AROLL_MISSING`（**2026-07-27新規**。その行がaroll.jsonに無い、またはpanelはあるが画像ファイルが無い＝Gapで代替しV1のBロールへフォールバック） |
 
 ### 前提条件チェックの言語別ルール（2.1.0）
 `POST .../edit/run` の409ガードは `tts` と `footage` の完了状態を見るが、**`tts`は対象言語（`lang`省略時は原語）、`footage`は常に原語**で判定する（footageは言語別に持たないため）。
@@ -826,7 +831,8 @@ Outside Only・背景ボックス・Drop Shadow はFCPXMLに焼けないため�
 ## 6d. aroll.json（2026-07-05 新規 — Aロール＝マンガ形式パネル）
 
 **場所:** `shared/projects/{project_id}/episodes/epNN/a_roll/aroll.json`
-**書き手・読み手:** scrapping-agent（プロンプト生成→バッチ画像生成の作業状態＋成果の正本）
+**書き手:** scrapping-agent（プロンプト生成→バッチ画像生成の作業状態＋成果の正本）
+**読み手:** scrapping-agent（UI表示）、editing-agent（**2026-07-27〜** OTIOのV2トラックへ`panels[].image`を配置。§6c）
 **画像:** 同ディレクトリ `a_roll/panel_{order:03d}_{line_id}.png`
 
 Aロールの方針転換（2026-07）: Aロール＝素材取得ではなく**セリフ1行＝マンガ1コマ**のキャラ画像。

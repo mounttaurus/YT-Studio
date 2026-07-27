@@ -210,6 +210,22 @@ for entry in timeline:  # tts.json timeline[] をorder順に処理
    トラックではなく**タイムライン直下のstack由来でなくV1トラックの該当クリップ**…ではなく、
    実装簡略化のため **V1トラック上の各セクション先頭クリップに marked_range=クリップ先頭** で付与する
 
+### 5-2b. 映像トラック V2「Aロール」（kind=Video・任意・2026-07-27追加）
+
+`a_roll/aroll.json`（§6d）がある場合のみ、V1の**上**にV2を追加する（無ければV1のみ＝
+Aロール未導入プロジェクトへの後方互換）。
+
+1. tts.json の `timeline[]` をA1音声トラックと同じ順序・同じ絶対秒（`start_sec`/`end_sec`）で辿る
+   （§5-1のGap埋め込みロジックをそのまま流用＝音声と1フレーム単位で同期する）
+2. 各行について `aroll.json panels[].line_id` を引き、`image` ファイル（`a_roll/{image}`）が
+   実在すればその行の区間フルにClipを1枚配置
+3. panelが無い（台本追加でAロール未生成のまま行が増えた）、または`image`ファイルが
+   見つからない（バッチ未完了・失敗）場合は、その行の区間を**Gap**にする
+   （エラーにしない。warnings `AROLL_MISSING` に列挙するのみ）
+4. V2はV1より**上**に重なる前提（Resolve側のトラック合成順）。したがって、
+   Gapになった行はResolve上でV1のBロールがそのまま透けて見える＝
+   「Aロールが一部欠けても編集データ生成自体は破綻しない」設計になっている
+
 ### 5-3. SRT字幕（subtitles.srt）
 
 - tts.json `audio_files[]` を order順に、`timeline[]` の start/end を使って生成
