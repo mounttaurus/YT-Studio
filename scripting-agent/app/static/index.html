@@ -227,6 +227,15 @@
     }
     .llm-summary .lbl { color: #64748b; }
     .llm-summary .val { color: #c4b5fd; font-weight: 600; }
+
+    /* 上に戻るボタン（.main は唯一のスクロールコンテナ） */
+    .back-to-top-btn {
+      position: fixed; right: 28px; bottom: 28px; z-index: 40;
+      width: 44px; height: 44px; border-radius: 50%;
+      background: #7c3aed; color: #fff; border: 1px solid #a78bfa;
+      font-size: 18px; cursor: pointer; box-shadow: 0 4px 12px rgba(0,0,0,0.4);
+    }
+    .back-to-top-btn:hover { background: #6d28d9; }
   </style>
 </head>
 <body x-data="app()" x-init="init()">
@@ -746,7 +755,12 @@
   </div>
 
   <!-- メイン -->
-  <div class="main">
+  <div class="main" @scroll="showBackToTop = $event.target.scrollTop > 300">
+
+    <!-- 上に戻るボタン -->
+    <button class="back-to-top-btn" x-show="showBackToTop" x-transition.opacity
+            @click="$el.parentElement.scrollTo({ top: 0, behavior: 'smooth' })"
+            title="ページ上部に戻る">⬆</button>
 
     <!-- プロジェクト未選択 -->
     <template x-if="!currentProject">
@@ -887,6 +901,21 @@
               </div>
             </template>
           </div>
+        </div>
+
+        <!-- アクションバー（トップ） -->
+        <div class="actions-bar" x-show="draft">
+          <button class="btn btn-success" @click="approveScript()" :disabled="approving">
+            <span x-text="approving ? '確定中...' : `✓ 承認・確定（第${activeEpisodeNumber}話）`"></span>
+          </button>
+          <button class="btn btn-ghost" @click="exportText()" :disabled="exportingText"
+                  title="行番号＋話者名＋セリフの.txtを書き出す（吹き出し作成・Illustrator流し込み用）">
+            <span x-text="exportingText ? '書き出し中…' : '📄 テキスト書き出し'"></span>
+          </button>
+          <button class="btn btn-ghost" @click="exportScript()"
+                  title="他プロジェクトへ持ち込める台本JSONを書き出す">📤 台本エクスポート</button>
+          <button class="btn btn-ghost" @click="$refs.scriptImportFile.click()"
+                  title="エクスポートした台本JSONを読み込む（この話に既に確定済み台本があれば確認の上で上書き）">📥 台本インポート</button>
         </div>
 
         <!-- 台本プレビュー -->
@@ -1313,6 +1342,8 @@
 <script>
 function app() {
   return {
+    // 上に戻るボタン（.main のスクロール量で表示切替）
+    showBackToTop: false,
     // プロジェクト一覧
     projects: [],
     projectTotal: 0,

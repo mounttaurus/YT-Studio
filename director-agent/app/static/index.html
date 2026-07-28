@@ -296,6 +296,18 @@
     }
     .llm-summary .lbl { color: #64748b; }
     .llm-summary .val { color: #c4b5fd; font-weight: 600; }
+
+    /* 上に戻るボタン（.main は全タブ共通の唯一のスクロールコンテナ） */
+    .back-to-top-btn {
+      position: fixed; right: 28px; bottom: 28px; z-index: 40;
+      width: 44px; height: 44px; border-radius: 50%;
+      background: #7c3aed; color: #fff; border: 1px solid #a78bfa;
+      font-size: 18px; cursor: pointer; box-shadow: 0 4px 12px rgba(0,0,0,0.4);
+    }
+    .back-to-top-btn:hover { background: #6d28d9; }
+
+    /* TTSタブ: 全行再生で現在再生中の行をハイライト */
+    .tts-line-playing { border-color: #7c3aed !important; background: #1b1430 !important; box-shadow: 0 0 0 2px rgba(124,58,237,0.45); }
   </style>
 </head>
 <body x-data="app()" x-init="init()"
@@ -486,7 +498,12 @@
        title="ドラッグでサイドバー幅を調整（ダブルクリックでリセット）"></div>
 
   <!-- メイン：タブエリア -->
-  <div class="main">
+  <div class="main" @scroll="showBackToTop = $event.target.scrollTop > 300">
+
+    <!-- 上に戻るボタン（台本・TTSタブ等、行数が多くなるタブ向け） -->
+    <button class="back-to-top-btn" x-show="showBackToTop" x-transition.opacity
+            @click="$el.parentElement.scrollTo({ top: 0, behavior: 'smooth' })"
+            title="ページ上部に戻る">⬆</button>
 
     <!-- タブバー -->
     <div class="tabbar">
@@ -1273,6 +1290,14 @@
                   <span x-text="approving ? '確定中...' : `✓ 承認・確定（第${activeEpisodeNumber}話）`"></span>
                 </button>
                 <span style="font-size:12px;color:#64748b">← episodes/ep<span x-text="String(activeEpisodeNumber).padStart(2,'0')"></span>/script.json として出力</span>
+                <button class="btn btn-ghost" @click="exportText()" :disabled="exportingText"
+                        title="行番号＋話者名＋セリフの.txtを書き出す（吹き出し作成・Illustrator流し込み用）">
+                  <span x-text="exportingText ? '書き出し中…' : '📄 テキスト書き出し'"></span>
+                </button>
+                <button class="btn btn-ghost" @click="exportScript()"
+                        title="他プロジェクトへ持ち込める台本JSONを書き出す">📤 台本エクスポート</button>
+                <button class="btn btn-ghost" @click="$refs.scriptImportFile.click()"
+                        title="エクスポートした台本JSONを読み込む（この話に既に確定済み台本があれば確認の上で上書き）">📥 台本インポート</button>
               </div>
 
               <!-- 名前付きドラフト一覧 -->
@@ -1676,12 +1701,22 @@
                     （個別の行は後から「セリフ＆音声」一覧で再調整できます）。
                   </p>
 
-                  <div style="margin-top:14px;display:flex;gap:10px">
+                  <div style="margin-top:14px;display:flex;gap:10px;flex-wrap:wrap;align-items:center">
                     <button class="btn btn-primary" @click="runTtsAll()" :disabled="ttsRunning || !activeEpisodeNumber">
                       <template x-if="ttsRunning"><span class="spinner"></span></template>
                       <span x-text="ttsRunning ? '生成中...' : '🎬 全セリフ生成'"></span>
                     </button>
                     <button class="btn btn-danger" @click="cancelTtsRun()" :disabled="!ttsRunning">⏸ 中断</button>
+                    <span style="width:1px;height:20px;background:#374151"></span>
+                    <button class="btn btn-primary" @click="playAllLines()"
+                            :disabled="ttsPlayAllActive || ttsRunning || !ttsPlayAllHasAnyAudio()"
+                            title="生成済みの音声を先頭から順に自動再生します（各行の再生ボタンとは別機能）">
+                      ▶ 全行再生
+                    </button>
+                    <button class="btn btn-ghost" @click="stopPlayAll()" :disabled="!ttsPlayAllActive">⏹ 再生停止</button>
+                    <span x-show="ttsPlayAllActive" style="font-size:12px;color:#a5b4fc">
+                      ▶ 再生中: <span x-text="ttsPlayingLineLabel()"></span>
+                    </span>
                   </div>
 
                   <!-- 進捗・ログ -->
@@ -1709,7 +1744,8 @@
                   <!-- 翻訳言語モード: 読み取り専用の簡易行リスト（テキスト編集は🌐多言語カードで） -->
                   <div x-show="ttsLang" style="display:flex;flex-direction:column;gap:6px">
                     <template x-for="line in ttsLangScript?.lines || []" :key="line.id">
-                      <div class="audio-line-row" style="align-items:flex-start">
+                      <div class="audio-line-row" :id="'ttsline-' + line.id" style="align-items:flex-start"
+                           :class="{ 'tts-line-playing': ttsPlayingLineId === line.id }">
                         <div class="al-meta">
                           <div style="display:flex;align-items:center;gap:6px;flex-wrap:wrap">
                             <span style="font-size:11px;color:#4b5563" x-text="line.order"></span>
@@ -1743,7 +1779,8 @@
 
                   <div x-show="!ttsLang" style="display:flex;flex-direction:column;gap:6px">
                     <template x-for="line in draft?.lines || []" :key="line.id">
-                      <div class="audio-line-row" style="align-items:flex-start"
+                      <div class="audio-line-row" :id="'ttsline-' + line.id" style="align-items:flex-start"
+                           :class="{ 'tts-line-playing': ttsPlayingLineId === line.id }"
                            :style="editingLineOrder === line.order ? 'border-color:#7c3aed;background:#13101f' : ''"
                            @click="toggleEdit(line)">
                         <!-- 左: 行番号・話者・状態 -->
@@ -3535,6 +3572,9 @@ const EAPI = '/api/editing';
 
 function app() {
   return {
+    // 上に戻るボタン（.main のスクロール量で表示切替）
+    showBackToTop: false,
+
     // サイドバー幅（ドラッグ可変・200〜420pxに制限・localStorageで記憶）
     sidebarWidth: Math.min(420, Math.max(280, parseInt(localStorage.getItem('director_sidebar_w')) || 280)),
     resizingSidebar: false,
@@ -3734,6 +3774,12 @@ function app() {
     ttsLogs: [],
     ttsLogId: 0,
     audioVersion: 0,
+    // 全行再生（既存の各行再生ボタンとは別の追加機能）
+    ttsPlayAllActive: false,
+    ttsPlayingLineId: null,
+    _ttsPlayAllQueue: [],
+    _ttsPlayAllIndex: 0,
+    _ttsPlayAllAudio: null,
     regeneratingLineId: null,
     // 多言語（TTSタブの言語セレクタ・Docs/08_i18n.md §8b W3）
     ttsLang: '',
@@ -6691,6 +6737,61 @@ function app() {
     // tts.json内の該当行の生成済みエントリを返す（無ければnull）
     ttsEntryFor(line) {
       return (this.ttsEpisodeAudio?.audio_files || []).find(f => f.line_id === line.id) || null;
+    },
+
+    // ── 全行再生（既存の各行「🎙 この行を生成」隣の<audio>とは独立。順に自動再生し、
+    //    再生中の行へ自動スクロール＋ハイライトする） ──
+    playAllLines() {
+      const lines = (this.ttsLang ? this.ttsLangScript?.lines : this.draft?.lines) || [];
+      const queue = lines.filter(l => this.ttsEntryFor(l)).map(l => l.id);
+      if (!queue.length) return;
+      this.stopPlayAll();
+      this.ttsPlayAllActive = true;
+      this._ttsPlayAllQueue = queue;
+      this._ttsPlayAllIndex = 0;
+      this._playNextInPlayAllQueue();
+    },
+    _playNextInPlayAllQueue() {
+      if (!this.ttsPlayAllActive || this._ttsPlayAllIndex >= this._ttsPlayAllQueue.length) {
+        this.stopPlayAll();
+        return;
+      }
+      const lineId = this._ttsPlayAllQueue[this._ttsPlayAllIndex];
+      this.ttsPlayingLineId = lineId;
+      this.$nextTick(() => {
+        const el = document.getElementById('ttsline-' + lineId);
+        if (el) el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+      });
+      const advance = () => {
+        if (!this.ttsPlayAllActive) return;
+        this._ttsPlayAllIndex++;
+        this._playNextInPlayAllQueue();
+      };
+      const audio = new Audio(this.episodeAudioUrl({ line_id: lineId }));
+      this._ttsPlayAllAudio = audio;
+      audio.onended = advance;
+      audio.onerror = advance;
+      audio.play().catch(advance);
+    },
+    stopPlayAll() {
+      this.ttsPlayAllActive = false;
+      this.ttsPlayingLineId = null;
+      if (this._ttsPlayAllAudio) {
+        this._ttsPlayAllAudio.pause();
+        this._ttsPlayAllAudio = null;
+      }
+      this._ttsPlayAllQueue = [];
+      this._ttsPlayAllIndex = 0;
+    },
+    ttsPlayAllHasAnyAudio() {
+      const lines = (this.ttsLang ? this.ttsLangScript?.lines : this.draft?.lines) || [];
+      return lines.some(l => this.ttsEntryFor(l));
+    },
+    ttsPlayingLineLabel() {
+      if (!this.ttsPlayingLineId) return '';
+      const lines = (this.ttsLang ? this.ttsLangScript?.lines : this.draft?.lines) || [];
+      const l = lines.find(l => l.id === this.ttsPlayingLineId);
+      return l ? `#${l.order} ${l.speaker_name || ''}` : this.ttsPlayingLineId;
     },
 
     // 行の音声状態: 'done'=生成済み / 'stale'=生成後にtext/speed/感情/voice/captionを変更（要再生成） / 'pending'=未生成
