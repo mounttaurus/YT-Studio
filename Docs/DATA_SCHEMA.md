@@ -859,11 +859,15 @@ NanoBanana（参照画像同梱）でパネルを生成する。吹き出しは�
       "characters": ["002"],
       "prompt": "演出のみの英語プロンプト（表情/ポーズ/ショット/構図）",
       "prompt_source": "llm | user",
+      "prompt_text_hash": "9f2c1a...",
       "status": "pending | done | failed",
       "image": "panel_001_line_001.png",
       "provider": "nanobanana",
       "error": null,
-      "generated_at": "..."
+      "generated_at": "...",
+      "source_text": "この絵を生成した時点のセリフ本文",
+      "source_text_hash": "3b7e05...",
+      "orphan": false
     }
   ]
 }
@@ -876,6 +880,41 @@ NanoBanana（参照画像同梱）でパネルを生成する。吹き出しは�
 - 空テキスト行はパネル対象外（マニフェストに含まれない）
 - バッチ生成は1行ごとにこのファイルへ書き出す＝中断・再開（only_missing）が常に安全
 - OpenRouterへの課金退避は `allow_paid_fallback=true` の時だけ（既定OFF。Free表示でも実課金のため）
+
+### 台本との同期判定（2026-08-09 新規）
+
+Aロールは1行=1コマで `line_id` によって台本と結ばれる。`line_id` は**行番号ではなく恒久ID**で、
+行の挿入・削除・入替（scripting-agent の行単位API）では振り直されない。したがって整合性の敵は
+「IDのズレ」ではなく **「IDは同じまま中身だけ変わったのに誰も気付かない」** ことである。
+
+これを検知するため、パネルは「その絵がどのセリフから描かれたか」を刻む:
+
+| フィールド | 意味 |
+|---|---|
+| `source_text` / `source_text_hash` | **画像生成時**の台本テキストとその正規化ハッシュ。stale判定の唯一の根拠 |
+| `prompt_text_hash` | **プロンプト生成時**の台本テキストのハッシュ（プロンプト自体の陳腐化判定用） |
+| `orphan` | 台本から行が消えたパネル。削除せず残す（PNGがディスクに残る事実を隠さない）。進捗の母数とバッチ対象から常に除外 |
+
+**正規化**: NFKC → 空白除去 → 句読点/括弧/引用符除去。「、」を「。」に直した程度の推敲では
+stale にならない（長音「ー」など表意上の差は残す）。
+
+**同期状態（`sync`）は保存しない**。保存すると sync 自体が陳腐化するため、確定 `script.json` と
+読み取り時に突き合わせて算出する（`GET .../aroll` の `panels[].sync`、`GET .../aroll/sync`、
+`GET .../aroll/status` の `sync`）。
+
+| `sync` | 意味 | 回復方法 |
+|---|---|---|
+| `ok` | 画像あり・生成時テキストと現在の台本が一致 | — |
+| `stale` | 画像はあるがセリフが変わった＝絵が古い | 行単位で作り直す or `POST .../aroll/sync/accept` で追認 |
+| `missing` | 行はあるが画像が無い（未生成/失敗/**台本に後から追加された行**） | パネル未作成の行は先に `/aroll/prompts` |
+| `orphan` | パネルはあるが台本から行が消えた | 編集には使われない（PNGは手動削除） |
+| `unknown` | 画像はあるが生成時テキスト未記録（この機能以前の資産） | `POST .../aroll/sync/accept`（line_ids省略）で現在の台本に確定 |
+
+`POST .../aroll/sync/accept` は**画像を再生成しない**。`line_ids` 省略時は `unknown` だけを対象に
+する（＝既存資産の移行用。staleを黙って飲まない）。`stale` を追認する場合は `line_ids` で明示する。
+
+⚠️ **台本のフル再生成（scripting の `/generate`・`/regenerate`）だけは `line_id` を position 由来で
+振り直す**＝Aロールとの紐付けが全滅する。台本の手直しは行単位API（挿入/削除/入替/`regenerate-lines`）で行うこと。
 
 ---
 

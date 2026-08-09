@@ -1506,6 +1506,10 @@ class ArollLineUpdateRequest(BaseModel):
     characters: Optional[list[str]] = None
 
 
+class ArollSyncAcceptRequest(BaseModel):
+    line_ids: Optional[list[str]] = None   # 未指定=unknown（記録なし既存資産）のみ確定
+
+
 class ArollGenerateRequest(BaseModel):
     line_ids: Optional[list[str]] = None
     only_missing: bool = True              # done行スキップ（レジューム/失敗のみ再試行）
@@ -1573,7 +1577,26 @@ async def aroll_get_manifest(project_id: str, episode_number: int):
     manifest = aroll_manager.load_manifest(project_id, episode_number)
     if manifest is None:
         raise HTTPException(status_code=404, detail="aroll.json not found (run /aroll/prompts first)")
-    return manifest
+    # panels[].sync は確定台本と突き合わせた算出値（ファイルには保存しない）
+    return aroll_manager.annotate_manifest(project_id, episode_number, manifest)
+
+
+@router.get("/projects/{project_id}/episodes/{episode_number}/aroll/sync")
+async def aroll_sync_report(project_id: str, episode_number: int):
+    """確定台本とAロールの差分レポート（検査のみ・生成も保存もしない）。
+
+    台本を後から追加/削除/推敲した時に「どの行の絵が古いか・穴が空いたか」を出す唯一の窓口。
+    """
+    return aroll_manager.sync_report(project_id, episode_number)
+
+
+@router.post("/projects/{project_id}/episodes/{episode_number}/aroll/sync/accept")
+async def aroll_sync_accept(project_id: str, episode_number: int, req: ArollSyncAcceptRequest):
+    """「この絵は今の台本のままでよい」と追認する（画像は再生成しない）。
+
+    line_ids 省略時は unknown（生成時テキスト未記録の既存資産）だけを現在のテキストで確定する。
+    """
+    return aroll_manager.accept_current_text(project_id, episode_number, req.line_ids)
 
 
 @router.put("/projects/{project_id}/episodes/{episode_number}/aroll/lines/{line_id}")

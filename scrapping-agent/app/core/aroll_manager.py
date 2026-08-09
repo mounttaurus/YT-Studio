@@ -8,15 +8,23 @@ Aロール（マンガ形式パネル）のマニフェスト管理＋バッチ�
 - マニフェストの prompt は「演出部分」のみ（aroll_prompt_generator参照）。
   生成時に スタイル接頭辞＋キャラ外見＋固定サフィックス（no text等）を合成する。
 - バッチは直列実行（並列なし）＋リクエスト間インターバル（AROLL_MIN_INTERVAL_SEC、既定3秒）。
-  429/5xx/timeout は指数バックオフで最大3回リトライ → 失敗行は failed マークで続行。
+  429/5xx/timeout/DNS解決失敗等の接続エラーは指数バックオフで最大3回リトライ → 失敗行は failed マークで続行。
 - 1行終わるごとにマニフェストを書き出す＝中断・再開（only_missing）が常に安全。
 - OpenRouterへの課金自動退避は allow_paid_fallback=True の時だけ許可（既定OFF）。
+- **台本との同期状態（sync）は保存しない**。パネルには「画像を生成した時の台本テキスト」
+  （source_text / source_text_hash）だけを刻み、現在の script.json と読み取り時に突き合わせて
+  ok/stale/missing/orphan を算出する（保存すると sync 自体が陳腐化するため）。
 """
 import asyncio
+import hashlib
 import json
 import os
+import re
+import unicodedata
 from datetime import datetime, timezone
 from pathlib import Path
+
+import httpx
 
 from app.core import character_manager, nanobanana_client, project_manager, style_manager
 
@@ -34,9 +42,40 @@ BACKGROUND_FRAGMENT = "plain solid pastel background, flat single color, no scen
 _RETRYABLE_MARKERS = ("429", "RESOURCE_EXHAUSTED", "500", "502", "503", "504",
                       "timeout", "Timeout", "timed out")
 
+# 台本との同期状態（保存しない・読み取り時に算出する）
+SYNC_OK = "ok"            # 画像あり・生成時テキストと現在の台本が一致
+SYNC_STALE = "stale"      # 画像はあるが台本テキストが変わった＝絵が古い
+SYNC_MISSING = "missing"  # 行はあるが画像が無い（未生成/失敗/台本に後から追加された行）
+SYNC_ORPHAN = "orphan"    # パネルはあるが台本から行が消えた
+SYNC_UNKNOWN = "unknown"  # 画像はあるが生成時テキスト未記録（この機能以前に生成された資産）
+
+SYNC_STATES = (SYNC_OK, SYNC_STALE, SYNC_MISSING, SYNC_ORPHAN, SYNC_UNKNOWN)
+
+# 正規化で落とす記号（句読点・括弧・引用符など）。長音「ー」や中黒以外の表意文字は残す。
+_PUNCT = "。、，．,.!！?？…‥「」『』〈〉《》【】（）()［］[]｛｝{}\"'“”‘’:：;；"
+_WS_RE = re.compile(r"\s+")
+_PUNCT_TABLE = {ord(c): None for c in _PUNCT}
+
 
 def _now() -> str:
     return datetime.now(timezone.utc).isoformat()
+
+
+def normalize_text(text: str | None) -> str:
+    """比較用にセリフを正規化する（全半角統一・空白除去・句読点/括弧除去）。
+
+    「、」を「。」に直した程度の推敲で stale 判定が出ないようにするための正規化。
+    意味が変わる語句の差し替えは当然ハッシュが変わる。
+    """
+    t = unicodedata.normalize("NFKC", text or "")
+    t = _WS_RE.sub("", t)
+    return t.translate(_PUNCT_TABLE)
+
+
+def text_hash(text: str | None) -> str:
+    """正規化後テキストの短縮SHA1。空文字なら空を返す（＝未記録と区別しない）。"""
+    n = normalize_text(text)
+    return hashlib.sha1(n.encode("utf-8")).hexdigest()[:16] if n else ""
 
 
 def aroll_dir(project_id: str, episode: int) -> Path | None:
@@ -112,6 +151,8 @@ def build_or_update_manifest(
     - 生成済み画像(status/image)は常に保持
     - prompt は overwrite=True か既存が空の時だけ新プロンプトで置き換える
       （ユーザー編集 prompt_source="user" は overwrite=True でも保持）
+    - 台本から消えた行の生成済みパネルは削除せず orphan=True を立てて末尾に残す
+      （黙って消すと「削除した行の画像がディスクに残っている」事実が見えなくなるため）
     """
     old = load_manifest(project_id, episode) or {}
     old_panels = {p.get("line_id"): p for p in old.get("panels", [])}
@@ -131,11 +172,14 @@ def build_or_update_manifest(
         if new.get("prompt") and (overwrite or not keep_prompt) and keep_source != "user":
             prompt, source = new["prompt"], "llm"
             characters = new.get("characters") or prev.get("characters") or []
+            # このプロンプトは「今の台本テキスト」から作られた
+            prompt_text_hash = text_hash(ln.get("text"))
         else:
             prompt, source = keep_prompt, keep_source or ("llm" if keep_prompt else "")
             characters = prev.get("characters") or new.get("characters") or []
             if not characters and speaker.get("character_id"):
                 characters = [speaker["character_id"]]
+            prompt_text_hash = prev.get("prompt_text_hash", "")
 
         panels.append({
             "line_id": lid,
@@ -147,12 +191,23 @@ def build_or_update_manifest(
             "characters": characters,
             "prompt": prompt,
             "prompt_source": source,
+            "prompt_text_hash": prompt_text_hash,
             "status": prev.get("status", "pending"),
             "image": prev.get("image"),
             "provider": prev.get("provider"),
             "error": prev.get("error"),
             "generated_at": prev.get("generated_at"),
+            # 画像を生成した時点の台本テキスト（stale判定の唯一の根拠）
+            "source_text": prev.get("source_text", ""),
+            "source_text_hash": prev.get("source_text_hash", ""),
         })
+
+    # 台本から消えた行のうち画像を持つものは証拠として残す（バッチ対象からは常に除外）
+    live_ids = {p["line_id"] for p in panels}
+    for lid, prev in old_panels.items():
+        if lid in live_ids or prev.get("status") != "done":
+            continue
+        panels.append({**prev, "orphan": True})
 
     manifest = {
         "schema_version": SCHEMA_VERSION,
@@ -180,11 +235,170 @@ def update_line(
             if prompt is not None:
                 p["prompt"] = prompt.strip()
                 p["prompt_source"] = "user"
+                # 手書きプロンプトは「今の台本テキスト」を見て書かれたものとみなす
+                p["prompt_text_hash"] = text_hash(p.get("text"))
             if characters is not None:
                 p["characters"] = [c for c in characters if c][:2]
             save_manifest(project_id, episode, manifest)
             return p
     return None
+
+
+# ---------------------------------------------------------------------------
+# 台本との同期判定（読み取り時に算出・マニフェストには保存しない）
+# ---------------------------------------------------------------------------
+
+def _script_lines_by_id(project_id: str, episode: int, script: dict | None = None) -> dict[str, dict]:
+    """パネル対象になる台本行を {line_id: line} で返す（空セリフ行は対象外）。"""
+    if script is None:
+        script = project_manager.get_episode_script(project_id, episode)
+    return {
+        l.get("id"): l
+        for l in (script or {}).get("lines", [])
+        if l.get("id") and (l.get("text") or "").strip()
+    }
+
+
+def _panel_sync(panel: dict, line: dict | None, out_dir: Path | None) -> str:
+    """1パネルの同期状態を判定する（台本行 line が正・panel.orphan は参考にしない）。"""
+    if line is None:
+        return SYNC_ORPHAN
+    img = panel.get("image")
+    if panel.get("status") != "done" or not img:
+        return SYNC_MISSING
+    if out_dir is not None and not (out_dir / img).exists():
+        return SYNC_MISSING  # マニフェストはdoneだが実ファイルが無い（手動削除など）
+    prev_hash = panel.get("source_text_hash")
+    if not prev_hash:
+        return SYNC_UNKNOWN
+    return SYNC_OK if prev_hash == text_hash(line.get("text")) else SYNC_STALE
+
+
+def sync_report(project_id: str, episode: int, script: dict | None = None) -> dict:
+    """確定台本と aroll.json の差分レポートを返す（生成も保存もしない・純粋な検査）。
+
+    items[] は台本の order 順（orphan は末尾）。UI のバッジと「同期が必要な行」一覧の唯一の供給元。
+    """
+    manifest = load_manifest(project_id, episode)
+    counts = {s: 0 for s in SYNC_STATES}
+    if manifest is None:
+        return {"has_manifest": False, "has_script": False, "in_sync": False,
+                "counts": counts, "prompt_stale_count": 0, "items": []}
+
+    lines_by_id = _script_lines_by_id(project_id, episode, script)
+    out_dir = aroll_dir(project_id, episode)
+    items: list[dict] = []
+    seen: set[str] = set()
+    prompt_stale = 0
+
+    for p in manifest.get("panels", []):
+        lid = p.get("line_id")
+        if not lid:
+            continue
+        seen.add(lid)
+        line = lines_by_id.get(lid)
+        state = _panel_sync(p, line, out_dir)
+        counts[state] += 1
+        cur_text = (line or {}).get("text", "")
+        # プロンプト自体も古いテキストから作られていないか（Phase2の再生成範囲の判断材料）
+        p_stale = bool(
+            line is not None and (p.get("prompt") or "").strip()
+            and p.get("prompt_text_hash") and p["prompt_text_hash"] != text_hash(cur_text)
+        )
+        if p_stale:
+            prompt_stale += 1
+        items.append({
+            "line_id": lid,
+            "order": p.get("order"),
+            "section": p.get("section", ""),
+            "speaker_name": p.get("speaker_name", ""),
+            "sync": state,
+            "status": p.get("status", "pending"),
+            "image": p.get("image"),
+            "current_text": cur_text,
+            "source_text": p.get("source_text", ""),
+            "prompt_stale": p_stale,
+        })
+
+    # マニフェストに存在しない台本行＝台本に後から追加された行
+    for lid, line in lines_by_id.items():
+        if lid in seen:
+            continue
+        counts[SYNC_MISSING] += 1
+        items.append({
+            "line_id": lid,
+            "order": line.get("order"),
+            "section": line.get("section") or "main",
+            "speaker_name": line.get("speaker_name", ""),
+            "sync": SYNC_MISSING,
+            "status": "no_panel",
+            "image": None,
+            "current_text": line.get("text", ""),
+            "source_text": "",
+            "prompt_stale": False,
+        })
+
+    items.sort(key=lambda it: (it["sync"] == SYNC_ORPHAN, it.get("order") or 0))
+    return {
+        "has_manifest": True,
+        "has_script": bool(lines_by_id),
+        "in_sync": counts[SYNC_STALE] == 0 and counts[SYNC_MISSING] == 0
+                   and counts[SYNC_ORPHAN] == 0 and counts[SYNC_UNKNOWN] == 0,
+        "counts": counts,
+        "prompt_stale_count": prompt_stale,
+        "items": items,
+    }
+
+
+def annotate_manifest(project_id: str, episode: int, manifest: dict) -> dict:
+    """マニフェストのコピーに sync を付けて返す（レスポンス専用・ファイルには書かない）。"""
+    lines_by_id = _script_lines_by_id(project_id, episode)
+    out_dir = aroll_dir(project_id, episode)
+    out = dict(manifest)
+    out["panels"] = [
+        {**p, "sync": _panel_sync(p, lines_by_id.get(p.get("line_id")), out_dir)}
+        for p in manifest.get("panels", [])
+    ]
+    return out
+
+
+def accept_current_text(
+    project_id: str, episode: int, line_ids: list[str] | None = None,
+) -> dict:
+    """生成済みパネルの「生成時テキスト」を現在の台本テキストで確定する（画像は再生成しない）。
+
+    - line_ids 省略時は unknown（記録が無い既存資産）だけを対象にする＝安全な移行用。
+    - line_ids 指定時は stale も対象にできる＝「この程度の推敲なら絵はこのままでよい」の追認。
+    """
+    manifest = load_manifest(project_id, episode)
+    if manifest is None:
+        return {"accepted": [], "skipped": []}
+
+    lines_by_id = _script_lines_by_id(project_id, episode)
+    out_dir = aroll_dir(project_id, episode)
+    wanted = set(line_ids) if line_ids else None
+    accepted, skipped = [], []
+
+    for p in manifest.get("panels", []):
+        lid = p.get("line_id")
+        line = lines_by_id.get(lid)
+        state = _panel_sync(p, line, out_dir)
+        if wanted is not None and lid not in wanted:
+            continue
+        if state not in (SYNC_UNKNOWN, SYNC_STALE) or (wanted is None and state != SYNC_UNKNOWN):
+            skipped.append({"line_id": lid, "sync": state})
+            continue
+        h = text_hash(line.get("text"))
+        p["source_text"] = line.get("text", "")
+        p["source_text_hash"] = h
+        # 絵を追認するならプロンプトも現テキスト基準とみなす（旧資産のブートストラップ）
+        if (p.get("prompt") or "").strip():
+            p["prompt_text_hash"] = h
+        accepted.append(lid)
+
+    if accepted:
+        save_manifest(project_id, episode, manifest)
+    return {"accepted": accepted, "skipped": skipped}
 
 
 # ---------------------------------------------------------------------------
@@ -232,6 +446,11 @@ def _resolve_refs(characters: list[str]) -> list[tuple[bytes, str, str]]:
 
 
 def _is_retryable(err: Exception) -> bool:
+    # DNS解決失敗・接続拒否・接続タイムアウト等の下位ネットワーク層エラーは常にリトライ対象。
+    # 文字列マーカーだけだと "[Errno -3] Temporary failure in name resolution" のような
+    # OSレベルのDNS一時的失敗（Docker Desktop/WSL2で稀に起きる）が1回で即失敗していた。
+    if isinstance(err, httpx.TransportError):
+        return True
     s = str(err)
     return any(m in s for m in _RETRYABLE_MARKERS)
 
@@ -269,6 +488,8 @@ async def generate_line_image(
     panel = next((p for p in manifest["panels"] if p.get("line_id") == line_id), None)
     if panel is None:
         raise ValueError(f"line not found in aroll.json: {line_id}")
+    if panel.get("orphan"):
+        raise ValueError(f"台本から削除された行です（生成しません）: {line_id}")
     if not (panel.get("prompt") or "").strip():
         raise ValueError(f"prompt is empty: {line_id}")
 
@@ -286,6 +507,9 @@ async def generate_line_image(
         panel.update({
             "status": "done", "image": filename, "provider": "nanobanana",
             "error": None, "generated_at": _now(),
+            # この絵が「どのセリフから描かれたか」を刻む＝後で台本が変わったら stale と分かる
+            "source_text": panel.get("text", ""),
+            "source_text_hash": text_hash(panel.get("text")),
         })
     except Exception as e:
         panel.update({"status": "failed", "error": str(e)[:300]})
@@ -327,8 +551,11 @@ def request_stop(project_id: str, episode: int) -> bool:
 def select_targets(
     manifest: dict, line_ids: list[str] | None, only_missing: bool,
 ) -> list[dict]:
-    """バッチ対象パネルを選ぶ。only_missing=True なら done を除外（＝レジューム/失敗再試行）。"""
-    panels = manifest.get("panels", [])
+    """バッチ対象パネルを選ぶ。only_missing=True なら done を除外（＝レジューム/失敗再試行）。
+
+    台本から消えた行（orphan）は明示指定を含め常に除外する（消えたセリフの絵に課金しない）。
+    """
+    panels = [p for p in manifest.get("panels", []) if not p.get("orphan")]
     if line_ids:
         wanted = set(line_ids)
         panels = [p for p in panels if p.get("line_id") in wanted]
@@ -387,15 +614,20 @@ def status(project_id: str, episode: int) -> dict:
     counts = {"total": 0, "done": 0, "failed": 0, "pending": 0, "no_prompt": 0}
     if manifest:
         for p in manifest.get("panels", []):
+            if p.get("orphan"):
+                continue  # 台本から消えた行は進捗の母数に入れない（sync側で報告する）
             counts["total"] += 1
             if not (p.get("prompt") or "").strip():
                 counts["no_prompt"] += 1
             st = p.get("status", "pending")
             counts[st if st in counts else "pending"] += 1
     job = get_job(project_id, episode) or {}
+    report = sync_report(project_id, episode)
     return {
         "has_manifest": manifest is not None,
         "counts": counts,
+        "sync": report["counts"],
+        "in_sync": report["in_sync"],
         "job": {k: v for k, v in job.items() if k != "cancel"},
         "running": bool(job.get("running")),
     }

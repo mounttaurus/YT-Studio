@@ -2243,11 +2243,63 @@
               </div>
             </div>
 
+            <!-- 台本との同期状態（差分検知） -->
+            <div class="card" x-show="arollSync?.has_manifest"
+                 :style="arollDriftCount ? 'border-color:#a16207' : ''">
+              <h2>台本との同期
+                <span style="font-weight:400;text-transform:none;font-size:11px"
+                      :style="arollDriftCount ? 'color:#fbbf24' : 'color:#4ade80'"
+                      x-text="arollDriftCount
+                        ? `${arollDriftCount}行ズレています（絵が古い ${arollSyncCounts.stale} / 画像なし ${arollSyncCounts.missing} / 行が消えた ${arollSyncCounts.orphan} / 記録なし ${arollSyncCounts.unknown}）`
+                        : `✔ 確定台本と一致しています（${arollSyncCounts.ok}コマ）`"></span>
+              </h2>
+              <div x-show="arollDriftCount" style="font-size:11px;color:#94a3b8;margin-top:6px;line-height:1.7">
+                台本を後から追加・削除・推敲すると、生成済みのAロールとズレます。
+                <b>絵が古い</b>＝セリフが変わったのに絵が生成時のまま（下の一覧で「↻ この行を作り直す」）。
+                <b>画像なし</b>＝台本に追加された行（パネルが無い行は「① プロンプト一括生成」を実行してから生成）。
+                <b>行が消えた</b>＝台本から削除された行のPNGがディスクに残っている（編集には使われません）。
+              </div>
+              <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-top:10px">
+                <button class="btn btn-sm" @click="loadArollSync()">🔄 再チェック</button>
+                <button class="btn btn-sm" x-show="arollSyncItems.length"
+                        @click="arollSyncOpen = !arollSyncOpen"
+                        x-text="arollSyncOpen ? '▲ 明細を閉じる' : `▼ ズレている行を見る（${arollSyncItems.length}）`"></button>
+                <button class="btn btn-sm" x-show="arollSyncCounts.unknown"
+                        :disabled="arollSyncBusy" @click="arollAcceptSync(null)"
+                        title="この機能より前に生成された画像は「どのセリフから描いたか」の記録がありません。現在の台本テキストで確定します（画像は作り直しません）"
+                        x-text="`✓ 記録なし${arollSyncCounts.unknown}行を現在の台本で確定`"></button>
+              </div>
+              <div x-show="arollSyncOpen" style="display:flex;flex-direction:column;gap:6px;margin-top:10px">
+                <template x-for="it in arollSyncItems" :key="it.line_id">
+                  <div style="display:flex;gap:10px;align-items:flex-start;padding:6px 8px;background:#0f172a;border-radius:6px">
+                    <span style="font-size:11px;color:#4b5563;min-width:28px" x-text="it.order ?? '—'"></span>
+                    <span class="status-badge" style="white-space:nowrap"
+                          :style="arollSyncStyle(it.sync)" x-text="arollSyncLabel(it.sync)"></span>
+                    <div style="flex:1;font-size:11px;line-height:1.6;min-width:0">
+                      <div style="color:#cbd5e1" x-text="it.current_text || '（台本から削除された行）'"></div>
+                      <div x-show="it.sync === 'stale'" style="color:#a16207;margin-top:2px">
+                        生成時: <span x-text="it.source_text"></span>
+                      </div>
+                      <div x-show="it.sync === 'missing' && it.status === 'no_panel'" style="color:#64748b;margin-top:2px">
+                        パネル未作成 —「① プロンプト一括生成」が必要です
+                      </div>
+                      <div x-show="it.prompt_stale" style="color:#64748b;margin-top:2px">
+                        プロンプトも古いテキスト由来です（①を overwrite で作り直すと更新されます）
+                      </div>
+                    </div>
+                    <button class="btn btn-sm" x-show="it.sync === 'stale'"
+                            :disabled="arollSyncBusy" @click="arollAcceptSync([it.line_id])"
+                            title="セリフは変わったが、この絵のままで問題ないと追認する">✓ このままでよい</button>
+                  </div>
+                </template>
+              </div>
+            </div>
+
             <!-- パネル一覧 -->
             <div class="card" x-show="arollManifest">
               <h2>コマ一覧</h2>
               <div style="display:flex;flex-direction:column;gap:8px;margin-top:8px">
-                <template x-for="p in (arollManifest?.panels || [])" :key="p.line_id">
+                <template x-for="p in arollPanels" :key="p.line_id">
                   <div class="audio-line-row" style="align-items:flex-start;cursor:default">
                     <!-- 左: 行情報 -->
                     <div style="min-width:150px;max-width:150px">
@@ -2257,6 +2309,8 @@
                         <span class="status-badge"
                               :style="p.status === 'done' ? 'background:#14532d;color:#bbf7d0' : (p.status === 'failed' ? 'background:#7f1d1d;color:#fecaca' : 'background:#1e293b;color:#94a3b8')"
                               x-text="p.status === 'done' ? '✔ 生成済' : (p.status === 'failed' ? '✘ 失敗' : '未生成')"></span>
+                        <span class="status-badge" x-show="p.sync && p.sync !== 'ok' && p.sync !== 'missing'"
+                              :style="arollSyncStyle(p.sync)" x-text="arollSyncLabel(p.sync)"></span>
                       </div>
                       <div style="font-size:10px;color:#4b5563;margin-top:2px" x-text="p.section"></div>
                       <div style="font-size:11px;color:#cbd5e1;margin-top:4px;line-height:1.5" x-text="p.text"></div>
@@ -3828,6 +3882,9 @@ function app() {
     arollPaidFallback: false,     // OpenRouter課金退避（既定OFF）
     arollOrCredits: null,         // OpenRouter残高（課金退避ON時に表示）
     arollImgVersion: 0,           // サムネのキャッシュバスター
+    arollSync: null,              // /aroll/sync（確定台本との差分レポート）
+    arollSyncOpen: false,         // 差分の明細を開いているか
+    arollSyncBusy: false,
 
     // 🎞️ 編集情報タブ
     editOk: false,
@@ -6218,9 +6275,13 @@ function app() {
     get arollApiBase() {
       return `${FAPI}/projects/${this.currentProject?.id}/episodes/${this.activeEpisodeNumber}/aroll`;
     },
+    get arollPanels() {
+      // 台本から消えた行（orphan）は進捗・バッチ対象の母数に入れない
+      return (this.arollManifest?.panels || []).filter(p => !p.orphan);
+    },
     get arollCounts() {
       const c = { total: 0, done: 0, failed: 0, pending: 0 };
-      for (const p of this.arollManifest?.panels || []) {
+      for (const p of this.arollPanels) {
         c.total++;
         if (p.status === 'done') c.done++;
         else if (p.status === 'failed') c.failed++;
@@ -6228,10 +6289,34 @@ function app() {
       }
       return c;
     },
+    // 台本とAロールのズレ（stale=絵が古い / missing=画像なし / orphan=行が消えた / unknown=記録なし）
+    get arollSyncCounts() {
+      return this.arollSync?.counts || { ok: 0, stale: 0, missing: 0, orphan: 0, unknown: 0 };
+    },
+    get arollDriftCount() {
+      const c = this.arollSyncCounts;
+      return c.stale + c.missing + c.orphan + c.unknown;
+    },
+    get arollSyncItems() {
+      return (this.arollSync?.items || []).filter(it => it.sync !== 'ok');
+    },
+    arollSyncLabel(s) {
+      return { ok: '✔ 一致', stale: '⚠ 絵が古い', missing: '✘ 画像なし',
+               orphan: '🗑 行が消えた', unknown: '? 記録なし' }[s] || s;
+    },
+    arollSyncStyle(s) {
+      return {
+        ok: 'background:#14532d;color:#bbf7d0',
+        stale: 'background:#78350f;color:#fde68a',
+        missing: 'background:#7f1d1d;color:#fecaca',
+        orphan: 'background:#1e293b;color:#94a3b8',
+        unknown: 'background:#312e81;color:#c7d2fe',
+      }[s] || 'background:#1e293b;color:#94a3b8';
+    },
     get arollJob() { return this.arollStatus?.job || {}; },
     // 対象セレクトに応じたバッチ対象枚数（概算コスト表示用。プロンプトの無い行は対象外）
     get arollBatchTargetCount() {
-      const panels = (this.arollManifest?.panels || []).filter(p => (p.prompt || '').trim());
+      const panels = this.arollPanels.filter(p => (p.prompt || '').trim());
       if (this.arollTarget === 'all') return panels.length;
       if (this.arollTarget === 'failed') return panels.filter(p => p.status === 'failed').length;
       return panels.filter(p => p.status !== 'done').length;
@@ -6244,7 +6329,38 @@ function app() {
       this.arollMsg = '';
       await Promise.all([this.loadFreeStyles(), this.charas.length ? Promise.resolve() : this.loadCharas()]);
       await this.loadArollManifest();
+      await this.loadArollSync();
       await this.pollArollStatus();
+    },
+    async loadArollSync() {
+      if (!this.currentProject || !this.activeEpisodeNumber) { this.arollSync = null; return; }
+      try {
+        const r = await fetch(`${this.arollApiBase}/sync`);
+        this.arollSync = r.ok ? await r.json() : null;
+      } catch { this.arollSync = null; }
+    },
+    async arollAcceptSync(lineIds) {
+      // 「この絵は今の台本のままでよい」の追認（画像は再生成しない）
+      const n = lineIds ? lineIds.length : this.arollSyncCounts.unknown;
+      if (!n) return;
+      const what = lineIds
+        ? `${n}行を「今の台本のままでよい」と確定します（画像は作り直しません）。`
+        : `記録なし${n}行を現在の台本テキストで確定します（画像は作り直しません）。`;
+      if (!confirm(what + '\n続行しますか？')) return;
+      this.arollSyncBusy = true;
+      try {
+        const r = await fetch(`${this.arollApiBase}/sync/accept`, {
+          method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ line_ids: lineIds || null }),
+        });
+        const d = await r.json();
+        if (!r.ok) throw new Error(d.detail || '確定に失敗しました');
+        this.arollMsg = `✔ ${(d.accepted || []).length}行を現在の台本で確定しました`;
+        await this.loadArollManifest();
+        await this.loadArollSync();
+      } catch (e) {
+        this.arollMsg = `確定に失敗: ${e.message}`;
+      } finally { this.arollSyncBusy = false; }
     },
     async loadArollManifest() {
       if (!this.currentProject || !this.activeEpisodeNumber) { this.arollManifest = null; return; }
@@ -6273,7 +6389,9 @@ function app() {
         });
         const d = await r.json();
         if (!r.ok) throw new Error(d.detail || 'プロンプト生成に失敗しました');
-        this.arollManifest = d.manifest;
+        // レスポンスのmanifestはsync未付与なので、注釈付きのGETで取り直す
+        await this.loadArollManifest();
+        await this.loadArollSync();
         this.arollWarnings = d.warnings || [];
         this.arollMsg = `✔ ${(d.manifest.panels || []).filter(p => p.prompt).length}行のプロンプトを用意しました`;
       } catch (e) {
@@ -6311,11 +6429,13 @@ function app() {
         });
         const d = await r.json();
         if (!r.ok) throw new Error(d.detail || '生成に失敗しました');
-        Object.assign(p, d);
+        Object.assign(p, d, { sync: 'ok' });  // 今の台本から描き直した＝一致
         this.arollImgVersion++;
+        await this.loadArollSync();
       } catch (e) {
         this.arollMsg = `${p.line_id} の生成に失敗: ${e.message}`;
         await this.loadArollManifest();  // failedステータスを反映
+        await this.loadArollSync();
       } finally { this.arollLineBusy = null; }
     },
     async arollStartBatch() {
@@ -6362,6 +6482,7 @@ function app() {
         await this.loadArollManifest();
       } else if (wasRunning) {
         await this.loadArollManifest();  // バッチ完了 → 最終状態を反映
+        await this.loadArollSync();
       }
     },
     async arollLoadCredits() {

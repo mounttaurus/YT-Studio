@@ -712,8 +712,23 @@ async def aroll_status(project_id: str, episode_number: int) -> dict:
     """Aロールの進捗(counts: total/done/failed/pending/no_prompt ＋ 実行中ジョブ)を返す。
 
     running=Trueの間はバッチ実行中。counts.no_prompt>0 なら先に generate_aroll_prompts が必要。
+    sync(ok/stale/missing/orphan/unknown)と in_sync も含む。in_sync=False なら台本とズレている
+    ＝行ごとの内訳は aroll_sync で見る。
     """
     return await dc.get(f"api/scrapping/projects/{project_id}/episodes/{episode_number}/aroll/status")
+
+
+async def aroll_sync(project_id: str, episode_number: int) -> dict:
+    """確定台本とAロールの差分を行ごとに返す（検査のみ・生成も課金もしない）。
+
+    台本を後から追加/削除/推敲した後は必ずこれで確認する。items[].sync の意味:
+    - stale   … セリフが変わったのに絵が生成時のまま → run_aroll_batch(line_ids=[…]) で描き直す
+    - missing … 画像が無い行。status=no_panel なら先に generate_aroll_prompts が必要
+    - orphan  … 台本から消えた行のPNGが残っているだけ（編集には使われない）
+    - unknown … この機能以前に生成された資産（生成時テキストの記録なし）
+    stale/unknown の「このままでよい」追認はユーザーがUI(director:8005 🖼️Aロールタブ)で行う。
+    """
+    return await dc.get(f"api/scrapping/projects/{project_id}/episodes/{episode_number}/aroll/sync")
 
 
 # ── レジストリ（server.py / 後継ループ が参照する単一の出所） ──────────
@@ -757,6 +772,7 @@ TOOLS = [
     {"fn": generate_aroll_prompts, "side_effects": [S.WRITE]},
     {"fn": run_aroll_batch,      "side_effects": [S.COST, S.ASYNC]},
     {"fn": aroll_status,         "side_effects": [S.READ]},
+    {"fn": aroll_sync,           "side_effects": [S.READ]},
     # 自由生成（台本非依存）
     {"fn": list_imagegen_styles, "side_effects": [S.READ]},
     {"fn": free_generate,        "side_effects": [S.COST, S.GPU]},
