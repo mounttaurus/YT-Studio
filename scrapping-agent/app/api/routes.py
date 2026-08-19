@@ -1599,6 +1599,29 @@ async def aroll_sync_accept(project_id: str, episode_number: int, req: ArollSync
     return aroll_manager.accept_current_text(project_id, episode_number, req.line_ids)
 
 
+@router.post("/projects/{project_id}/episodes/{episode_number}/aroll/normalize-filenames")
+async def aroll_normalize_filenames(project_id: str, episode_number: int):
+    """旧形式ファイル名(panel_{order}_{line_id}.png)を panel_{line_id}.png へ移行する（冪等）。
+
+    line_id は不変なので、台本を何度編集してもファイル名が動かなくなる（tts-agentのaudio/
+    と同原則）。export（Photoshop用書き出し）はこれを前提にする。
+    """
+    return aroll_manager.normalize_panel_filenames(project_id, episode_number)
+
+
+@router.post("/projects/{project_id}/episodes/{episode_number}/aroll/export")
+async def aroll_export(project_id: str, episode_number: int):
+    """Photoshop等の手作業向けに a_roll/export/ へ order付きの使い捨てコピー＋台本テキストを書き出す。
+
+    正本(a_roll/*.png)はリネームしない。export/ は毎回全消去して作り直すので、
+    台本を編集したらもう一度呼び出すだけで良い（欠番・絵が古い行は README.txtに列挙）。
+    """
+    try:
+        return aroll_manager.export_for_manual_work(project_id, episode_number)
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+
+
 @router.put("/projects/{project_id}/episodes/{episode_number}/aroll/lines/{line_id}")
 async def aroll_update_line(project_id: str, episode_number: int, line_id: str, req: ArollLineUpdateRequest):
     """プロンプト/登場キャラのユーザー編集（promptを書くと prompt_source="user"）。"""

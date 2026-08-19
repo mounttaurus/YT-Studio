@@ -833,7 +833,7 @@ Outside Only・背景ボックス・Drop Shadow はFCPXMLに焼けないため�
 **場所:** `shared/projects/{project_id}/episodes/epNN/a_roll/aroll.json`
 **書き手:** scrapping-agent（プロンプト生成→バッチ画像生成の作業状態＋成果の正本）
 **読み手:** scrapping-agent（UI表示）、editing-agent（**2026-07-27〜** OTIOのV2トラックへ`panels[].image`を配置。§6c）
-**画像:** 同ディレクトリ `a_roll/panel_{order:03d}_{line_id}.png`
+**画像:** 同ディレクトリ `a_roll/panel_{line_id}.png`（2026-08-09〜。詳細は下記「ファイル名とorderの分離」）
 
 Aロールの方針転換（2026-07）: Aロール＝素材取得ではなく**セリフ1行＝マンガ1コマ**のキャラ画像。
 LLM（Gemini無料枠→OpenRouter無料）がセリフを解釈して演出プロンプトと登場キャラ(1〜2人)を判定し、
@@ -861,7 +861,7 @@ NanoBanana（参照画像同梱）でパネルを生成する。吹き出しは�
       "prompt_source": "llm | user",
       "prompt_text_hash": "9f2c1a...",
       "status": "pending | done | failed",
-      "image": "panel_001_line_001.png",
+      "image": "panel_line_001.png",
       "provider": "nanobanana",
       "error": null,
       "generated_at": "...",
@@ -915,6 +915,32 @@ stale にならない（長音「ー」など表意上の差は残す）。
 
 ⚠️ **台本のフル再生成（scripting の `/generate`・`/regenerate`）だけは `line_id` を position 由来で
 振り直す**＝Aロールとの紐付けが全滅する。台本の手直しは行単位API（挿入/削除/入替/`regenerate-lines`）で行うこと。
+
+### ファイル名とorderの分離（2026-08-09新規 — Photoshop手作業との整合性）
+
+Aロールの完成画像は最終的にユーザーが**Photoshopで吹き出しを手描きする**成果物になる。当初
+`panel_{order:03d}_{line_id}.png` としていたが、台本を後から挿入/削除すると `order` が動き、
+**永続する実体（画像ファイル名）に可変値を焼いていた**ため、行を1回挿入するたびに大量の
+ファイル名ズレが発生していた（実測: 11箇所の行挿入で185枚中90枚がズレた）。
+
+tts-agent の `audio/{line_id}.wav`（`order` を含まない）は同じ状況で壊れなかった。これに倣い、
+**「保存するもの」と「提示するもの」を分離**した:
+
+| 層 | 実体 | 命名 | 性質 |
+|---|---|---|---|
+| 保存層（正本） | `a_roll/panel_{line_id}.png` | line_idのみ | 二度とリネームしない。TTSと同原則 |
+| 提示層（使い捨て） | `a_roll/export/{order:03d}_{line_id}.png` | order+line_id | 書き出すたびに全消去→作り直し |
+
+**`POST .../aroll/normalize-filenames`**: 旧形式ファイルを新形式へ冪等にリネームする移行API。
+`line_id` は一意なので新形式同士の衝突は起きない。`export` 実行時に自動で先に呼ばれる。
+
+**`POST .../aroll/export`**: `a_roll/export/` を全消去して作り直し、台本の `order` 順に
+「番号付きコピー（正本のコピーであり移動ではない）」＋同じ番号の `script_lines.txt` を書き出す。
+`sync` が `stale`/`missing` の行はコピーされず**欠番のまま**になる（README.txtに列挙）。
+Photoshop作業者は `export/script_lines.txt` の行番号で画像を引けば、正本のファイル名やその後の
+台本編集を意識せずに作業できる。台本を編集したら export を再実行するだけで良い（差分適用ではなく
+毎回フルリビルド＝食い違いが構造的に起きない）。書き出しファイル名に `line_id` を残しているため、
+将来「完成PSDを正本へ取り込む」機能を作る場合もここから逆引きできる。
 
 ---
 

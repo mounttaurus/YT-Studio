@@ -2,7 +2,10 @@
 Aロール（マンガ形式パネル）のマニフェスト管理＋バッチ生成エンジン。
 
 正本: shared/projects/{id}/episodes/epNN/a_roll/aroll.json
-画像: shared/projects/{id}/episodes/epNN/a_roll/panel_{order:03d}_{line_id}.png
+画像: shared/projects/{id}/episodes/epNN/a_roll/panel_{line_id}.png
+       （2026-08-09〜。line_id は不変キー。tts-agent の audio/{line_id}.wav と同原則＝
+       　台本の行挿入/削除でファイル名が動く導出値(order)を、永続する実体のファイル名に
+       　焼かない。旧形式 panel_{order:03d}_{line_id}.png は normalize_panel_filenames で移行）
 
 設計方針:
 - マニフェストの prompt は「演出部分」のみ（aroll_prompt_generator参照）。
@@ -14,6 +17,9 @@ Aロール（マンガ形式パネル）のマニフェスト管理＋バッチ�
 - **台本との同期状態（sync）は保存しない**。パネルには「画像を生成した時の台本テキスト」
   （source_text / source_text_hash）だけを刻み、現在の script.json と読み取り時に突き合わせて
   ok/stale/missing/orphan を算出する（保存すると sync 自体が陳腐化するため）。
+- **order は「保存するもの」ではなく「提示するもの」**。Photoshop作業など人間が順番に触る
+  導線が要る場合は export_for_manual_work() が a_roll/export/ に order付きの使い捨てコピーを
+  作る（正本 a_roll/ は一切リネームしない＝作業中PSDからのリンクを壊さない）。
 """
 import asyncio
 import hashlib
@@ -402,6 +408,152 @@ def accept_current_text(
 
 
 # ---------------------------------------------------------------------------
+# ファイル名の正規化（移行）と、人間の作業用の書き出し（export）
+# ---------------------------------------------------------------------------
+
+def normalize_panel_filenames(project_id: str, episode: int) -> dict:
+    """旧形式 panel_{order}_{line_id}.ext を panel_{line_id}.ext へリネームする（冪等）。
+
+    line_id は一意なので新形式同士の衝突は起きない。既に新形式のパネルはスキップする。
+    aroll.json の image フィールドも同時に更新する。export/ の書き出しはこの正規化を前提とする
+    （正規化されていないと export の欠番判定がずれるため）。
+    """
+    manifest = load_manifest(project_id, episode)
+    if manifest is None:
+        return {"renamed": [], "skipped": [], "errors": []}
+
+    out_dir = aroll_dir(project_id, episode)
+    renamed, skipped, errors = [], [], []
+    changed = False
+
+    for p in manifest.get("panels", []):
+        img = p.get("image")
+        lid = p.get("line_id")
+        if not img or not lid:
+            continue
+        ext = img.rsplit(".", 1)[-1] if "." in img else "png"
+        new_name = panel_filename(lid, ext)
+        if img == new_name:
+            continue
+        src = out_dir / img
+        dst = out_dir / new_name
+        if not src.exists():
+            skipped.append({"line_id": lid, "reason": "file not found", "image": img})
+            continue
+        if dst.exists():
+            # 通常起きない（line_id一意のため）が、万一の衝突は上書きせず報告する
+            errors.append({"line_id": lid, "reason": "target already exists", "target": new_name})
+            continue
+        try:
+            src.rename(dst)
+        except OSError as e:
+            errors.append({"line_id": lid, "reason": str(e)[:200]})
+            continue
+        p["image"] = new_name
+        renamed.append({"line_id": lid, "from": img, "to": new_name})
+        changed = True
+
+    if changed:
+        save_manifest(project_id, episode, manifest)
+    return {"renamed": renamed, "skipped": skipped, "errors": errors}
+
+
+def export_for_manual_work(project_id: str, episode: int) -> dict:
+    """Photoshop等の手作業向けに a_roll/export/ へ order 付きの使い捨てコピーを作る。
+
+    正本 a_roll/*.png は一切リネームしない（作業中PSDからのリンクを壊さないため）。
+    export/ は毎回クリーンして作り直す＝前回の番号が残って混乱することがない。
+    欠番（画像未生成の行）はそのまま飛ばす。stale/orphan は README に列挙するだけで
+    コピーはしない（stale=古い絵をそのまま書き出すと気付かず使ってしまうため）。
+    """
+    manifest = load_manifest(project_id, episode)
+    if manifest is None:
+        raise ValueError("aroll.json not found")
+
+    # 正規化されていないと現在のorderとファイル名が食い違ったまま書き出してしまう
+    normalize_panel_filenames(project_id, episode)
+    manifest = load_manifest(project_id, episode)
+
+    script = project_manager.get_episode_script(project_id, episode)
+    if script is None:
+        raise ValueError("approved script.json not found")
+    lines = [
+        l for l in script.get("lines", [])
+        if l.get("id") and (l.get("text") or "").strip()
+    ]
+
+    out_dir = aroll_dir(project_id, episode)
+    export_dir = out_dir / "export"
+    if export_dir.exists():
+        for f in export_dir.iterdir():
+            if f.is_file():
+                f.unlink()
+    else:
+        export_dir.mkdir(parents=True)
+
+    panels_by_id = {p.get("line_id"): p for p in manifest.get("panels", [])}
+    report = sync_report(project_id, episode, script)
+    sync_by_id = {it["line_id"]: it["sync"] for it in report["items"]}
+
+    speaker_names = {}
+    for l in lines:
+        speaker_names.setdefault(l.get("speaker_id"), l.get("speaker_name", ""))
+
+    text_rows = [
+        "# 台本 ⇔ Aロール画像 対応表（export/ 書き出し時に自動生成・毎回作り直されます）",
+        "#",
+    ]
+    exported, missing, stale = [], [], []
+
+    for l in lines:
+        lid = l["id"]
+        order = l["order"]
+        panel = panels_by_id.get(lid)
+        state = sync_by_id.get(lid)
+        img = panel.get("image") if panel else None
+        speaker = panel.get("speaker_name") if panel else l.get("speaker_name", "")
+
+        if img and (out_dir / img).exists() and state != "stale":
+            ext = img.rsplit(".", 1)[-1] if "." in img else "png"
+            dst_name = f"{order:03d}_{lid}.{ext}"
+            (export_dir / dst_name).write_bytes((out_dir / img).read_bytes())
+            exported.append({"order": order, "line_id": lid, "file": dst_name})
+            text_rows.append(f"{order}\t{dst_name}\t{speaker}\t{l['text']}")
+        elif state == "stale":
+            stale.append({"order": order, "line_id": lid})
+            text_rows.append(f"{order}\t★絵が古い(未書き出し・line_id={lid})\t{speaker}\t{l['text']}")
+        else:
+            missing.append({"order": order, "line_id": lid})
+            text_rows.append(f"{order}\t★未生成(line_id={lid})\t{speaker}\t{l['text']}")
+
+    (export_dir / "script_lines.txt").write_text(
+        "\n".join(text_rows) + "\n", encoding="utf-8-sig",
+    )
+
+    readme = [
+        "Aロール Photoshop作業用 書き出し",
+        f"生成日時: {_now()}",
+        "",
+        "このフォルダは書き出しのたびに全消去→作り直されます。ここにあるファイルへの",
+        "作業結果（PSD等）は別フォルダに保存してください（このフォルダ自体には保存しない）。",
+        "",
+        f"書き出し済み: {len(exported)}枚",
+        f"欠番（画像未生成・番号を飛ばしています）: {len(missing)}行",
+        (", ".join(str(m['order']) for m in missing) if missing else "なし"),
+        f"絵が古い（台本が変わったが未再生成・書き出していません）: {len(stale)}行",
+        (", ".join(str(s['order']) for s in stale) if stale else "なし"),
+    ]
+    (export_dir / "_README.txt").write_text("\n".join(readme) + "\n", encoding="utf-8-sig")
+
+    return {
+        "export_dir": str(export_dir),
+        "exported_count": len(exported),
+        "missing": missing,
+        "stale": stale,
+    }
+
+
+# ---------------------------------------------------------------------------
 # 画像生成（1行＋バッチ）
 # ---------------------------------------------------------------------------
 
@@ -443,6 +595,11 @@ def _resolve_refs(characters: list[str]) -> list[tuple[bytes, str, str]]:
             label = f"{name}: keep this character consistent (same face, hairstyle, outfit)"
             refs.append((p.read_bytes(), nanobanana_client.mime_for(p.name), label))
     return refs[:3]
+
+
+def panel_filename(line_id: str, ext: str = "png") -> str:
+    """パネル画像の正本ファイル名（line_idのみ・orderを含まない＝不変）。"""
+    return f"panel_{line_id}.{ext}"
 
 
 def _is_retryable(err: Exception) -> bool:
@@ -502,8 +659,12 @@ async def generate_line_image(
         data = await _generate_with_retry(
             full_prompt, refs, manifest.get("aspect", "16:9"), allow_paid_fallback, log,
         )
-        filename = f"panel_{int(panel.get('order', 0)):03d}_{line_id}.png"
+        filename = panel_filename(line_id)
+        old_image = panel.get("image")
         (out_dir / filename).write_bytes(data)
+        if old_image and old_image != filename:
+            # 旧形式(panel_{order}_{line_id}.png)や作り直し前の孤児を残さない
+            (out_dir / old_image).unlink(missing_ok=True)
         panel.update({
             "status": "done", "image": filename, "provider": "nanobanana",
             "error": None, "generated_at": _now(),

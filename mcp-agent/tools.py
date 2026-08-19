@@ -731,6 +731,17 @@ async def aroll_sync(project_id: str, episode_number: int) -> dict:
     return await dc.get(f"api/scrapping/projects/{project_id}/episodes/{episode_number}/aroll/sync")
 
 
+async def aroll_export(project_id: str, episode_number: int) -> dict:
+    """Photoshop等の手作業向けに a_roll/export/ へ行番号付きコピー＋script_lines.txtを書き出す。
+
+    正本(a_roll/*.png)はリネームしない。export/フォルダは毎回全消去して作り直すため、
+    台本を編集した後はもう一度呼ぶだけで良い。stale(絵が古い)行と未生成行はコピーされず
+    export/_README.txtに欠番として列挙される。課金なし・破壊的操作でもない（export/以外は触らない）。
+    """
+    return await dc.request(
+        "POST", f"api/scrapping/projects/{project_id}/episodes/{episode_number}/aroll/export")
+
+
 # ── レジストリ（server.py / 後継ループ が参照する単一の出所） ──────────
 
 S = SideEffect
@@ -773,6 +784,7 @@ TOOLS = [
     {"fn": run_aroll_batch,      "side_effects": [S.COST, S.ASYNC]},
     {"fn": aroll_status,         "side_effects": [S.READ]},
     {"fn": aroll_sync,           "side_effects": [S.READ]},
+    {"fn": aroll_export,         "side_effects": [S.WRITE]},
     # 自由生成（台本非依存）
     {"fn": list_imagegen_styles, "side_effects": [S.READ]},
     {"fn": free_generate,        "side_effects": [S.COST, S.GPU]},

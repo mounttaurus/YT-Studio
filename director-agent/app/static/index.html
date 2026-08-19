@@ -2295,6 +2295,34 @@
               </div>
             </div>
 
+            <!-- Photoshop作業用の書き出し -->
+            <div class="card" x-show="arollManifest">
+              <h2>③ Photoshop用に書き出し
+                <span style="font-weight:400;text-transform:none;color:#4b5563;font-size:11px">a_roll/export/</span>
+              </h2>
+              <div style="font-size:11px;color:#94a3b8;margin-top:6px;line-height:1.7">
+                正本(a_roll/)はリネームせず、<code>a_roll/export/</code> に「行番号付きのコピー」＋
+                同じ行番号のセリフ一覧(script_lines.txt)を作ります。台本を編集した後は、もう一度
+                このボタンを押すだけで作り直せます（export/ フォルダは毎回全消去→再作成）。
+                絵が古い行・未生成の行はコピーされず、番号が欠番になります。
+              </div>
+              <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-top:10px">
+                <button class="btn btn-primary" :disabled="arollExportBusy" @click="arollExport()">
+                  <template x-if="arollExportBusy"><span class="spinner"></span></template>
+                  <span x-text="arollExportBusy ? '書き出し中...' : '📤 export/ へ書き出し'"></span>
+                </button>
+              </div>
+              <div x-show="arollExportResult" style="font-size:11px;color:#94a3b8;margin-top:8px;line-height:1.7">
+                <span x-text="`✔ ${arollExportResult?.exported_count ?? 0}枚を書き出しました → ${arollExportResult?.export_dir ?? ''}`"></span>
+                <span x-show="arollExportResult?.missing?.length" style="color:#fbbf24">
+                  （欠番: <span x-text="(arollExportResult.missing || []).map(m => m.order).join(', ')"></span>）
+                </span>
+                <span x-show="arollExportResult?.stale?.length" style="color:#fbbf24">
+                  （絵が古く未書き出し: <span x-text="(arollExportResult.stale || []).map(m => m.order).join(', ')"></span>）
+                </span>
+              </div>
+            </div>
+
             <!-- パネル一覧 -->
             <div class="card" x-show="arollManifest">
               <h2>コマ一覧</h2>
@@ -3885,6 +3913,8 @@ function app() {
     arollSync: null,              // /aroll/sync（確定台本との差分レポート）
     arollSyncOpen: false,         // 差分の明細を開いているか
     arollSyncBusy: false,
+    arollExportBusy: false,
+    arollExportResult: null,      // 直近の /aroll/export レスポンス
 
     // 🎞️ 編集情報タブ
     editOk: false,
@@ -6361,6 +6391,20 @@ function app() {
       } catch (e) {
         this.arollMsg = `確定に失敗: ${e.message}`;
       } finally { this.arollSyncBusy = false; }
+    },
+    async arollExport() {
+      this.arollExportBusy = true;
+      this.arollMsg = '';
+      try {
+        const r = await fetch(`${this.arollApiBase}/export`, { method: 'POST' });
+        const d = await r.json();
+        if (!r.ok) throw new Error(d.detail || '書き出しに失敗しました');
+        this.arollExportResult = d;
+        // normalize-filenamesが正本のimageを書き換えるので、サムネURLを取り直す
+        await this.loadArollManifest();
+      } catch (e) {
+        this.arollMsg = `書き出しに失敗: ${e.message}`;
+      } finally { this.arollExportBusy = false; }
     },
     async loadArollManifest() {
       if (!this.currentProject || !this.activeEpisodeNumber) { this.arollManifest = null; return; }
