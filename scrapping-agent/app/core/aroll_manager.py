@@ -32,9 +32,11 @@ from pathlib import Path
 
 import httpx
 
-from app.core import character_manager, nanobanana_client, project_manager, style_manager
+from app.core import (
+    aroll_prompt_generator, character_manager, nanobanana_client, project_manager, style_manager,
+)
 
-SCHEMA_VERSION = "1.0.0"
+SCHEMA_VERSION = "1.1.0"
 MIN_INTERVAL_SEC = float(os.getenv("AROLL_MIN_INTERVAL_SEC", "3"))
 RETRY_BACKOFF_SEC = [5, 15, 45]
 
@@ -82,6 +84,21 @@ def text_hash(text: str | None) -> str:
     """正規化後テキストの短縮SHA1。空文字なら空を返す（＝未記録と区別しない）。"""
     n = normalize_text(text)
     return hashlib.sha1(n.encode("utf-8")).hexdigest()[:16] if n else ""
+
+
+def compute_slot_key(characters: list[str] | None, slot: dict | None) -> str | None:
+    """画像再利用の照合キー（2026-08-19新規）。
+
+    emotion/shot/angle の3軸のみ使う（poseを含めると細分化しすぎて重複率が落ちるため実測で
+    除外。詳細はDocs/AROLL_SLOT_REUSE_BRIEF.md §2-2）。1軸でも欠けていればNone。
+    """
+    if not slot:
+        return None
+    emotion, shot, angle = slot.get("emotion"), slot.get("shot"), slot.get("angle")
+    if not (emotion and shot and angle):
+        return None
+    chars_key = ",".join(sorted(c for c in (characters or []) if c))
+    return f"{chars_key}|{emotion}|{shot}|{angle}"
 
 
 def aroll_dir(project_id: str, episode: int) -> Path | None:
@@ -180,12 +197,17 @@ def build_or_update_manifest(
             characters = new.get("characters") or prev.get("characters") or []
             # このプロンプトは「今の台本テキスト」から作られた
             prompt_text_hash = text_hash(ln.get("text"))
+            # スロットも新プロンプトと一緒に更新する（同じ分岐＝promptとslotの世代がズレない）
+            slot = new.get("slot")
+            slot_source = new.get("slot_source") or ("none" if slot is None else "derived")
         else:
             prompt, source = keep_prompt, keep_source or ("llm" if keep_prompt else "")
             characters = prev.get("characters") or new.get("characters") or []
             if not characters and speaker.get("character_id"):
                 characters = [speaker["character_id"]]
             prompt_text_hash = prev.get("prompt_text_hash", "")
+            slot = prev.get("slot")
+            slot_source = prev.get("slot_source") or "none"
 
         panels.append({
             "line_id": lid,
@@ -198,6 +220,9 @@ def build_or_update_manifest(
             "prompt": prompt,
             "prompt_source": source,
             "prompt_text_hash": prompt_text_hash,
+            "slot": slot,
+            "slot_key": compute_slot_key(characters, slot),
+            "slot_source": slot_source,
             "status": prev.get("status", "pending"),
             "image": prev.get("image"),
             "provider": prev.get("provider"),
@@ -243,11 +268,106 @@ def update_line(
                 p["prompt_source"] = "user"
                 # 手書きプロンプトは「今の台本テキスト」を見て書かれたものとみなす
                 p["prompt_text_hash"] = text_hash(p.get("text"))
+                # 古いslotを残すと別の演技のdedup対象に誤って混ざるため、正規表現で再計算する
+                # （LLM呼び出し不要・課金なし。語彙外なら slot=None・slot_source="none" に落ちる）
+                slot = aroll_prompt_generator.derive_slot_from_prompt(p["prompt"])
+                if not (slot["emotion"] and slot["shot"] and slot["angle"]):
+                    slot = None
+                p["slot"] = slot
+                p["slot_source"] = "derived" if slot else "none"
             if characters is not None:
                 p["characters"] = [c for c in characters if c][:2]
+            p["slot_key"] = compute_slot_key(p.get("characters"), p.get("slot"))
             save_manifest(project_id, episode, manifest)
             return p
     return None
+
+
+# ---------------------------------------------------------------------------
+# 演技スロット（2026-08-19新規・Phase1）
+# 画像再利用の下地。ここではスロットを記録するだけで、生成そのものは変えない
+# （再利用ロジックはPhase2で別途実装）。詳細はDocs/AROLL_SLOT_REUSE_BRIEF.md。
+# ---------------------------------------------------------------------------
+
+AROLL_COST_PER_IMAGE_USD = float(os.getenv("AROLL_COST_PER_IMAGE_USD", "0.04"))
+
+
+def backfill_slots(project_id: str, episode: int, force: bool = False) -> dict:
+    """既存パネルのpromptから正規表現でslotを後埋めする（画像には一切触れない・冪等）。
+
+    force=False（既定）: 既にslot_keyを持つ行はスキップ（何度呼んでも安全）。
+    force=True: 全行を正規表現分類で上書き（llm由来のslotも含めて再計算したい時のみ使う）。
+    """
+    manifest = load_manifest(project_id, episode)
+    if manifest is None:
+        raise ValueError("aroll.json not found (run /aroll/prompts first)")
+
+    updated = skipped = orphaned = 0
+    for p in manifest.get("panels", []):
+        if p.get("orphan"):
+            orphaned += 1
+            continue
+        if not force and p.get("slot_key"):
+            skipped += 1
+            continue
+        prompt_text = p.get("prompt", "")
+        if not prompt_text.strip():
+            skipped += 1
+            continue
+        derived = aroll_prompt_generator.derive_slot_from_prompt(prompt_text)
+        has_all = bool(derived["emotion"] and derived["shot"] and derived["angle"])
+        p["slot"] = derived
+        p["slot_source"] = "derived" if has_all else "none"
+        p["slot_key"] = compute_slot_key(p.get("characters"), derived if has_all else None)
+        updated += 1
+
+    save_manifest(project_id, episode, manifest)
+    return {
+        "updated": updated, "skipped": skipped, "orphaned": orphaned,
+        "total": len(manifest.get("panels", [])),
+    }
+
+
+def slot_report(project_id: str, episode: int) -> dict:
+    """スロット別集計・ユニーク数・削減見込み枚数・$概算を返す（検査のみ・何も変更しない）。"""
+    manifest = load_manifest(project_id, episode)
+    if manifest is None:
+        raise ValueError("aroll.json not found (run /aroll/prompts first)")
+
+    panels = [
+        p for p in manifest.get("panels", [])
+        if not p.get("orphan") and (p.get("text") or "").strip()
+    ]
+    total = len(panels)
+
+    source_counts = {"llm": 0, "derived": 0, "none": 0}
+    for p in panels:
+        source_counts[p.get("slot_source") or "none"] = (
+            source_counts.get(p.get("slot_source") or "none", 0) + 1
+        )
+
+    groups: dict[str, int] = {}
+    for p in panels:
+        key = p.get("slot_key")
+        if key:
+            groups[key] = groups.get(key, 0) + 1
+    keyed = sum(groups.values())
+    unique = len(groups)
+    reusable = sum(n - 1 for n in groups.values())
+    top = sorted(groups.items(), key=lambda kv: kv[1], reverse=True)[:20]
+
+    return {
+        "total_panels": total,
+        "keyed_panels": keyed,
+        "unkeyed_panels": total - keyed,
+        "unique_slots": unique,
+        "duplicate_rate_pct": round(100 * (1 - unique / keyed), 1) if keyed else 0.0,
+        "reusable_count": reusable,
+        "estimated_savings_usd": round(reusable * AROLL_COST_PER_IMAGE_USD, 2),
+        "cost_per_image_usd": AROLL_COST_PER_IMAGE_USD,
+        "slot_source_counts": source_counts,
+        "top_slots": [{"slot_key": k, "count": n} for k, n in top],
+    }
 
 
 # ---------------------------------------------------------------------------
@@ -671,6 +791,8 @@ async def generate_line_image(
             # この絵が「どのセリフから描かれたか」を刻む＝後で台本が変わったら stale と分かる
             "source_text": panel.get("text", ""),
             "source_text_hash": text_hash(panel.get("text")),
+            # 実際に画像生成したことを刻む（コピーで済ませた行 image_source="copied" と区別する）
+            "image_source": "generated",
         })
     except Exception as e:
         panel.update({"status": "failed", "error": str(e)[:300]})
@@ -725,43 +847,219 @@ def select_targets(
     return [p for p in panels if (p.get("prompt") or "").strip()]
 
 
+# ---------------------------------------------------------------------------
+# 生成プラン（2026-08-19新規・Phase2）: 同一バッチ内で同じ演技スロットを使い回す。
+# max_reuse=1（既定）なら全行が個別生成＝現行と完全に同一挙動。
+# クールダウンは別ロジックにせず「ラウンドロビン割当」に埋め込む（同一variantの間隔が
+# 自動的にvariants個ぶん空く）。既存の生成済み画像（バッチ対象外）は再利用元にしない
+# （今回のスコープ外。将来拡張はDocs/AROLL_SLOT_REUSE_BRIEF.md §4-5参照）。
+# ---------------------------------------------------------------------------
+
+def _assign_variants(group_panels: list[dict], max_reuse: int, min_gap: int) -> dict[str, int]:
+    """スロットが同じグループ内でvariantをラウンドロビン割当する。
+
+    orderでソートし i % variants で割り振る＝同一variantの最小間隔は自動的にvariants個ぶん空く。
+    その間隔(order差)がmin_gap未満ならvariant数を増やして割り直す（グループ全員が別variantに
+    なれば重複は起きないので、最大でグループ人数まで増やせば必ず収束する）。
+    """
+    ordered = sorted(group_panels, key=lambda p: p.get("order", 0))
+    n = len(ordered)
+    variants = max(1, -(-n // max_reuse))  # ceil(n / max_reuse)
+    while variants < n:
+        assign = {p["line_id"]: i % variants for i, p in enumerate(ordered)}
+        by_variant: dict[int, list[int]] = {}
+        for p in ordered:
+            by_variant.setdefault(assign[p["line_id"]], []).append(p.get("order", 0))
+        gap_ok = all(
+            b - a >= min_gap
+            for orders in by_variant.values()
+            for a, b in zip(sorted(orders), sorted(orders)[1:])
+        )
+        if gap_ok:
+            return assign
+        variants += 1
+    return {p["line_id"]: i for i, p in enumerate(ordered)}
+
+
+def build_generation_plan(targets: list[dict], max_reuse: int = 1, min_gap: int = 8) -> dict:
+    """targets(select_targetsの出力)を「実生成する代表行」と「コピーで済む行」に振り分ける。
+
+    slot_key を持たない行、および max_reuse<=1 の時は常に個別生成（安全側）。
+    Returns: {"generate": [{"line_id","variant_id"}...], "copy": [{"line_id","copy_from","variant_id"}...],
+              "generate_count", "copy_count", "max_reuse", "min_gap"}
+    """
+    max_reuse = max(1, max_reuse)
+    min_gap = max(0, min_gap)
+    order_by_id = {p["line_id"]: p.get("order", 0) for p in targets}
+
+    groups: dict[str, list[dict]] = {}
+    generate_entries: list[dict] = []
+    copy_entries: list[dict] = []
+
+    for p in targets:
+        key = p.get("slot_key")
+        if not key or max_reuse <= 1:
+            generate_entries.append({"line_id": p["line_id"], "variant_id": None})
+        else:
+            groups.setdefault(key, []).append(p)
+
+    for key, group in groups.items():
+        assign = _assign_variants(group, max_reuse, min_gap)
+        ordered = sorted(group, key=lambda p: p.get("order", 0))
+        reps: dict[int, str] = {}
+        for p in ordered:
+            v = assign[p["line_id"]]
+            variant_id = f"{key}#{v}"
+            if v not in reps:
+                reps[v] = p["line_id"]
+                generate_entries.append({"line_id": p["line_id"], "variant_id": variant_id})
+            else:
+                copy_entries.append({
+                    "line_id": p["line_id"], "copy_from": reps[v], "variant_id": variant_id,
+                })
+
+    generate_entries.sort(key=lambda e: order_by_id.get(e["line_id"], 0))
+    return {
+        "generate": generate_entries, "copy": copy_entries,
+        "generate_count": len(generate_entries), "copy_count": len(copy_entries),
+        "max_reuse": max_reuse, "min_gap": min_gap,
+    }
+
+
+def generation_plan_estimate(
+    project_id: str, episode: int,
+    line_ids: list[str] | None = None, only_missing: bool = True,
+    max_reuse: int = 1, min_gap: int = 8,
+) -> dict:
+    """課金前のドライラン。画像には一切触れない・何も保存しない。"""
+    manifest = load_manifest(project_id, episode)
+    if manifest is None:
+        raise ValueError("aroll.json not found (run /aroll/prompts first)")
+    targets = select_targets(manifest, line_ids, only_missing)
+    plan = build_generation_plan(targets, max_reuse=max_reuse, min_gap=min_gap)
+    unkeyed = sum(1 for e in plan["generate"] if e["variant_id"] is None)
+    return {
+        "target_count": len(targets),
+        "generate_count": plan["generate_count"],
+        "copy_count": plan["copy_count"],
+        "unkeyed_count": unkeyed,
+        "estimated_cost_usd": round(plan["generate_count"] * AROLL_COST_PER_IMAGE_USD, 2),
+        "cost_per_image_usd": AROLL_COST_PER_IMAGE_USD,
+        "max_reuse": plan["max_reuse"], "min_gap": plan["min_gap"],
+    }
+
+
+def _apply_copy(project_id: str, episode: int, manifest: dict, entry: dict, log: list[str] | None = None) -> bool:
+    """代表行の画像をコピーして対象行のマニフェストへ反映する（マニフェストの保存は呼び出し側）。"""
+    panels_by_id = {p.get("line_id"): p for p in manifest.get("panels", [])}
+    src = panels_by_id.get(entry["copy_from"])
+    dst = panels_by_id.get(entry["line_id"])
+    if src is None or dst is None or not src.get("image"):
+        if log is not None:
+            log.append(f"✘ {entry['line_id']} コピー元 {entry.get('copy_from')} の画像が無いためスキップ")
+        return False
+    out_dir = aroll_dir(project_id, episode)
+    src_path = out_dir / src["image"]
+    if not src_path.exists():
+        if log is not None:
+            log.append(f"✘ {entry['line_id']} コピー元ファイルが見つかりません: {src['image']}")
+        return False
+    filename = panel_filename(entry["line_id"])
+    old_image = dst.get("image")
+    (out_dir / filename).write_bytes(src_path.read_bytes())
+    if old_image and old_image != filename:
+        (out_dir / old_image).unlink(missing_ok=True)
+    dst.update({
+        "status": "done", "image": filename, "provider": src.get("provider"),
+        "error": None, "generated_at": _now(),
+        # コピーでも「今の台本テキスト」を刻む＝sync判定は通常の行と同じロジックで正しく動く
+        "source_text": dst.get("text", ""), "source_text_hash": text_hash(dst.get("text")),
+        "variant_id": entry.get("variant_id"), "image_source": "copied",
+        "copied_from": entry["copy_from"],
+    })
+    if log is not None:
+        log.append(f"⧉ {entry['line_id']} ← {entry['copy_from']} をコピー")
+    return True
+
+
+def _stamp_variant(project_id: str, episode: int, line_id: str, variant_id: str) -> None:
+    """実生成した代表行にvariant_idを刻む（generate_line_imageは汎用のため単独では書かない）。"""
+    manifest = load_manifest(project_id, episode)
+    if manifest is None:
+        return
+    for p in manifest.get("panels", []):
+        if p.get("line_id") == line_id:
+            p["variant_id"] = variant_id
+            save_manifest(project_id, episode, manifest)
+            return
+
+
 async def run_batch(
     project_id: str, episode: int,
     line_ids: list[str] | None = None,
     only_missing: bool = True,
     allow_paid_fallback: bool = False,
+    max_reuse: int = 1,
+    min_gap: int = 8,
 ) -> None:
-    """バッチ本体（asyncio.create_task で起動される）。直列＋インターバル＋失敗続行。"""
+    """バッチ本体（asyncio.create_task で起動される）。直列＋インターバル＋失敗続行。
+
+    max_reuse=1（既定）なら生成プランは全行が個別生成＝Phase2導入前と完全に同一挙動。
+    max_reuse>1 の時だけ、同じ演技スロットの代表行を生成→即座に残りへコピーする。
+    job["total"] は実生成枚数のみ（コピーは一瞬で終わるため母数に入れると進捗が嘘になる）。
+    """
     key = _job_key(project_id, episode)
     manifest = load_manifest(project_id, episode) or {}
     targets = select_targets(manifest, line_ids, only_missing)
+    plan = build_generation_plan(targets, max_reuse=max_reuse, min_gap=min_gap)
+    generate_entries = plan["generate"]
+    copy_by_source: dict[str, list[dict]] = {}
+    for entry in plan["copy"]:
+        copy_by_source.setdefault(entry["copy_from"], []).append(entry)
+
     job = _JOBS[key] = {
         "running": True, "cancel": False,
-        "total": len(targets), "done": 0, "failed": 0,
+        "total": len(generate_entries), "done": 0, "failed": 0,
+        "copy_total": len(plan["copy"]), "copy_done": 0,
         "current_line": None, "log": [],
         "started_at": _now(), "finished_at": None,
         "allow_paid_fallback": allow_paid_fallback,
+        "max_reuse": max_reuse,
     }
     log: list[str] = job["log"]
 
     try:
-        for i, panel in enumerate(targets):
+        for i, entry in enumerate(generate_entries):
             if job["cancel"]:
                 log.append(f"中断しました（{job['done']}枚生成済み）")
                 break
-            lid = panel["line_id"]
+            lid = entry["line_id"]
             job["current_line"] = lid
             try:
                 await generate_line_image(
                     project_id, episode, lid,
                     allow_paid_fallback=allow_paid_fallback, log=log,
                 )
+                if entry.get("variant_id"):
+                    _stamp_variant(project_id, episode, lid, entry["variant_id"])
                 job["done"] += 1
                 log.append(f"✔ {lid} 生成完了 ({job['done']}/{job['total']})")
+                # このコマを代表(コピー元)とする行があれば即座にコピーする（中断しても
+                # ここまでのコピーは残る＝レジューム安全の原則を崩さない）
+                dependents = copy_by_source.get(lid, [])
+                if dependents:
+                    m = load_manifest(project_id, episode)
+                    if m is not None:
+                        for c in dependents:
+                            if _apply_copy(project_id, episode, m, c, log=log):
+                                job["copy_done"] += 1
+                        save_manifest(project_id, episode, m)
             except Exception as e:
                 job["failed"] += 1
                 log.append(f"✘ {lid} 失敗: {str(e)[:150]}")
-            if i < len(targets) - 1 and not job["cancel"]:
+                for c in copy_by_source.get(lid, []):
+                    log.append(f"  └ {c['line_id']} はコピー元({lid})失敗のためスキップ")
+            if i < len(generate_entries) - 1 and not job["cancel"]:
                 await asyncio.sleep(MIN_INTERVAL_SEC)
     finally:
         job["running"] = False

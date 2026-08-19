@@ -25,6 +25,7 @@ DEFAULT_PRESETS = {
         {"id": "surprised", "label_ja": "驚き",   "prompt": "surprised, wide eyes, open mouth"},
         {"id": "shy",       "label_ja": "照れ",   "prompt": "blushing, shy smile"},
         {"id": "troubled",  "label_ja": "困惑",   "prompt": "troubled, worried expression"},
+        {"id": "thoughtful","label_ja": "物思い", "prompt": "thoughtful, pensive expression, hand on chin"},
     ],
     "pose": [
         {"id": "talking",     "label_ja": "話している", "prompt": "mouth open, talking, light hand gesture"},
@@ -36,6 +37,10 @@ DEFAULT_PRESETS = {
         {"id": "waving",      "label_ja": "手を振る",   "prompt": "waving one hand"},
         {"id": "presenting",  "label_ja": "提示",       "prompt": "presenting with an open hand"},
         {"id": "standing",    "label_ja": "立ち（自然）","prompt": "standing naturally, relaxed"},
+        {"id": "muttering",    "label_ja": "つぶやき",   "prompt": "muttering to oneself, hand near mouth, quiet, looking down or aside"},
+        {"id": "sweat_drop",   "label_ja": "冷や汗",     "prompt": "anime sweat drop, nervous, awkward"},
+        {"id": "held_breath",  "label_ja": "息を呑む",   "prompt": "holding breath, frozen for a beat, wide-eyed stillness"},
+        {"id": "clenched_fist","label_ja": "拳を握る",   "prompt": "clenched fist, quiet resolve"},
     ],
     "shot": [
         {"id": "face_closeup","label_ja": "顔アップ",     "prompt": "extreme close-up of the face"},
@@ -43,12 +48,16 @@ DEFAULT_PRESETS = {
         {"id": "waist_up",    "label_ja": "ウエストアップ","prompt": "waist-up shot"},
         {"id": "full_body",   "label_ja": "全身",         "prompt": "full body shot, head to toe"},
         {"id": "wide",        "label_ja": "引き（全景）", "prompt": "wide shot showing the full scene"},
+        {"id": "profile",     "label_ja": "横顔",         "prompt": "profile view, side face, looking off to the side"},
+        {"id": "eyes_only",   "label_ja": "瞳アップ",     "prompt": "extreme close-up on the eyes only, dramatic focal point"},
     ],
     "angle": [
         {"id": "eye_level",     "label_ja": "正面（目線）", "prompt": "eye-level shot, front view"},
         {"id": "three_quarter", "label_ja": "斜め",         "prompt": "three-quarter view, slight angle"},
         {"id": "low_angle",     "label_ja": "煽り（下から）","prompt": "low angle shot, camera looking up"},
         {"id": "high_angle",    "label_ja": "俯瞰（上から）","prompt": "high angle shot, camera looking down"},
+        {"id": "dutch",         "label_ja": "傾き",         "prompt": "dutch angle, tilted frame, off-kilter"},
+        {"id": "from_behind",   "label_ja": "背後から",     "prompt": "shot from behind the character, back view"},
     ],
     "scene": [
         {"id": "solo",         "label_ja": "単独",     "prompt": "single character alone"},
@@ -72,6 +81,13 @@ def load_presets() -> dict:
             if g not in data:
                 data[g] = DEFAULT_PRESETS[g]
                 changed = True
+        # 後方互換: 既存groupにデフォルトの項目(id)が無ければ末尾に追加（ユーザー編集は保持）
+        for g in GROUPS:
+            existing_ids = {item.get("id") for item in data.get(g, [])}
+            for item in DEFAULT_PRESETS.get(g, []):
+                if item["id"] not in existing_ids:
+                    data[g].append(item)
+                    changed = True
         if changed:
             save_presets(data)
         return data

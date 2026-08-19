@@ -15,7 +15,7 @@ from pathlib import Path
 import httpx
 from fastapi import APIRouter, File, Form, HTTPException, UploadFile
 from fastapi.responses import FileResponse, StreamingResponse
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from app.core import (
     aroll_manager,
@@ -1516,6 +1516,15 @@ class ArollGenerateRequest(BaseModel):
     allow_paid_fallback: bool = False      # OpenRouter課金退避（既定OFF）
     aspect: Optional[str] = None
     style: Optional[str] = None
+    max_reuse: int = Field(1, ge=1)        # 同一演技スロットの再利用上限（既定1=再利用なし＝現行と同一挙動）
+    min_gap: int = Field(8, ge=0)          # 同一画像を使う行同士の最小間隔（order差）
+
+
+class ArollPlanRequest(BaseModel):
+    line_ids: Optional[list[str]] = None
+    only_missing: bool = True
+    max_reuse: int = Field(1, ge=1)
+    min_gap: int = Field(8, ge=0)
 
 
 def _group_line_objs_by_section(script: dict) -> list[tuple[str, list[dict]]]:
@@ -1579,6 +1588,27 @@ async def aroll_get_manifest(project_id: str, episode_number: int):
         raise HTTPException(status_code=404, detail="aroll.json not found (run /aroll/prompts first)")
     # panels[].sync は確定台本と突き合わせた算出値（ファイルには保存しない）
     return aroll_manager.annotate_manifest(project_id, episode_number, manifest)
+
+
+@router.post("/projects/{project_id}/episodes/{episode_number}/aroll/slots/backfill")
+async def aroll_backfill_slots(project_id: str, episode_number: int, force: bool = False):
+    """既存パネルのpromptから演技スロットを後埋めする（画像には一切触れない・冪等）。
+
+    Phase1（画像再利用の下地作り）。force=trueでllm由来のslotも含めて正規表現で再計算する。
+    """
+    try:
+        return aroll_manager.backfill_slots(project_id, episode_number, force=force)
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+
+
+@router.get("/projects/{project_id}/episodes/{episode_number}/aroll/slots")
+async def aroll_slot_report(project_id: str, episode_number: int):
+    """スロット別集計・ユニーク数・削減見込み枚数・$概算を返す（検査のみ・何も変更しない）。"""
+    try:
+        return aroll_manager.slot_report(project_id, episode_number)
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e))
 
 
 @router.get("/projects/{project_id}/episodes/{episode_number}/aroll/sync")
@@ -1663,8 +1693,22 @@ async def aroll_start_batch(project_id: str, episode_number: int, req: ArollGene
         project_id, episode_number,
         line_ids=req.line_ids, only_missing=req.only_missing,
         allow_paid_fallback=req.allow_paid_fallback,
+        max_reuse=req.max_reuse, min_gap=req.min_gap,
     ))
     return {"started": True, "target_count": len(targets)}
+
+
+@router.post("/projects/{project_id}/episodes/{episode_number}/aroll/batch/plan")
+async def aroll_batch_plan(project_id: str, episode_number: int, req: ArollPlanRequest):
+    """課金前ドライラン。何行を実生成し何行をコピーで済ませるか・$概算を返す（何も変更しない）。"""
+    try:
+        return aroll_manager.generation_plan_estimate(
+            project_id, episode_number,
+            line_ids=req.line_ids, only_missing=req.only_missing,
+            max_reuse=req.max_reuse, min_gap=req.min_gap,
+        )
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e))
 
 
 @router.post("/projects/{project_id}/episodes/{episode_number}/aroll/generate/line/{line_id}")

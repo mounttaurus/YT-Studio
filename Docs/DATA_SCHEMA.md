@@ -842,7 +842,7 @@ NanoBanana（参照画像同梱）でパネルを生成する。吹き出しは�
 
 ```json
 {
-  "schema_version": "1.0.0",
+  "schema_version": "1.1.0",
   "project_id": "20250603_001",
   "episode": 1,
   "aspect": "16:9",
@@ -860,6 +860,9 @@ NanoBanana（参照画像同梱）でパネルを生成する。吹き出しは�
       "prompt": "演出のみの英語プロンプト（表情/ポーズ/ショット/構図）",
       "prompt_source": "llm | user",
       "prompt_text_hash": "9f2c1a...",
+      "slot": {"emotion": "serious", "pose": "talking", "shot": "bust", "angle": "low_angle"},
+      "slot_key": "002|serious|bust|low_angle",
+      "slot_source": "llm | derived | none",
       "status": "pending | done | failed",
       "image": "panel_line_001.png",
       "provider": "nanobanana",
@@ -880,6 +883,46 @@ NanoBanana（参照画像同梱）でパネルを生成する。吹き出しは�
 - 空テキスト行はパネル対象外（マニフェストに含まれない）
 - バッチ生成は1行ごとにこのファイルへ書き出す＝中断・再開（only_missing）が常に安全
 - OpenRouterへの課金退避は `allow_paid_fallback=true` の時だけ（既定OFF。Free表示でも実課金のため）
+
+### 演技スロット（2026-08-19 新規 — 画像再利用の下地）
+
+「似た画像が多い」問題への対処として、パネルの演出を**構造化ラベル**でも記録する
+（`shared/imagegen/panel_presets.json` と同じ語彙。プリセットの本籍は `panel_presets.py`）。
+
+| フィールド | 意味 |
+|---|---|
+| `slot` | `{emotion, pose, shot, angle}`。値は `panel_presets.json` の id。判定不能な軸は null |
+| `slot_key` | 画像再利用の照合キー。`"{char_ids(sorted)}\|{emotion}\|{shot}\|{angle}"`（`pose`は含まない）。1軸でもnullなら`slot_key`自体がnull |
+| `slot_source` | `llm`＝プロンプト生成LLMが語彙内で回答／`derived`＝語彙外だったため`prompt`本文から正規表現で推定／`none`＝どちらも不発（この行は常に個別生成として扱う） |
+
+`slot_key` は**画像再利用（バッチ生成時の同一演技dedup）の照合キー**。既存の `aroll.json`
+（`slot` フィールドを持たない）はそのまま読める＝読み込み時に欠損は null 補完。
+
+### 画像再利用（2026-08-19 新規 — バッチ生成の話内dedup）
+
+バッチ生成（`POST .../aroll/generate`）に `max_reuse`（既定1）を渡すと、同じ `slot_key` を
+持つ行をグルーピングし、`variants = ceil(グループ枚数 / max_reuse)` 体だけ実生成、残りは
+ファイルコピーで済ませる。**`max_reuse=1` は現行と完全に同一挙動**（常に個別生成）。
+
+| フィールド | 意味 |
+|---|---|
+| `variant_id` | `"{slot_key}#{n}"`。同じ画像を共有する行同士が同じ値を持つ |
+| `image_source` | `"generated"`＝実際に画像生成した／`"copied"`＝代表行の画像をコピーした |
+| `copied_from` | コピー元の `line_id`（`image_source="copied"`の時のみ） |
+
+コピーは**実体ファイルをコピー**する（`a_roll/panel_{line_id}.png` は従来どおり全パネル分
+存在する）。シンボリックリンクやパス間接参照は使わない＝editing-agent・export・sync・
+Photoshop手作業は無改修で動く。コピーは一度きりで、以後はコピー先も独立した実体になる
+（1行だけ作り直しても他のコピー先には影響しない）。
+
+**課金前ドライラン**: `POST .../aroll/batch/plan`（何も変更しない）で実生成枚数・コピー枚数・
+$概算を確認できる。`GET .../aroll/status` の `job.total` は実生成枚数のみ（コピーは一瞬で
+終わるため母数に入れると進捗が嘘になる）。`job.copy_total` / `job.copy_done` でコピー側の
+進捗も別途確認できる。
+
+**現在のスコープ**: dedupは**同一バッチ内**のみ。台本に行を追加して別バッチを走らせた時、
+既存の生成済み画像を新規行の再利用元にする「バッチをまたいだ再利用」は未実装（将来拡張、
+詳細はDocs/AROLL_SLOT_REUSE_BRIEF.md §4-5・§7）。
 
 ### 台本との同期判定（2026-08-09 新規）
 
