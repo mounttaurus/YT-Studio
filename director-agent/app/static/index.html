@@ -2360,9 +2360,33 @@
                         </select>
                       </div>
                     </div>
-                    <!-- 中: プロンプト編集 -->
+                    <!-- 中: 根拠(slot)＋プロンプト編集 -->
                     <div style="flex:1">
-                      <textarea rows="3" style="width:100%;font-size:11px;font-family:monospace"
+                      <div style="display:flex;gap:4px;flex-wrap:wrap;align-items:center;margin-bottom:6px">
+                        <span style="font-size:10px;color:#64748b">根拠</span>
+                        <select style="font-size:10px;padding:2px" :value="p.slot?.emotion || ''"
+                                @change="arollSetSlot(p, 'emotion', $event.target.value)">
+                          <option value="">表情</option>
+                          <template x-for="o in studioPresets.emotion" :key="o.id"><option :value="o.id" x-text="o.label_ja"></option></template>
+                        </select>
+                        <select style="font-size:10px;padding:2px" :value="p.slot?.shot || ''"
+                                @change="arollSetSlot(p, 'shot', $event.target.value)">
+                          <option value="">ショット</option>
+                          <template x-for="o in studioPresets.shot" :key="o.id"><option :value="o.id" x-text="o.label_ja"></option></template>
+                        </select>
+                        <select style="font-size:10px;padding:2px" :value="p.slot?.angle || ''"
+                                @change="arollSetSlot(p, 'angle', $event.target.value)">
+                          <option value="">アングル</option>
+                          <template x-for="o in studioPresets.angle" :key="o.id"><option :value="o.id" x-text="o.label_ja"></option></template>
+                        </select>
+                        <select style="font-size:10px;padding:2px" :value="p.slot?.pose || ''"
+                                @change="arollSetSlot(p, 'pose', $event.target.value)">
+                          <option value="">ポーズ(任意)</option>
+                          <template x-for="o in studioPresets.pose" :key="o.id"><option :value="o.id" x-text="o.label_ja"></option></template>
+                        </select>
+                        <span x-show="!p.slot_key" style="font-size:9px;color:#f59e0b" title="emotion・shot・angleが揃うとライブラリと照合できます">未照合（必ず課金生成）</span>
+                      </div>
+                      <textarea rows="2" style="width:100%;font-size:11px;font-family:monospace"
                                 :value="p.prompt" :placeholder="'（プロンプト未生成 — ①を実行するか手入力）'"
                                 @change="arollSavePrompt(p, $event.target.value)"></textarea>
                       <div style="display:flex;gap:8px;align-items:center;margin-top:2px">
@@ -2370,19 +2394,45 @@
                         <span x-show="p.error" style="font-size:10px;color:#f87171" x-text="p.error"></span>
                       </div>
                     </div>
-                    <!-- 右: サムネ＋行生成 -->
-                    <div style="min-width:170px;max-width:170px;display:flex;flex-direction:column;gap:6px;align-items:center">
+                    <!-- 右: サムネ＋行生成＋差し替え -->
+                    <div style="min-width:170px;max-width:170px;display:flex;flex-direction:column;gap:6px;align-items:center;position:relative">
                       <template x-if="p.image">
                         <img :src="arollImageUrl(p)" loading="lazy"
                              style="width:160px;border-radius:6px;border:1px solid #334155;cursor:zoom-in"
                              @click="window.open(arollImageUrl(p), '_blank')">
                       </template>
+                      <span x-show="p.image_source === 'library'" style="font-size:9px;color:#7dd3fc" x-text="'📚 ' + (p.library_slot_id || '')"></span>
                       <div x-show="arollLineBusy === p.line_id" class="progress-indeterminate" style="width:160px"></div>
                       <button class="btn btn-sm" style="width:160px"
                               @click="arollGenerateLine(p)"
                               :disabled="arollRunning || arollLineBusy || !p.prompt">
                         <span x-text="arollLineBusy === p.line_id ? '生成中...' : (p.status === 'done' ? '↻ この行を作り直す' : '▶ この行だけ生成')"></span>
                       </button>
+                      <div style="display:flex;gap:4px;width:160px">
+                        <button class="btn btn-ghost btn-sm" style="flex:1;font-size:10px;padding:3px"
+                                @click="arollTogglePicker(p)" :disabled="arollRunning || arollLineBusy || !p.slot_key"
+                                title="ライブラリの承認済みバリアントから選び直す（無料）">🔀 差替</button>
+                        <button class="btn btn-ghost btn-sm" style="flex:1;font-size:10px;padding:3px"
+                                @click="arollGenerateLineFresh(p)" :disabled="arollRunning || arollLineBusy || !p.prompt"
+                                title="ライブラリを使わず必ず新規課金生成する">🎲 新規</button>
+                      </div>
+                      <!-- キャラ画像ピッカー -->
+                      <div x-show="arollPickerFor === p.line_id"
+                           style="position:absolute;top:0;right:172px;z-index:20;background:#0f172a;border:1px solid #374151;border-radius:8px;padding:8px;width:280px;max-height:320px;overflow-y:auto">
+                        <div style="font-size:10px;color:#94a3b8;margin-bottom:6px">承認済みバリアントから選ぶ（クリックで即差替・無料）</div>
+                        <div x-show="arollPickerBusy" style="font-size:11px;color:#64748b">読み込み中…</div>
+                        <div x-show="!arollPickerBusy && !arollPickerItems.length" style="font-size:11px;color:#64748b">このスロットに承認済みバリアントがありません</div>
+                        <div style="display:grid;grid-template-columns:repeat(2,1fr);gap:6px">
+                          <template x-for="item in arollPickerItems" :key="item.slot_id">
+                            <div style="cursor:pointer" @click="arollPickLibraryImage(p, item)">
+                              <img :src="arollPickerImageUrl((p.characters||[])[0], item)"
+                                   style="width:100%;aspect-ratio:16/9;object-fit:cover;border-radius:4px"
+                                   :style="item.slot_id === p.library_slot_id ? 'outline:2px solid #7c3aed' : ''">
+                              <div style="font-size:9px;color:#64748b;text-align:center" x-text="'使用' + (item.times_used||0) + '回'"></div>
+                            </div>
+                          </template>
+                        </div>
+                      </div>
                     </div>
                   </div>
                 </template>
@@ -4306,6 +4356,9 @@ function app() {
     arollPollTimer: null,
     arollBusy: null,              // null | 'prompts'
     arollLineBusy: null,          // 行単位生成中の line_id
+    arollPickerFor: null,          // キャラ画像ピッカーを開いている line_id
+    arollPickerItems: [],
+    arollPickerBusy: false,
     arollMsg: '',
     arollWarnings: [],
     arollStyle: 'kamishibai',
@@ -6916,7 +6969,11 @@ function app() {
     async refreshArollTab() {
       if (!this.currentProject) return;
       this.arollMsg = '';
-      await Promise.all([this.loadFreeStyles(), this.charas.length ? Promise.resolve() : this.loadCharas()]);
+      await Promise.all([
+        this.loadFreeStyles(),
+        this.charas.length ? Promise.resolve() : this.loadCharas(),
+        this.loadStudioPresets(),
+      ]);
       await this.loadArollManifest();
       await this.loadArollSync();
       await this.pollArollStatus();
@@ -7040,6 +7097,81 @@ function app() {
         await this.loadArollManifest();  // failedステータスを反映
         await this.loadArollSync();
       } finally { this.arollLineBusy = null; }
+    },
+    async arollGenerateLineFresh(p) {
+      // ライブラリを迂回して必ず新規課金生成する（"新規生成"ボタン専用。作り直す=ライブラリ優先とは別操作）
+      if (!confirm(`ライブラリを使わず新規課金生成します（≈$0.04）。よろしいですか？`)) return;
+      this.arollLineBusy = p.line_id;
+      this.arollMsg = '';
+      try {
+        const r = await fetch(`${this.arollApiBase}/generate/line/${p.line_id}`, {
+          method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ allow_paid_fallback: this.arollPaidFallback, use_library: false }),
+        });
+        const d = await r.json();
+        if (!r.ok) throw new Error(d.detail || '生成に失敗しました');
+        Object.assign(p, d, { sync: 'ok' });
+        this.arollImgVersion++;
+        await this.loadArollSync();
+      } catch (e) {
+        this.arollMsg = `${p.line_id} の生成に失敗: ${e.message}`;
+        await this.loadArollManifest();
+        await this.loadArollSync();
+      } finally { this.arollLineBusy = null; }
+    },
+    async arollSetSlot(p, field, value) {
+      const slot = { emotion: '', shot: '', angle: '', pose: '', ...(p.slot || {}) };
+      slot[field] = value;
+      p.slot = slot;
+      if (!(slot.emotion && slot.shot && slot.angle)) return;  // 3軸揃うまで送らない
+      try {
+        await fetch(`${this.arollApiBase}/lines/${p.line_id}`, {
+          method: 'PUT', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ slot: { emotion: slot.emotion, shot: slot.shot, angle: slot.angle, pose: slot.pose || null } }),
+        });
+        p.slot_source = 'user';
+      } catch { return; }
+      // 無料の範囲で即座に再解決する（ライブラリに一致が無ければ何もしない＝課金しない）
+      this.arollLineBusy = p.line_id;
+      try {
+        const r = await fetch(`${this.arollApiBase}/generate/line/${p.line_id}`, {
+          method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ use_library: true, library_only: true }),
+        });
+        if (r.ok) { Object.assign(p, await r.json()); this.arollImgVersion++; }
+        // 404(ライブラリ不一致)は静かに無視。ユーザーは下のピッカーか「新規生成」ボタンを使う
+      } catch { /* noop */ }
+      finally { this.arollLineBusy = null; }
+    },
+    async arollTogglePicker(p) {
+      if (this.arollPickerFor === p.line_id) { this.arollPickerFor = null; return; }
+      this.arollPickerFor = p.line_id;
+      this.arollPickerItems = [];
+      const charId = (p.characters || [])[0];
+      if (!charId || !p.slot?.emotion || !p.slot?.shot || !p.slot?.angle) return;
+      this.arollPickerBusy = true;
+      try {
+        const params = new URLSearchParams({ emotion: p.slot.emotion, shot: p.slot.shot, angle: p.slot.angle });
+        const d = await (await fetch(`${FAPI}/characters/${charId}/panel_library?${params}`)).json();
+        this.arollPickerItems = (d.entries || []).filter(e => (e.review_status || 'approved') === 'approved' && !e.is_stale);
+      } catch { this.arollPickerItems = []; }
+      this.arollPickerBusy = false;
+    },
+    arollPickerImageUrl(charId, item) {
+      const filename = (item.image || '').split('/').pop();
+      return `${FAPI}/characters/${charId}/panel_library/file/${filename}`;
+    },
+    async arollPickLibraryImage(p, item) {
+      const charId = (p.characters || [])[0];
+      this.arollLineBusy = p.line_id;
+      try {
+        const r = await fetch(`${this.arollApiBase}/lines/${p.line_id}/set_library_image`, {
+          method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ char_id: charId, slot_id: item.slot_id }),
+        });
+        if (r.ok) { Object.assign(p, await r.json()); this.arollImgVersion++; }
+      } catch { /* noop */ }
+      finally { this.arollLineBusy = null; this.arollPickerFor = null; }
     },
     async arollStartBatch() {
       const n = this.arollBatchTargetCount;

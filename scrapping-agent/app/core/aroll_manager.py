@@ -276,8 +276,14 @@ def build_or_update_manifest(
 def update_line(
     project_id: str, episode: int, line_id: str,
     prompt: str | None = None, characters: list[str] | None = None,
+    slot: dict | None = None,
 ) -> dict | None:
-    """ユーザーによる行編集。promptを書き換えたら prompt_source="user" にする。"""
+    """ユーザーによる行編集。promptを書き換えたら prompt_source="user" にする。
+
+    slotを直接渡すとslot_source="user"になり、promptからの自動再計算より優先される
+    （UIの「根拠」欄でemotion/shot/angleを選び直す操作。画像生成LLMの散文とは独立に
+    照合キーだけを差し替えられる。Docs/AROLL_ASSET_PLAN.md §18）。
+    """
     manifest = load_manifest(project_id, episode)
     if manifest is None:
         return None
@@ -288,19 +294,62 @@ def update_line(
                 p["prompt_source"] = "user"
                 # 手書きプロンプトは「今の台本テキスト」を見て書かれたものとみなす
                 p["prompt_text_hash"] = text_hash(p.get("text"))
-                # 古いslotを残すと別の演技のdedup対象に誤って混ざるため、正規表現で再計算する
-                # （LLM呼び出し不要・課金なし。語彙外なら slot=None・slot_source="none" に落ちる）
-                slot = aroll_prompt_generator.derive_slot_from_prompt(p["prompt"])
-                if not (slot["emotion"] and slot["shot"] and slot["angle"]):
-                    slot = None
+                # slotを明示指定していない時だけ、古いslotが別の演技のdedup対象に誤って
+                # 混ざらないよう正規表現で再計算する（LLM呼び出し不要・課金なし）
+                if slot is None:
+                    derived = aroll_prompt_generator.derive_slot_from_prompt(p["prompt"])
+                    if not (derived["emotion"] and derived["shot"] and derived["angle"]):
+                        derived = None
+                    p["slot"] = derived
+                    p["slot_source"] = "derived" if derived else "none"
+            if slot is not None:
                 p["slot"] = slot
-                p["slot_source"] = "derived" if slot else "none"
+                p["slot_source"] = "user"
             if characters is not None:
                 p["characters"] = [c for c in characters if c][:2]
             p["slot_key"] = compute_slot_key(p.get("characters"), p.get("slot"))
             save_manifest(project_id, episode, manifest)
             return p
     return None
+
+
+def set_library_image(
+    project_id: str, episode: int, line_id: str, char_id: str, slot_id: str,
+) -> dict:
+    """ユーザーがライブラリの特定バリアントを直接選んだ時に使う（ローテーション無視・明示指定）。
+
+    generate_line_imageのライブラリ消費パスと同じ書き込み手順を、find_currentの自動選択ではなく
+    ユーザー指定のslot_idで行う。record_usageも呼ぶため、手動選択も使用回数の均等化に参加する。
+    """
+    manifest = load_manifest(project_id, episode)
+    if manifest is None:
+        raise ValueError("aroll.json not found (run /aroll/prompts first)")
+    panel = next((p for p in manifest["panels"] if p.get("line_id") == line_id), None)
+    if panel is None:
+        raise ValueError(f"line not found in aroll.json: {line_id}")
+    entry = panel_library_manager.get_entry(char_id, slot_id)
+    if entry is None:
+        raise ValueError(f"panel library entry not found: {char_id}/{slot_id}")
+
+    out_dir = aroll_dir(project_id, episode)
+    out_dir.mkdir(parents=True, exist_ok=True)
+    src = panel_library_manager.library_dir(char_id) / entry["image"]
+    filename = panel_filename(line_id)
+    old_image = panel.get("image")
+    (out_dir / filename).write_bytes(src.read_bytes())
+    if old_image and old_image != filename:
+        (out_dir / old_image).unlink(missing_ok=True)
+    panel.update({
+        "status": "done", "image": filename, "provider": entry.get("provider", "nanobanana"),
+        "error": None, "generated_at": _now(),
+        "source_text": panel.get("text", ""),
+        "source_text_hash": text_hash(panel.get("text")),
+        "image_source": "library",
+        "library_slot_id": entry.get("slot_id"),
+    })
+    save_manifest(project_id, episode, manifest)
+    panel_library_manager.record_usage(char_id, slot_id)
+    return panel
 
 
 # ---------------------------------------------------------------------------
@@ -777,13 +826,18 @@ async def _generate_with_retry(
 async def generate_line_image(
     project_id: str, episode: int, line_id: str,
     allow_paid_fallback: bool = False, log: list[str] | None = None,
-    use_library: bool = True,
+    use_library: bool = True, library_only: bool = False,
 ) -> dict:
     """1行分のパネル画像を生成してマニフェストへ反映する（成功/失敗とも記録）。
 
     use_library=True（既定）: 先にキャラ所有ライブラリ（Phase 3）を引き、一致すれば
     無料でコピーして即返す（NanoBananaは呼ばない）。「この行だけ作り直す」時は
     use_library=False を渡してライブラリを迂回し、必ず新規生成させる。
+
+    library_only=True: ライブラリに一致が無かった場合、課金生成へフォールバックせず
+    ValueErrorを返す（無音の意図しない課金を防ぐ）。「根拠（slot）を変更したら自動で
+    再解決する」UI操作のように、ユーザーがドロップダウンを触っただけで課金が走ると
+    驚かせてしまう場面で使う。use_library=Falseと同時指定は矛盾するため呼び出し禁止。
     """
     manifest = load_manifest(project_id, episode)
     if manifest is None:
@@ -821,6 +875,11 @@ async def generate_line_image(
             if log is not None:
                 log.append(f"📚 {line_id} ライブラリから引用: {lib_hit['char_id']}/{lib_hit.get('slot_id')}")
             return panel
+        if library_only:
+            raise ValueError(
+                f"ライブラリに一致するスロットがありません（{line_id}）。"
+                "課金生成するにはキャラ画像タブでバリアントを作るか、「この行を新規生成」を使ってください。"
+            )
 
     full_prompt = _compose_prompt(panel, manifest.get("style", "kamishibai"))
     refs = _resolve_refs(panel.get("characters", []))

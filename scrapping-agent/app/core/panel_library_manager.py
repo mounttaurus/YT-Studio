@@ -148,6 +148,14 @@ def record_usage(char_id: str, slot_id: str) -> None:
             return
 
 
+def get_entry(char_id: str, slot_id: str) -> dict | None:
+    """slot_idで1件直接取得する（ユーザーがUIから特定のバリアントを明示選択する時に使う）。"""
+    for e in load_index(char_id).get("entries", []):
+        if e.get("slot_id") == slot_id:
+            return e
+    return None
+
+
 def approve_entry(char_id: str, slot_id: str) -> dict | None:
     """pending状態のentryを承認する（review_status="approved"）。以後find_currentの対象になる。"""
     data = load_index(char_id)

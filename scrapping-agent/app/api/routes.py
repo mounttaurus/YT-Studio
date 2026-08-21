@@ -1704,6 +1704,12 @@ class ArollPromptsRequest(BaseModel):
 class ArollLineUpdateRequest(BaseModel):
     prompt: Optional[str] = None
     characters: Optional[list[str]] = None
+    slot: Optional[dict] = None   # {emotion, shot, angle, pose?}。指定するとslot_source="user"になる
+
+
+class ArollSetLibraryImageRequest(BaseModel):
+    char_id: str
+    slot_id: str
 
 
 class ArollSyncAcceptRequest(BaseModel):
@@ -1719,6 +1725,7 @@ class ArollGenerateRequest(BaseModel):
     max_reuse: int = Field(1, ge=1)        # 同一演技スロットの再利用上限（既定1=再利用なし＝現行と同一挙動）
     min_gap: int = Field(8, ge=0)          # 同一画像を使う行同士の最小間隔（order差）
     use_library: bool = True               # キャラ所有ライブラリ（Phase 3）を優先消費する（既定ON）
+    library_only: bool = False             # ライブラリ不一致でも課金生成へフォールバックしない（1行生成専用）
 
 
 class ArollPlanRequest(BaseModel):
@@ -1856,13 +1863,27 @@ async def aroll_export(project_id: str, episode_number: int):
 
 @router.put("/projects/{project_id}/episodes/{episode_number}/aroll/lines/{line_id}")
 async def aroll_update_line(project_id: str, episode_number: int, line_id: str, req: ArollLineUpdateRequest):
-    """プロンプト/登場キャラのユーザー編集（promptを書くと prompt_source="user"）。"""
+    """プロンプト/登場キャラ/演技スロットのユーザー編集（promptを書くと prompt_source="user"、
+    slotを指定すると slot_source="user"）。"""
     panel = aroll_manager.update_line(
         project_id, episode_number, line_id,
-        prompt=req.prompt, characters=req.characters,
+        prompt=req.prompt, characters=req.characters, slot=req.slot,
     )
     if panel is None:
         raise HTTPException(status_code=404, detail=f"line not found: {line_id}")
+    return panel
+
+
+@router.post("/projects/{project_id}/episodes/{episode_number}/aroll/lines/{line_id}/set_library_image")
+async def aroll_set_library_image(project_id: str, episode_number: int, line_id: str,
+                                   req: ArollSetLibraryImageRequest):
+    """ユーザーがキャラ画像ライブラリの特定バリアントを直接選んで、この行の画像を差し替える（無料）。"""
+    try:
+        panel = aroll_manager.set_library_image(
+            project_id, episode_number, line_id, req.char_id, req.slot_id,
+        )
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e))
     return panel
 
 
@@ -1917,8 +1938,9 @@ async def aroll_batch_plan(project_id: str, episode_number: int, req: ArollPlanR
 
 @router.post("/projects/{project_id}/episodes/{episode_number}/aroll/generate/line/{line_id}")
 async def aroll_generate_line(project_id: str, episode_number: int, line_id: str, req: ArollGenerateRequest):
-    """1行だけ生成/再生成する（同期実行）。use_library=falseで「この行だけ作り直す」（ライブラリを迂回して必ず新規生成）。"""
-    if not nanobanana_client.is_configured():
+    """1行だけ生成/再生成する（同期実行）。use_library=falseで「この行だけ作り直す」（ライブラリを迂回して必ず新規生成）。
+    library_only=trueで「根拠(slot)変更後の自動再解決」（ライブラリ不一致なら課金せず失敗させる）。"""
+    if not (req.library_only or nanobanana_client.is_configured()):
         raise HTTPException(status_code=400, detail="NanoBanana (GEMINI/OPENROUTER key) is not configured")
     if aroll_manager.is_running(project_id, episode_number):
         raise HTTPException(status_code=409, detail="batch is running — 終了後に再試行してください")
@@ -1926,7 +1948,7 @@ async def aroll_generate_line(project_id: str, episode_number: int, line_id: str
         panel = await aroll_manager.generate_line_image(
             project_id, episode_number, line_id,
             allow_paid_fallback=req.allow_paid_fallback,
-            use_library=req.use_library,
+            use_library=req.use_library, library_only=req.library_only,
         )
     except ValueError as e:
         raise HTTPException(status_code=404, detail=str(e))
