@@ -33,11 +33,13 @@ from pathlib import Path
 import httpx
 
 from app.core import (
-    aroll_prompt_generator, character_manager, nanobanana_client, panel_library_manager,
-    project_manager, style_manager,
+    aroll_prompt_generator, background_manager, character_manager, nanobanana_client,
+    panel_library_manager, project_manager, style_manager,
 )
 
-SCHEMA_VERSION = "1.1.0"
+SCHEMA_VERSION = "1.2.0"  # 1.2.0: panels[].background_id を追加（行単位の背景自動割当・§19）
+# 行単位の背景自動割当で「直近使った背景を避ける」窓の大きさ（連続する行での反復感を抑える）
+AROLL_BG_RECENT_WINDOW = int(os.getenv("AROLL_BG_RECENT_WINDOW", "6"))
 MIN_INTERVAL_SEC = float(os.getenv("AROLL_MIN_INTERVAL_SEC", "3"))
 RETRY_BACKOFF_SEC = [5, 15, 45]
 
@@ -276,19 +278,23 @@ def build_or_update_manifest(
 def update_line(
     project_id: str, episode: int, line_id: str,
     prompt: str | None = None, characters: list[str] | None = None,
-    slot: dict | None = None,
+    slot: dict | None = None, background_id: str | None = None,
 ) -> dict | None:
     """ユーザーによる行編集。promptを書き換えたら prompt_source="user" にする。
 
     slotを直接渡すとslot_source="user"になり、promptからの自動再計算より優先される
     （UIの「根拠」欄でemotion/shot/angleを選び直す操作。画像生成LLMの散文とは独立に
     照合キーだけを差し替えられる。Docs/AROLL_ASSET_PLAN.md §18）。
+
+    background_idは空文字を渡すと明示的にnull（未割当）へ戻せる（Noneは「変更しない」の意味）。
     """
     manifest = load_manifest(project_id, episode)
     if manifest is None:
         return None
     for p in manifest["panels"]:
         if p.get("line_id") == line_id:
+            if background_id is not None:
+                p["background_id"] = background_id or None
             if prompt is not None:
                 p["prompt"] = prompt.strip()
                 p["prompt_source"] = "user"
@@ -311,6 +317,55 @@ def update_line(
             save_manifest(project_id, episode, manifest)
             return p
     return None
+
+
+def auto_assign_backgrounds(project_id: str, episode: int, only_missing: bool = True) -> dict:
+    """全行に背景を自動割当する（無料・画像は一切生成しない。既存backgroundsアーカイブから選ぶだけ）。
+
+    行の(shot→framing, emotion→mood)から background_manager.suggest_background() で1件選び、
+    panel["background_id"] に書き込む。「決定回数を減らす」のではなく「初期割当の精度を上げ、
+    外れだけ人が差し替える」方針（Docs/AROLL_ASSET_PLAN.md §19。
+    [[aroll-background-per-line-manga-convention]]）。
+
+    only_missing=True（既定）: 既にbackground_idを持つ行はスキップ（手動で選んだ行を壊さない）。
+    False: 全行を割当し直す（既存の手動選択も上書きする）。
+
+    直近 AROLL_BG_RECENT_WINDOW 行で使った背景は避ける（順序どおりに1行ずつ処理するため、
+    同じ背景が連続して出るのを防げる）。times_usedによる最小消費優先ローテーションと合わせて
+    「反復感を機械側が担保する」設計（キャラ画像ライブラリのfind_currentと同じ考え方）。
+    """
+    manifest = load_manifest(project_id, episode)
+    if manifest is None:
+        raise ValueError("aroll.json not found (run /aroll/prompts first)")
+
+    recent: list[str] = []
+    assigned = unmatched = skipped = 0
+    for p in manifest["panels"]:
+        if p.get("orphan"):
+            continue
+        if only_missing and p.get("background_id"):
+            recent.append(p["background_id"])
+            recent[:] = recent[-AROLL_BG_RECENT_WINDOW:]
+            skipped += 1
+            continue
+        slot = p.get("slot") or {}
+        bg = background_manager.suggest_background(
+            slot.get("shot") or "", slot.get("emotion") or "", exclude_ids=set(recent),
+        )
+        if bg is None:
+            unmatched += 1
+            continue
+        p["background_id"] = bg["bg_id"]
+        background_manager.record_usage(bg["bg_id"])
+        recent.append(bg["bg_id"])
+        recent[:] = recent[-AROLL_BG_RECENT_WINDOW:]
+        assigned += 1
+
+    save_manifest(project_id, episode, manifest)
+    return {
+        "assigned": assigned, "unmatched": unmatched, "skipped": skipped,
+        "total": len([p for p in manifest["panels"] if not p.get("orphan")]),
+    }
 
 
 def set_library_image(

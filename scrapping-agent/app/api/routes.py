@@ -1705,11 +1705,16 @@ class ArollLineUpdateRequest(BaseModel):
     prompt: Optional[str] = None
     characters: Optional[list[str]] = None
     slot: Optional[dict] = None   # {emotion, shot, angle, pose?}。指定するとslot_source="user"になる
+    background_id: Optional[str] = None   # 空文字で未割当に戻す。Noneは「変更しない」
 
 
 class ArollSetLibraryImageRequest(BaseModel):
     char_id: str
     slot_id: str
+
+
+class ArollAutoAssignBackgroundsRequest(BaseModel):
+    only_missing: bool = True   # False で既存の手動選択も含め全行を割当し直す
 
 
 class ArollSyncAcceptRequest(BaseModel):
@@ -1863,15 +1868,28 @@ async def aroll_export(project_id: str, episode_number: int):
 
 @router.put("/projects/{project_id}/episodes/{episode_number}/aroll/lines/{line_id}")
 async def aroll_update_line(project_id: str, episode_number: int, line_id: str, req: ArollLineUpdateRequest):
-    """プロンプト/登場キャラ/演技スロットのユーザー編集（promptを書くと prompt_source="user"、
+    """プロンプト/登場キャラ/演技スロット/背景のユーザー編集（promptを書くと prompt_source="user"、
     slotを指定すると slot_source="user"）。"""
     panel = aroll_manager.update_line(
         project_id, episode_number, line_id,
         prompt=req.prompt, characters=req.characters, slot=req.slot,
+        background_id=req.background_id,
     )
     if panel is None:
         raise HTTPException(status_code=404, detail=f"line not found: {line_id}")
     return panel
+
+
+@router.post("/projects/{project_id}/episodes/{episode_number}/aroll/backgrounds/auto_assign")
+async def aroll_auto_assign_backgrounds(project_id: str, episode_number: int,
+                                         req: ArollAutoAssignBackgroundsRequest):
+    """全行の背景を背景アーカイブから自動割当する（無料・画像生成なし）。"""
+    try:
+        return aroll_manager.auto_assign_backgrounds(
+            project_id, episode_number, only_missing=req.only_missing,
+        )
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e))
 
 
 @router.post("/projects/{project_id}/episodes/{episode_number}/aroll/lines/{line_id}/set_library_image")

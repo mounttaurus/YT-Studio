@@ -265,6 +265,25 @@ GROUPS = ("spot", "motif", "era", "light", "camera", "framing", "mood", "form", 
 # camera が意味を持つ framing（それ以外は被写界深度が支配的なため camera を使わない）
 CAMERA_FRAMINGS = ("wide", "full_body")
 
+# Aロールのslot.emotion（panel_presets.py）→本アーカイブのmoodタグへのサジェスト表。
+# 元はDocs/BACKGROUND_ARCHIVE.md §12にのみ記載されていたが、行単位の背景自動割当
+# （aroll_manager.auto_assign_backgrounds）がコードから参照する必要があるため移設した
+# （1事実1ホーム。Docは参照のみに変更）。あくまでサジェストであり自動確定ではないが、
+# 自動割当の初期値としてはそのまま使う。
+EMOTION_TO_MOOD = {
+    "neutral":    ["calm"],
+    "happy":      ["warm", "playful"],
+    "sad":        ["melancholy", "nostalgic"],
+    "excited":    ["urgent", "playful"],
+    "serious":    ["tense", "calm"],
+    "question":   ["mystery", "tense"],
+    "angry":      ["tense", "urgent"],
+    "surprised":  ["revelation", "urgent"],
+    "shy":        ["warm", "playful"],
+    "troubled":   ["tense", "ominous"],
+    "thoughtful": ["nostalgic", "melancholy", "calm"],
+}
+
 
 def load_presets() -> dict:
     if not PRESETS_FILE.exists():

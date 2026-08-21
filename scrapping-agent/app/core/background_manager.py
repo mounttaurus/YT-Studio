@@ -79,6 +79,48 @@ def list_backgrounds(
     return out
 
 
+def record_usage(bg_id: str) -> None:
+    """背景の使用回数(times_used)を+1する。suggest_backgroundのローテーションが参照する。"""
+    data = load_index()
+    for b in data.get("backgrounds", []):
+        if b.get("bg_id") == bg_id:
+            b["times_used"] = b.get("times_used", 0) + 1
+            save_index(data)
+            return
+
+
+def suggest_background(framing: str, emotion: str, exclude_ids: set | None = None) -> dict | None:
+    """Aロール行の(shot→framing, emotion)から背景を1件サジェストする（行単位自動割当の初期値）。
+
+    1. framing一致で絞る（一致0件ならframing条件を諦めて全件から選ぶ＝未割当より劣化選択を優先）
+    2. emotion→mood対応表（background_presets.EMOTION_TO_MOOD）でmoodが重なるものを優先
+       （マッチ無しならframing一致のみの候補にフォールバック）
+    3. exclude_ids（直近使った背景。呼び出し側が窓を管理する）を避ける
+    4. 残った候補のうちtimes_usedが最小のものを選ぶ（キャラ画像ライブラリのfind_currentと同じ
+       「最小消費優先」ローテーション。新規追加した背景は自動的に優先消費される）
+
+    候補が1件も無ければNone（呼び出し側は未割当のまま残す。無理に割り当てない）。
+    """
+    rows = load_index().get("backgrounds", [])
+    if not rows:
+        return None
+    candidates = [b for b in rows if not framing or b.get("framing") == framing] or rows
+
+    moods = background_presets.EMOTION_TO_MOOD.get(emotion or "", [])
+    if moods:
+        mood_matched = [b for b in candidates if any(m in (b.get("mood") or []) for m in moods)]
+        if mood_matched:
+            candidates = mood_matched
+
+    if exclude_ids:
+        fresh = [b for b in candidates if b.get("bg_id") not in exclude_ids]
+        if fresh:
+            candidates = fresh
+
+    candidates.sort(key=lambda b: (b.get("times_used", 0), b.get("bg_id", "")))
+    return candidates[0]
+
+
 def _next_bg_id(category: str, key_parts: list[str]) -> str:
     """命名規則（§4）: {prefix}_{key_parts...}_{nnn}。同じ組み合わせが既にあれば連番を進める。"""
     prefix = {"location": "loc", "psych": "psy", "comic": "com"}.get(category, category)

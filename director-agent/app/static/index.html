@@ -2325,6 +2325,21 @@
               </div>
             </div>
 
+            <!-- ④ 背景の自動割当 -->
+            <div class="card" x-show="arollManifest">
+              <h2>④ 背景の自動割当
+                <span style="font-weight:400;text-transform:none;color:#4b5563;font-size:11px">無料・画像生成なし</span>
+              </h2>
+              <p style="font-size:11px;color:#94a3b8;margin:6px 0 10px;line-height:1.6">
+                各行の根拠（表情・ショット）から背景アーカイブの候補を自動で選ぶ（<code>shot→framing</code>・
+                <code>emotion→mood</code>の対応）。既に背景が入っている行はスキップする。気に入らない行だけ
+                下の一覧で「🔀背景差替」から選び直せる。
+              </p>
+              <button class="btn btn-primary" :disabled="arollBgAssignBusy" @click="arollAutoAssignBackgrounds()">
+                <span x-text="arollBgAssignBusy ? '割当中...' : '🏞️ 未割当の行に自動割当'"></span>
+              </button>
+            </div>
+
             <!-- パネル一覧 -->
             <div class="card" x-show="arollManifest">
               <h2>コマ一覧</h2>
@@ -2429,6 +2444,32 @@
                                    style="width:100%;aspect-ratio:16/9;object-fit:cover;border-radius:4px"
                                    :style="item.slot_id === p.library_slot_id ? 'outline:2px solid #7c3aed' : ''">
                               <div style="font-size:9px;color:#64748b;text-align:center" x-text="'使用' + (item.times_used||0) + '回'"></div>
+                            </div>
+                          </template>
+                        </div>
+                      </div>
+                      <!-- 背景 -->
+                      <div style="display:flex;gap:6px;align-items:center;width:160px;margin-top:2px">
+                        <img x-show="p.background_id" :src="arollBgImageUrl(p.background_id)"
+                             style="width:36px;height:20px;object-fit:cover;border-radius:3px;border:1px solid #334155">
+                        <span style="font-size:9px;color:#64748b;flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap"
+                              x-text="p.background_id || '（背景未割当）'"></span>
+                        <button class="btn btn-ghost btn-sm" style="font-size:9px;padding:2px 5px"
+                                @click="arollToggleBgPicker(p)" :disabled="arollRunning">🔀</button>
+                      </div>
+                      <!-- 背景ピッカー -->
+                      <div x-show="arollBgPickerFor === p.line_id"
+                           style="position:absolute;bottom:0;right:172px;z-index:20;background:#0f172a;border:1px solid #374151;border-radius:8px;padding:8px;width:280px;max-height:320px;overflow-y:auto">
+                        <div style="font-size:10px;color:#94a3b8;margin-bottom:6px">背景アーカイブから選ぶ（クリックで即差替・無料）</div>
+                        <div x-show="arollBgPickerBusy" style="font-size:11px;color:#64748b">読み込み中…</div>
+                        <div x-show="!arollBgPickerBusy && !arollBgPickerItems.length" style="font-size:11px;color:#64748b">該当する背景がありません</div>
+                        <div style="display:grid;grid-template-columns:repeat(2,1fr);gap:6px">
+                          <template x-for="item in arollBgPickerItems" :key="item.bg_id">
+                            <div style="cursor:pointer" @click="arollSetBackground(p, item.bg_id)">
+                              <img :src="arollBgImageUrl(item.bg_id)"
+                                   style="width:100%;aspect-ratio:16/9;object-fit:cover;border-radius:4px"
+                                   :style="item.bg_id === p.background_id ? 'outline:2px solid #7c3aed' : ''">
+                              <div style="font-size:9px;color:#64748b;text-align:center" x-text="item.bg_id"></div>
                             </div>
                           </template>
                         </div>
@@ -4359,6 +4400,10 @@ function app() {
     arollPickerFor: null,          // キャラ画像ピッカーを開いている line_id
     arollPickerItems: [],
     arollPickerBusy: false,
+    arollBgPickerFor: null,        // 背景ピッカーを開いている line_id
+    arollBgPickerItems: [],
+    arollBgPickerBusy: false,
+    arollBgAssignBusy: false,
     arollMsg: '',
     arollWarnings: [],
     arollStyle: 'kamishibai',
@@ -7172,6 +7217,52 @@ function app() {
         if (r.ok) { Object.assign(p, await r.json()); this.arollImgVersion++; }
       } catch { /* noop */ }
       finally { this.arollLineBusy = null; this.arollPickerFor = null; }
+    },
+    async arollAutoAssignBackgrounds() {
+      if (!confirm('全行の背景を自動割当します（無料・画像生成なし）。手動で選んだ行は変更しません。よろしいですか？')) return;
+      this.arollBgAssignBusy = true;
+      try {
+        const r = await fetch(`${this.arollApiBase}/backgrounds/auto_assign`, {
+          method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ only_missing: true }),
+        });
+        const d = await r.json();
+        this.arollMsg = r.ok
+          ? `✔ 背景を${d.assigned}行に割当しました（未一致 ${d.unmatched}・スキップ ${d.skipped}）`
+          : `背景自動割当に失敗: ${d.detail || r.status}`;
+        await this.loadArollManifest();
+      } catch (e) {
+        this.arollMsg = `背景自動割当に失敗: ${e}`;
+      } finally {
+        this.arollBgAssignBusy = false;
+      }
+    },
+    arollBgImageUrl(bgId) {
+      return `${FAPI}/backgrounds/file/${bgId}.png`;
+    },
+    async arollToggleBgPicker(p) {
+      if (this.arollBgPickerFor === p.line_id) { this.arollBgPickerFor = null; return; }
+      this.arollBgPickerFor = p.line_id;
+      this.arollBgPickerItems = [];
+      this.arollBgPickerBusy = true;
+      try {
+        const params = new URLSearchParams();
+        if (p.slot?.shot) params.set('framing', p.slot.shot);
+        const d = await (await fetch(`${FAPI}/backgrounds?${params}`)).json();
+        this.arollBgPickerItems = d.backgrounds || [];
+      } catch { this.arollBgPickerItems = []; }
+      this.arollBgPickerBusy = false;
+    },
+    async arollSetBackground(p, bgId) {
+      this.arollLineBusy = p.line_id;
+      try {
+        await fetch(`${this.arollApiBase}/lines/${p.line_id}`, {
+          method: 'PUT', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ background_id: bgId }),
+        });
+        p.background_id = bgId;
+      } catch { /* noop */ }
+      finally { this.arollLineBusy = null; this.arollBgPickerFor = null; }
     },
     async arollStartBatch() {
       const n = this.arollBatchTargetCount;
