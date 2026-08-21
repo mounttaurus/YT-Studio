@@ -326,6 +326,7 @@ async def free_generate(
     style: str = Form("realistic"),
     count: int = Form(2),
     aspect: str = Form("16:9"),           # nanobananaのみ自由（comfyは16:9固定）
+    model: str = Form(""),                # nanobananaのみ。空なら NANOBANANA_MODEL（既定）。例 "gemini-3.1-flash-lite-image"
     denoise: float = Form(0.6),           # comfy img2img: 0.4〜0.75目安
     controlnet: str = Form(""),           # comfy: ControlNetモデル名（指定時は構図固定t2i）
     cn_type: str = Form("tile"),          # 前処理: tile=画像全体で忠実変換 / canny=エッジで構図のみ固定
@@ -377,6 +378,7 @@ async def free_generate(
             for _ in range(count):
                 data = await nanobanana_client.generate_one(
                     nb_prompt, reference_images=refs or None, aspect=aspect,
+                    model=(model.strip() or None),
                 )
                 name = f"free_{uuid.uuid4().hex[:12]}.png"
                 params = _build_gen_params(provider="nanobanana", positive=nb_prompt,

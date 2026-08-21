@@ -494,14 +494,16 @@ async def list_imagegen_styles() -> dict:
 
 async def free_generate(prompt: str, provider: str = "nanobanana",
                         style: str = "realistic", count: int = 2,
-                        aspect: str = "16:9") -> dict:
+                        aspect: str = "16:9", model: str = "") -> dict:
     """台本非依存でテキストから画像を count 枚生成し staging 候補にする（t2i のみ）。
 
     provider: nanobanana(外部API課金) | comfy(ローカルSD/GPU・無料)。参照画像i2iは非対応（テキストのみ）。
+    model: nanobananaのみ有効。空なら既定(NANOBANANA_MODEL)。廉価版で大量生成したい時は
+    "gemini-3.1-flash-lite-image" 等を明示指定する（詳細 Docs/IMAGE_GEN_COST.md）。
     確定保存は free_save。COST/GPU 分類＝確認ゲート対象。
     """
     form = {"provider": provider, "mode": "t2i", "prompt": prompt,
-            "style": style, "count": count, "aspect": aspect}
+            "style": style, "count": count, "aspect": aspect, "model": model}
     return await dc.request("POST", "api/scrapping/imagegen/free/generate", data=form)
 
 

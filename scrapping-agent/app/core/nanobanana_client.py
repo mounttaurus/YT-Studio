@@ -20,7 +20,7 @@ import httpx
 
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "")
 MODEL = os.getenv("NANOBANANA_MODEL", "gemini-2.5-flash-image")
-API_URL = f"https://generativelanguage.googleapis.com/v1beta/models/{MODEL}:generateContent"
+API_URL_TMPL = "https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent"
 
 OPENROUTER_API_KEY = os.getenv("OPENROUTER_API_KEY", "")
 OR_MODEL = os.getenv("NANOBANANA_OR_MODEL", "google/gemini-2.5-flash-image")
@@ -79,6 +79,7 @@ async def generate_one(
     reference_images: list[tuple] | None = None,
     aspect: str = "1:1",
     allow_fallback: bool = True,
+    model: str | None = None,
 ) -> bytes:
     """1枚生成してPNG/JPEGバイト列を返す。reference_imagesは(データ, mime[, label])のリスト（最大3枚使用）。
 
@@ -86,6 +87,10 @@ async def generate_one(
     allow_fallback=False にすると auto でも OpenRouter へ退避しない（OpenRouter経由の画像は
     Free表示でも課金されるため、バッチ生成は既定で退避を止めて予期しない課金を防ぐ）。
     BACKEND="openrouter" の明示設定は退避ではなくユーザーの選択なので常に従う。
+
+    model: 未指定なら環境変数 NANOBANANA_MODEL（既定）を使う。指定時はそのリクエストだけ
+    別モデル（例 "gemini-3.1-flash-lite-image"）で生成する（Google直叩き経路のみ有効。
+    OpenRouter経由は既存どおり NANOBANANA_OR_MODEL 固定）。
     """
     if BACKEND == "openrouter":
         return await _generate_openrouter(prompt, reference_images, aspect)
@@ -96,7 +101,7 @@ async def generate_one(
             )
         return await _generate_openrouter(prompt, reference_images, aspect)
     try:
-        return await _generate_google(prompt, reference_images, aspect)
+        return await _generate_google(prompt, reference_images, aspect, model=model)
     except RuntimeError as e:
         quota_error = any(s in str(e) for s in ("429", "RESOURCE_EXHAUSTED", "PERMISSION_DENIED", "403"))
         if allow_fallback and BACKEND == "auto" and OPENROUTER_API_KEY and quota_error:
@@ -108,6 +113,7 @@ async def _generate_google(
     prompt: str,
     reference_images: list[tuple] | None = None,
     aspect: str = "1:1",
+    model: str | None = None,
 ) -> bytes:
     parts: list[dict] = []
     for item in (reference_images or [])[:3]:
@@ -123,13 +129,14 @@ async def _generate_google(
             "imageConfig": {"aspectRatio": aspect},
         },
     }
+    api_url = API_URL_TMPL.format(model=model or MODEL)
     headers = {"x-goog-api-key": GEMINI_API_KEY}
     async with httpx.AsyncClient(timeout=180.0) as client:
-        res = await client.post(API_URL, json=body, headers=headers)
+        res = await client.post(api_url, json=body, headers=headers)
         if res.status_code == 400 and "imageConfig" in res.text:
             # 旧モデル/旧APIバージョンではimageConfig未対応 → 外してリトライ
             body["generationConfig"].pop("imageConfig", None)
-            res = await client.post(API_URL, json=body, headers=headers)
+            res = await client.post(api_url, json=body, headers=headers)
         if res.status_code != 200:
             raise RuntimeError(f"NanoBanana API error {res.status_code}: {res.text[:300]}")
         data = res.json()
