@@ -33,7 +33,8 @@ from pathlib import Path
 import httpx
 
 from app.core import (
-    aroll_prompt_generator, character_manager, nanobanana_client, project_manager, style_manager,
+    aroll_prompt_generator, character_manager, nanobanana_client, panel_library_manager,
+    project_manager, style_manager,
 )
 
 SCHEMA_VERSION = "1.1.0"
@@ -99,6 +100,25 @@ def compute_slot_key(characters: list[str] | None, slot: dict | None) -> str | N
         return None
     chars_key = ",".join(sorted(c for c in (characters or []) if c))
     return f"{chars_key}|{emotion}|{shot}|{angle}"
+
+
+def _library_lookup(panel: dict) -> dict | None:
+    """パネルの演技スロットにキャラ所有ライブラリ（Phase 3）の一致があれば返す。
+
+    単独キャラのパネルのみ対象（2ショットはライブラリ非対応）。世代違い
+    （appearance_version不一致）は panel_library_manager.find_current 側で除外される。
+    """
+    chars = [c for c in (panel.get("characters") or []) if c]
+    if len(chars) != 1:
+        return None
+    slot = panel.get("slot") or {}
+    emotion, shot, angle = slot.get("emotion"), slot.get("shot"), slot.get("angle")
+    if not (emotion and shot and angle):
+        return None
+    entry = panel_library_manager.find_current(chars[0], emotion, shot, angle)
+    if entry is None:
+        return None
+    return {"char_id": chars[0], **entry}
 
 
 def aroll_dir(project_id: str, episode: int) -> Path | None:
@@ -757,8 +777,14 @@ async def _generate_with_retry(
 async def generate_line_image(
     project_id: str, episode: int, line_id: str,
     allow_paid_fallback: bool = False, log: list[str] | None = None,
+    use_library: bool = True,
 ) -> dict:
-    """1行分のパネル画像を生成してマニフェストへ反映する（成功/失敗とも記録）。"""
+    """1行分のパネル画像を生成してマニフェストへ反映する（成功/失敗とも記録）。
+
+    use_library=True（既定）: 先にキャラ所有ライブラリ（Phase 3）を引き、一致すれば
+    無料でコピーして即返す（NanoBananaは呼ばない）。「この行だけ作り直す」時は
+    use_library=False を渡してライブラリを迂回し、必ず新規生成させる。
+    """
     manifest = load_manifest(project_id, episode)
     if manifest is None:
         raise ValueError("aroll.json not found (run /aroll/prompts first)")
@@ -772,6 +798,29 @@ async def generate_line_image(
 
     out_dir = aroll_dir(project_id, episode)
     out_dir.mkdir(parents=True, exist_ok=True)
+
+    if use_library:
+        lib_hit = _library_lookup(panel)
+        if lib_hit is not None:
+            src = panel_library_manager.library_dir(lib_hit["char_id"]) / lib_hit["image"]
+            filename = panel_filename(line_id)
+            old_image = panel.get("image")
+            (out_dir / filename).write_bytes(src.read_bytes())
+            if old_image and old_image != filename:
+                (out_dir / old_image).unlink(missing_ok=True)
+            panel.update({
+                "status": "done", "image": filename, "provider": lib_hit.get("provider", "nanobanana"),
+                "error": None, "generated_at": _now(),
+                "source_text": panel.get("text", ""),
+                "source_text_hash": text_hash(panel.get("text")),
+                "image_source": "library",
+                "library_slot_id": lib_hit.get("slot_id"),
+            })
+            save_manifest(project_id, episode, manifest)
+            if log is not None:
+                log.append(f"📚 {line_id} ライブラリから引用: {lib_hit['char_id']}/{lib_hit.get('slot_id')}")
+            return panel
+
     full_prompt = _compose_prompt(panel, manifest.get("style", "kamishibai"))
     refs = _resolve_refs(panel.get("characters", []))
 
@@ -881,22 +930,38 @@ def _assign_variants(group_panels: list[dict], max_reuse: int, min_gap: int) -> 
     return {p["line_id"]: i for i, p in enumerate(ordered)}
 
 
-def build_generation_plan(targets: list[dict], max_reuse: int = 1, min_gap: int = 8) -> dict:
-    """targets(select_targetsの出力)を「実生成する代表行」と「コピーで済む行」に振り分ける。
+def build_generation_plan(
+    targets: list[dict], max_reuse: int = 1, min_gap: int = 8, use_library: bool = True,
+) -> dict:
+    """targets(select_targetsの出力)を「ライブラリ引用」「実生成する代表行」「コピーで済む行」に振り分ける。
 
-    slot_key を持たない行、および max_reuse<=1 の時は常に個別生成（安全側）。
-    Returns: {"generate": [{"line_id","variant_id"}...], "copy": [{"line_id","copy_from","variant_id"}...],
-              "generate_count", "copy_count", "max_reuse", "min_gap"}
+    ライブラリ引用（Phase 3・use_library）が最優先: 単独キャラのパネルでキャラ所有ライブラリに
+    一致（かつappearance_versionが最新）があれば、バッチ内dedupより先にそちらを使う（$0）。
+    残りについて、slot_key を持たない行・max_reuse<=1 の時は常に個別生成（安全側）。
+    Returns: {"library": [{"line_id","char_id","slot_id"}...],
+              "generate": [{"line_id","variant_id"}...], "copy": [{"line_id","copy_from","variant_id"}...],
+              "generate_count", "copy_count", "library_count", "max_reuse", "min_gap"}
     """
     max_reuse = max(1, max_reuse)
     min_gap = max(0, min_gap)
     order_by_id = {p["line_id"]: p.get("order", 0) for p in targets}
 
+    library_entries: list[dict] = []
+    remaining: list[dict] = []
+    for p in targets:
+        lib_hit = _library_lookup(p) if use_library else None
+        if lib_hit is not None:
+            library_entries.append({
+                "line_id": p["line_id"], "char_id": lib_hit["char_id"], "slot_id": lib_hit["slot_id"],
+            })
+        else:
+            remaining.append(p)
+
     groups: dict[str, list[dict]] = {}
     generate_entries: list[dict] = []
     copy_entries: list[dict] = []
 
-    for p in targets:
+    for p in remaining:
         key = p.get("slot_key")
         if not key or max_reuse <= 1:
             generate_entries.append({"line_id": p["line_id"], "variant_id": None})
@@ -920,8 +985,9 @@ def build_generation_plan(targets: list[dict], max_reuse: int = 1, min_gap: int 
 
     generate_entries.sort(key=lambda e: order_by_id.get(e["line_id"], 0))
     return {
-        "generate": generate_entries, "copy": copy_entries,
+        "library": library_entries, "generate": generate_entries, "copy": copy_entries,
         "generate_count": len(generate_entries), "copy_count": len(copy_entries),
+        "library_count": len(library_entries),
         "max_reuse": max_reuse, "min_gap": min_gap,
     }
 
@@ -929,17 +995,18 @@ def build_generation_plan(targets: list[dict], max_reuse: int = 1, min_gap: int 
 def generation_plan_estimate(
     project_id: str, episode: int,
     line_ids: list[str] | None = None, only_missing: bool = True,
-    max_reuse: int = 1, min_gap: int = 8,
+    max_reuse: int = 1, min_gap: int = 8, use_library: bool = True,
 ) -> dict:
     """課金前のドライラン。画像には一切触れない・何も保存しない。"""
     manifest = load_manifest(project_id, episode)
     if manifest is None:
         raise ValueError("aroll.json not found (run /aroll/prompts first)")
     targets = select_targets(manifest, line_ids, only_missing)
-    plan = build_generation_plan(targets, max_reuse=max_reuse, min_gap=min_gap)
+    plan = build_generation_plan(targets, max_reuse=max_reuse, min_gap=min_gap, use_library=use_library)
     unkeyed = sum(1 for e in plan["generate"] if e["variant_id"] is None)
     return {
         "target_count": len(targets),
+        "library_count": plan["library_count"],
         "generate_count": plan["generate_count"],
         "copy_count": plan["copy_count"],
         "unkeyed_count": unkeyed,
@@ -1001,17 +1068,20 @@ async def run_batch(
     allow_paid_fallback: bool = False,
     max_reuse: int = 1,
     min_gap: int = 8,
+    use_library: bool = True,
 ) -> None:
     """バッチ本体（asyncio.create_task で起動される）。直列＋インターバル＋失敗続行。
 
     max_reuse=1（既定）なら生成プランは全行が個別生成＝Phase2導入前と完全に同一挙動。
     max_reuse>1 の時だけ、同じ演技スロットの代表行を生成→即座に残りへコピーする。
-    job["total"] は実生成枚数のみ（コピーは一瞬で終わるため母数に入れると進捗が嘘になる）。
+    use_library=True（既定・Phase 3）: キャラ所有ライブラリの一致を最優先で消費する（$0・
+    インターバルなし）。job["total"] は実生成枚数のみ（コピー/ライブラリ引用は一瞬で終わる
+    ため母数に入れると進捗が嘘になる）。
     """
     key = _job_key(project_id, episode)
     manifest = load_manifest(project_id, episode) or {}
     targets = select_targets(manifest, line_ids, only_missing)
-    plan = build_generation_plan(targets, max_reuse=max_reuse, min_gap=min_gap)
+    plan = build_generation_plan(targets, max_reuse=max_reuse, min_gap=min_gap, use_library=use_library)
     generate_entries = plan["generate"]
     copy_by_source: dict[str, list[dict]] = {}
     for entry in plan["copy"]:
@@ -1021,12 +1091,26 @@ async def run_batch(
         "running": True, "cancel": False,
         "total": len(generate_entries), "done": 0, "failed": 0,
         "copy_total": len(plan["copy"]), "copy_done": 0,
+        "library_total": plan["library_count"], "library_done": 0,
         "current_line": None, "log": [],
         "started_at": _now(), "finished_at": None,
         "allow_paid_fallback": allow_paid_fallback,
         "max_reuse": max_reuse,
     }
     log: list[str] = job["log"]
+
+    for entry in plan["library"]:
+        if job["cancel"]:
+            break
+        lid = entry["line_id"]
+        job["current_line"] = lid
+        try:
+            await generate_line_image(project_id, episode, lid, log=log, use_library=True)
+            job["library_done"] += 1
+            log.append(f"📚 {lid} ライブラリ引用完了 ({job['library_done']}/{job['library_total']})")
+        except Exception as e:
+            job["failed"] += 1
+            log.append(f"✘ {lid} ライブラリ引用失敗: {str(e)[:150]}")
 
     try:
         for i, entry in enumerate(generate_entries):
@@ -1039,6 +1123,7 @@ async def run_batch(
                 await generate_line_image(
                     project_id, episode, lid,
                     allow_paid_fallback=allow_paid_fallback, log=log,
+                    use_library=use_library,
                 )
                 if entry.get("variant_id"):
                     _stamp_variant(project_id, episode, lid, entry["variant_id"])

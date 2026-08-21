@@ -607,6 +607,42 @@ async def delete_background(bg_id: str) -> dict:
     return await dc.request("DELETE", f"api/scrapping/backgrounds/{bg_id}")
 
 
+# ── キャラ所有ライブラリ（Phase 3・Aロール演技スロットの作り置き） ───────────
+#
+# キャラ別に演技パターン(emotion/shot/angle)を作り置きし、台本行の画像生成時に無料で
+# 引けるようにする(Aロールのuse_library既定true・aroll_manager._library_lookup)。
+# 語彙は list_panel_presets と同一(emotion/shot/angle)。正本 Docs/AROLL_ASSET_PLAN.md。
+
+async def list_panel_library(char_id: str, emotion: str = "", shot: str = "", angle: str = "") -> dict:
+    """キャラのライブラリ索引を検索する(AND条件)。各entryに is_stale(外見更新後の世代違いか)が付く。
+
+    is_stale=trueのentryは自動では使われない(aroll側のfind_currentが除外する)。生成し直すには
+    generate_panel_library_entry を replace_stale=true(既定)で呼ぶ。
+    """
+    params = {"emotion": emotion, "shot": shot, "angle": angle}
+    return await dc.get(f"api/scrapping/characters/{char_id}/panel_library", params=params)
+
+
+async def generate_panel_library_entry(char_id: str, emotion: str, shot: str, angle: str,
+                                        pose: str = "", style: str = "kamishibai",
+                                        model: str = "", replace_stale: bool = True) -> dict:
+    """キャラのライブラリに1スロット生成・登録する(NanoBanana・外部API課金)。
+
+    emotion/shot/angle は list_panel_presets の id から選ぶ。model省略時は既定
+    (NANOBANANA_MODEL)。廉価版で量産したい時は "gemini-3.1-flash-lite-image" を明示指定する。
+    replace_stale=true(既定)は同じスロットの旧世代(外見更新前)entryを実体ごと置き換える。
+    COST分類＝確認ゲート対象。
+    """
+    body = {"emotion": emotion, "shot": shot, "angle": angle, "pose": pose,
+            "style": style, "model": model, "replace_stale": replace_stale}
+    return await dc.request("POST", f"api/scrapping/characters/{char_id}/panel_library/generate", json=body)
+
+
+async def delete_panel_library_entry(char_id: str, slot_id: str) -> dict:
+    """キャラのライブラリから1件削除する(索引・実体ファイルとも)。取り消し不可。"""
+    return await dc.request("DELETE", f"api/scrapping/characters/{char_id}/panel_library/{slot_id}")
+
+
 # ── リサーチ（research / 別件1: 探索→蒸留→ラフ台本） ─────────────────
 #
 # research-agent(:8001) は当初 MCP から外す方針だったが、頭脳とMCPが分離している以上、
@@ -847,6 +883,10 @@ TOOLS = [
     {"fn": list_backgrounds,     "side_effects": [S.READ]},
     {"fn": generate_background,  "side_effects": [S.COST]},
     {"fn": delete_background,    "side_effects": [S.WRITE]},
+    # キャラ所有ライブラリ（Phase 3・Aロール演技スロットの作り置き）
+    {"fn": list_panel_library,   "side_effects": [S.READ]},
+    {"fn": generate_panel_library_entry, "side_effects": [S.COST]},
+    {"fn": delete_panel_library_entry,   "side_effects": [S.WRITE]},
     # 自由生成（台本非依存）
     {"fn": list_imagegen_styles, "side_effects": [S.READ]},
     {"fn": free_generate,        "side_effects": [S.COST, S.GPU]},

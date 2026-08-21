@@ -30,6 +30,7 @@ from app.core import (
     lyria_client,
     model_downloader,
     nanobanana_client,
+    panel_library_manager,
     panel_presets,
     pexels_client,
     pixabay_client,
@@ -273,6 +274,69 @@ async def get_background_file(filename: str):
     """背景画像の配信（shared/backgrounds/images/配下限定）。"""
     f = (background_manager.IMAGES_DIR / filename).resolve()
     if not f.is_relative_to(background_manager.IMAGES_DIR.resolve()) or not f.is_file():
+        raise HTTPException(status_code=404, detail=f"file not found: {filename}")
+    return FileResponse(f, media_type="image/png")
+
+
+# ─── 📚 キャラ所有ライブラリ（Phase 3・Aロール演技スロットの作り置き） ─────────
+#
+# キャラ別に演技パターン（emotion/shot/angle）を作り置きし、台本行の画像生成時に
+# 無料で引けるようにする。Docs/AROLL_ASSET_PLAN.md が設計の正本。
+
+@router.get("/characters/{char_id}/panel_library")
+async def list_panel_library(char_id: str, emotion: str = "", shot: str = "", angle: str = ""):
+    """ライブラリ索引の検索。各entryに現在のappearance_versionと比較した is_stale を付与する。"""
+    if character_manager.read_character(char_id) is None:
+        raise HTTPException(status_code=404, detail=f"character not found: {char_id}")
+    return {
+        "entries": panel_library_manager.list_entries(char_id, emotion=emotion, shot=shot, angle=angle),
+        "appearance_version": panel_library_manager.appearance_version(char_id),
+    }
+
+
+class PanelLibraryGenerateRequest(BaseModel):
+    emotion: str
+    shot: str
+    angle: str
+    pose: str = ""
+    style: str = "kamishibai"
+    model: str = ""             # 空ならNANOBANANA_MODEL既定
+    replace_stale: bool = True  # 同スロットの旧世代entryを置き換える
+
+
+@router.post("/characters/{char_id}/panel_library/generate")
+async def generate_panel_library_entry(char_id: str, req: PanelLibraryGenerateRequest):
+    """1スロット生成し、panel_library/images/へ保存・索引登録する。"""
+    if character_manager.read_character(char_id) is None:
+        raise HTTPException(status_code=404, detail=f"character not found: {char_id}")
+    if not nanobanana_client.is_configured():
+        raise HTTPException(status_code=400, detail="NanoBanana (GEMINI/OPENROUTER key) is not configured")
+    try:
+        entry = await panel_library_manager.generate_and_register(
+            char_id, emotion=req.emotion, shot=req.shot, angle=req.angle, pose=req.pose,
+            style_name=req.style, model=req.model, replace_stale=req.replace_stale,
+        )
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    except Exception as e:
+        raise HTTPException(status_code=502, detail=f"panel library generation failed: {e}")
+    return entry
+
+
+@router.delete("/characters/{char_id}/panel_library/{slot_id}")
+async def delete_panel_library_entry(char_id: str, slot_id: str):
+    """索引から除去し実体ファイルも削除する。"""
+    if not panel_library_manager.delete_entry(char_id, slot_id):
+        raise HTTPException(status_code=404, detail=f"panel library entry not found: {slot_id}")
+    return {"deleted": slot_id}
+
+
+@router.get("/characters/{char_id}/panel_library/file/{filename}")
+async def get_panel_library_file(char_id: str, filename: str):
+    """ライブラリ画像の配信（shared/characters/{char_id}/panel_library/images/配下限定）。"""
+    images_dir = panel_library_manager.images_dir(char_id)
+    f = (images_dir / filename).resolve()
+    if not f.is_relative_to(images_dir.resolve()) or not f.is_file():
         raise HTTPException(status_code=404, detail=f"file not found: {filename}")
     return FileResponse(f, media_type="image/png")
 
@@ -1611,6 +1675,7 @@ class ArollGenerateRequest(BaseModel):
     style: Optional[str] = None
     max_reuse: int = Field(1, ge=1)        # 同一演技スロットの再利用上限（既定1=再利用なし＝現行と同一挙動）
     min_gap: int = Field(8, ge=0)          # 同一画像を使う行同士の最小間隔（order差）
+    use_library: bool = True               # キャラ所有ライブラリ（Phase 3）を優先消費する（既定ON）
 
 
 class ArollPlanRequest(BaseModel):
@@ -1618,6 +1683,7 @@ class ArollPlanRequest(BaseModel):
     only_missing: bool = True
     max_reuse: int = Field(1, ge=1)
     min_gap: int = Field(8, ge=0)
+    use_library: bool = True
 
 
 def _group_line_objs_by_section(script: dict) -> list[tuple[str, list[dict]]]:
@@ -1787,18 +1853,20 @@ async def aroll_start_batch(project_id: str, episode_number: int, req: ArollGene
         line_ids=req.line_ids, only_missing=req.only_missing,
         allow_paid_fallback=req.allow_paid_fallback,
         max_reuse=req.max_reuse, min_gap=req.min_gap,
+        use_library=req.use_library,
     ))
     return {"started": True, "target_count": len(targets)}
 
 
 @router.post("/projects/{project_id}/episodes/{episode_number}/aroll/batch/plan")
 async def aroll_batch_plan(project_id: str, episode_number: int, req: ArollPlanRequest):
-    """課金前ドライラン。何行を実生成し何行をコピーで済ませるか・$概算を返す（何も変更しない）。"""
+    """課金前ドライラン。何行をライブラリ引用/実生成/コピーで済ませるか・$概算を返す（何も変更しない）。"""
     try:
         return aroll_manager.generation_plan_estimate(
             project_id, episode_number,
             line_ids=req.line_ids, only_missing=req.only_missing,
             max_reuse=req.max_reuse, min_gap=req.min_gap,
+            use_library=req.use_library,
         )
     except ValueError as e:
         raise HTTPException(status_code=404, detail=str(e))
@@ -1806,7 +1874,7 @@ async def aroll_batch_plan(project_id: str, episode_number: int, req: ArollPlanR
 
 @router.post("/projects/{project_id}/episodes/{episode_number}/aroll/generate/line/{line_id}")
 async def aroll_generate_line(project_id: str, episode_number: int, line_id: str, req: ArollGenerateRequest):
-    """1行だけ生成/再生成する（同期実行）。"""
+    """1行だけ生成/再生成する（同期実行）。use_library=falseで「この行だけ作り直す」（ライブラリを迂回して必ず新規生成）。"""
     if not nanobanana_client.is_configured():
         raise HTTPException(status_code=400, detail="NanoBanana (GEMINI/OPENROUTER key) is not configured")
     if aroll_manager.is_running(project_id, episode_number):
@@ -1815,6 +1883,7 @@ async def aroll_generate_line(project_id: str, episode_number: int, line_id: str
         panel = await aroll_manager.generate_line_image(
             project_id, episode_number, line_id,
             allow_paid_fallback=req.allow_paid_fallback,
+            use_library=req.use_library,
         )
     except ValueError as e:
         raise HTTPException(status_code=404, detail=str(e))
