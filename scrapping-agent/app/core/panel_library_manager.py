@@ -107,23 +107,45 @@ def list_entries(char_id: str, *, emotion: str = "", shot: str = "", angle: str 
 
 
 def find_current(char_id: str, emotion: str, shot: str, angle: str) -> dict | None:
-    """slot(emotion/shot/angle)に一致し、appearance_versionが今と同じ・かつ承認済みの1件を返す。
+    """slot(emotion/shot/angle)に一致し、appearance_versionが今と同じ・かつ承認済みのentryのうち
+    「最も使われていない」1件を返す（ローテーション。2026-08-21）。
 
     世代違い・review_status="pending"（未承認）は対象外（Noneを返す＝呼び出し側は通常どおり
-    新規生成にフォールバックする）。review_status欠落は既存資産の後方互換として承認済み扱い
-    （複数バリアントの一括生成が導入される前のentryは、生成＝1件だけの明示的な行為だったため）。
-    複数の承認済みentryが同じslotにある場合は先頭の1件を返す（ラウンドロビン選択は未実装。
-    Docs/AROLL_ASSET_PLAN.md §14「次の課題」参照）。
+    新規生成にフォールバックする）。review_status欠落は既存資産の後方互換として承認済み扱い。
+
+    候補が複数ある場合は`times_used`（record_usageで実消費のたびに+1される）が最小のものを選ぶ。
+    タイブレークはslot_id昇順（決定的にするため）。新規追加したバリアントはtimes_used=0から
+    始まるため自然に優先消費され、シリーズを通算して均等にローテーションする（1話内のdedupに
+    閉じない。Docs/AROLL_ASSET_PLAN.md §16参照）。
+
+    ⚠️ この関数自体は状態を変更しない（ドライラン安全）。実際に選んだentryを消費したら、
+    呼び出し側が必ず record_usage() を呼ぶこと（generate_line_imageのみが呼ぶ想定。
+    generation_plan_estimateのようなドライランは呼んではいけない）。
     """
     current = appearance_version(char_id)
-    for e in load_index(char_id).get("entries", []):
-        if e.get("emotion") == emotion and e.get("shot") == shot and e.get("angle") == angle:
-            if e.get("appearance_version") != current:
-                continue
-            if e.get("review_status", "approved") != "approved":
-                continue
-            return e
-    return None
+    candidates = [
+        e for e in load_index(char_id).get("entries", [])
+        if e.get("emotion") == emotion and e.get("shot") == shot and e.get("angle") == angle
+        and e.get("appearance_version") == current
+        and e.get("review_status", "approved") == "approved"
+    ]
+    if not candidates:
+        return None
+    candidates.sort(key=lambda e: (e.get("times_used", 0), e.get("slot_id", "")))
+    return candidates[0]
+
+
+def record_usage(char_id: str, slot_id: str) -> None:
+    """ライブラリentryの使用回数(times_used)を+1する。find_currentのローテーションが参照する。
+
+    実際に画像を消費した時だけ呼ぶ（ドライランでは呼ばない）。
+    """
+    data = load_index(char_id)
+    for e in data.get("entries", []):
+        if e.get("slot_id") == slot_id:
+            e["times_used"] = e.get("times_used", 0) + 1
+            save_index(char_id, data)
+            return
 
 
 def approve_entry(char_id: str, slot_id: str) -> dict | None:
@@ -254,6 +276,7 @@ async def generate_and_register(
         "created_at": _now(),
         "note": "",
         "review_status": review_status,
+        "times_used": 0,
     }
     idx["entries"].append(entry)
     save_index(char_id, idx)

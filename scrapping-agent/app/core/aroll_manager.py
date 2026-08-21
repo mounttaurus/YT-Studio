@@ -817,6 +817,7 @@ async def generate_line_image(
                 "library_slot_id": lib_hit.get("slot_id"),
             })
             save_manifest(project_id, episode, manifest)
+            panel_library_manager.record_usage(lib_hit["char_id"], lib_hit["slot_id"])
             if log is not None:
                 log.append(f"📚 {line_id} ライブラリから引用: {lib_hit['char_id']}/{lib_hit.get('slot_id')}")
             return panel
