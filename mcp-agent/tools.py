@@ -552,6 +552,61 @@ async def generate_character_panel(char_id: str, emotion_id: str = "", pose_id: 
     return await dc.request("POST", f"api/scrapping/characters/{char_id}/panel", json=body)
 
 
+# ── 背景アーカイブ（台本に縛られない再利用可能な背景ライブラリ） ─────────────
+#
+# Aロール（キャラ単体パネル）の背後に貼る前提の絵。Photoshop側で拡大・ぼかしを掛ける
+# ため生成側は加工しやすさを優先する（Docs/BACKGROUND_ARCHIVE.md §1「原則」）。
+# 語彙・設計判断の正本は同Doc。id は必ず list_background_presets で確認してから使う。
+
+async def list_background_presets() -> dict:
+    """背景生成の構造化入力プリセット(spot/motif/era/light/camera/framing/mood/form/effect)を返す。
+
+    spot_id等は必ずここのid集合から選ぶこと(自由文不可)。framing の id は list_panel_presets の
+    shot と同一語彙(Aロールのslot.shotからそのまま引ける)。
+    """
+    return await dc.get("api/scrapping/backgrounds/presets")
+
+
+async def list_backgrounds(category: str = "", spot: str = "", motif: str = "",
+                            era: str = "", light: str = "", framing: str = "",
+                            mood: str = "", q: str = "") -> dict:
+    """背景アーカイブの索引を検索する(AND条件・各引数は空なら無視)。
+
+    台本行の演技(slot.emotion等)に合う背景を選ぶ時、まずここで既存在庫を確認する
+    (無ければ generate_background で新規作成)。
+    """
+    params = {"category": category, "spot": spot, "motif": motif, "era": era,
+              "light": light, "framing": framing, "mood": mood, "q": q}
+    return await dc.get("api/scrapping/backgrounds", params=params)
+
+
+async def generate_background(category: str, spot: str = "", motif: str = "", era: str = "",
+                               light: str = "", camera: str = "", framing: str = "",
+                               form: str = "", effect: str = "",
+                               mood: Optional[list[str]] = None, model: str = "",
+                               count: int = 1, is_keyframe: bool = False,
+                               note: str = "") -> dict:
+    """構造化入力から背景を生成し、shared/backgrounds/へ保存・索引登録する(NanoBanana・外部API課金)。
+
+    category="location": spot(部屋の場所)・motif(調度品)・era(現代の携行品)のいずれか1つ+light+framing。
+    category="psych"/"comic": form/effectのいずれか1つ。
+    model省略時は既定(NANOBANANA_MODEL)。廉価版で量産したい時は "gemini-3.1-flash-lite-image" を
+    明示指定する(背景は加工前提のためLiteで十分・詳細 Docs/IMAGE_GEN_COST.md)。
+    count>1はキーフレーム作成・新規パターン初回試行の時だけ推奨(通常の量産はcount=1)。
+    COST分類＝確認ゲート対象。
+    """
+    body = {"category": category, "spot": spot, "motif": motif, "era": era,
+            "light": light, "camera": camera, "framing": framing,
+            "form": form, "effect": effect, "mood": mood or [], "model": model,
+            "count": count, "is_keyframe": is_keyframe, "note": note}
+    return await dc.request("POST", "api/scrapping/backgrounds/generate", json=body)
+
+
+async def delete_background(bg_id: str) -> dict:
+    """背景アーカイブから1件削除する(索引・実体ファイルとも)。取り消し不可。"""
+    return await dc.request("DELETE", f"api/scrapping/backgrounds/{bg_id}")
+
+
 # ── リサーチ（research / 別件1: 探索→蒸留→ラフ台本） ─────────────────
 #
 # research-agent(:8001) は当初 MCP から外す方針だったが、頭脳とMCPが分離している以上、
@@ -787,6 +842,11 @@ TOOLS = [
     {"fn": aroll_status,         "side_effects": [S.READ]},
     {"fn": aroll_sync,           "side_effects": [S.READ]},
     {"fn": aroll_export,         "side_effects": [S.WRITE]},
+    # 背景アーカイブ（台本非依存の再利用可能な背景ライブラリ）
+    {"fn": list_background_presets, "side_effects": [S.READ]},
+    {"fn": list_backgrounds,     "side_effects": [S.READ]},
+    {"fn": generate_background,  "side_effects": [S.COST]},
+    {"fn": delete_background,    "side_effects": [S.WRITE]},
     # 自由生成（台本非依存）
     {"fn": list_imagegen_styles, "side_effects": [S.READ]},
     {"fn": free_generate,        "side_effects": [S.COST, S.GPU]},

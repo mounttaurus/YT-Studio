@@ -21,6 +21,8 @@ from app.core import (
     aroll_manager,
     aroll_prompt_generator,
     auto_selector,
+    background_manager,
+    background_presets,
     character_manager,
     cloudflare_client,
     comfy_client,
@@ -184,6 +186,95 @@ async def get_imagegen_styles():
 async def get_panel_presets():
     """紙芝居パネル生成の構造化入力プリセット（表情/ポーズ/ショット/アングル/シーン）。"""
     return {"presets": panel_presets.load_presets()}
+
+
+# ─── 🏞️ 背景アーカイブ（台本に縛られない再利用可能な背景ライブラリ） ─────────
+#
+# Aロールのキャラ単体パネルの背後に貼る前提の絵。Docs/BACKGROUND_ARCHIVE.md が
+# 語彙・設計判断の正本。生成は自由生成スタジオと同じNanoBananaだが、構造化入力
+# （spot/motif/light/framing等）から組み立てる専用エンドポイント。
+
+@router.get("/backgrounds/presets")
+async def get_background_presets():
+    """背景生成の構造化入力プリセット（spot/motif/era/light/camera/framing/mood/form/effect）。"""
+    return {"presets": background_presets.load_presets()}
+
+
+@router.get("/backgrounds")
+async def list_backgrounds(
+    category: str = "", spot: str = "", motif: str = "", era: str = "",
+    light: str = "", framing: str = "", mood: str = "", q: str = "",
+):
+    """背景アーカイブの索引検索。各条件は空なら無視（AND条件）。"""
+    return {"backgrounds": background_manager.list_backgrounds(
+        category=category, spot=spot, motif=motif, era=era,
+        light=light, framing=framing, mood=mood, q=q,
+    )}
+
+
+class BackgroundGenerateRequest(BaseModel):
+    category: str                      # location | psych | comic
+    spot: str = ""                     # location: spot/motif/eraのいずれか1つ
+    motif: str = ""
+    era: str = ""
+    light: str = ""                    # location必須
+    camera: str = ""                   # location・framingがwide/full_bodyの時のみ意味を持つ
+    framing: str = ""                  # location必須。空なら"bust"
+    form: str = ""                     # psych
+    effect: str = ""                   # comic
+    mood: list[str] = Field(default_factory=list)
+    model: str = ""                    # 空ならNANOBANANA_MODEL既定。廉価版は"gemini-3.1-flash-lite-image"
+    count: int = 1
+    is_keyframe: bool = False          # trueならref/にも保存（以後のバリエーションの参照元）
+    note: str = ""
+
+
+@router.post("/backgrounds/generate")
+async def generate_background(req: BackgroundGenerateRequest):
+    """構造化入力から背景を生成し、shared/backgrounds/images/ へ保存・索引登録する。
+
+    count>1は同一条件でcount枚生成し、全て登録する（キーフレームや初回試行時のみ推奨。
+    Docs/BACKGROUND_ARCHIVE.md §1「原則」参照。通常のバリエーション量産はcount=1）。
+    """
+    if req.category not in ("location", "psych", "comic"):
+        raise HTTPException(status_code=400, detail=f"unknown category: {req.category}")
+    if req.category == "location" and not (req.spot or req.motif or req.era):
+        raise HTTPException(status_code=400, detail="location requires spot, motif, or era")
+    if req.category == "psych" and not req.form:
+        raise HTTPException(status_code=400, detail="psych requires form")
+    if req.category == "comic" and not req.effect:
+        raise HTTPException(status_code=400, detail="comic requires effect")
+    if not nanobanana_client.is_configured():
+        raise HTTPException(status_code=400, detail="NanoBanana (GEMINI/OPENROUTER key) is not configured")
+
+    count = max(1, min(int(req.count), 4))
+    created = []
+    for _ in range(count):
+        entry = await background_manager.generate_and_register(
+            category=req.category, spot=req.spot, motif=req.motif, era=req.era,
+            light=req.light, camera=req.camera, framing=(req.framing or "bust"),
+            form=req.form, effect=req.effect, mood=req.mood,
+            model=req.model, is_keyframe=req.is_keyframe, note=req.note,
+        )
+        created.append(entry)
+    return {"backgrounds": created}
+
+
+@router.delete("/backgrounds/{bg_id}")
+async def delete_background(bg_id: str):
+    """索引から除去し実体ファイルも削除する。"""
+    if not background_manager.delete_background(bg_id):
+        raise HTTPException(status_code=404, detail=f"background not found: {bg_id}")
+    return {"deleted": bg_id}
+
+
+@router.get("/backgrounds/file/{filename}")
+async def get_background_file(filename: str):
+    """背景画像の配信（shared/backgrounds/images/配下限定）。"""
+    f = (background_manager.IMAGES_DIR / filename).resolve()
+    if not f.is_relative_to(background_manager.IMAGES_DIR.resolve()) or not f.is_file():
+        raise HTTPException(status_code=404, detail=f"file not found: {filename}")
+    return FileResponse(f, media_type="image/png")
 
 
 @router.get("/imagegen/models")

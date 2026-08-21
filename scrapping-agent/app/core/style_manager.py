@@ -72,6 +72,31 @@ DEFAULT_STYLES = {
         "loras": [],
         "usage": "character",
     },
+    "kamishibai_bg": {
+        # 背景アーカイブ専用。kamishibai からキャラ用の断片(expressive face)と
+        # 背景と衝突するflat pastel colorsを除いた派生形（Docs/BACKGROUND_ARCHIVE.md §8）。
+        "checkpoint": "counterfeit_v2.5_fp16.safetensors",
+        "prefix": "anime background art, painted in the style of a Japanese animation background "
+                  "painting, soft painterly rendering, no line art and no hard outlines, gentle "
+                  "gradient shading, warm ambient light, muted low-contrast palette, full bleed to "
+                  "the edges with no border or frame, ",
+        "negative": ("line art, bold black outlines, comic style, flat cel shading, high contrast, "
+                     f"{_NEG_COMMON}, nsfw, person, people, character, girl, boy, face, hands"),
+        "loras": [],
+        "usage": "both",
+    },
+    "kamishibai_fx": {
+        # 背景アーカイブの psych/comic（心理・コミック背景）専用。kamishibai_bg（絵画調）とは
+        # 逆に線とフラットな形状を要求する（Docs/BACKGROUND_ARCHIVE.md §8）。
+        "checkpoint": "counterfeit_v2.5_fp16.safetensors",
+        "prefix": "flat graphic background for a comic panel, clean crisp shapes and edges, bold "
+                  "simple composition, no perspective scenery, full bleed to the edges with no "
+                  "border or frame, ",
+        "negative": (f"photorealistic, 3d render, detailed scenery, room interior, furniture, "
+                     f"{_NEG_COMMON}, nsfw, person, people, character, girl, boy, face, hands"),
+        "loras": [],
+        "usage": "both",
+    },
 }
 
 

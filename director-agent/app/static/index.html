@@ -514,6 +514,7 @@
       <button class="tab-btn" :class="{ active: tab === 'aroll' }" @click="setTab('aroll')">🖼️ Aロール</button>
       <button class="tab-btn" :class="{ active: tab === 'chara' }" @click="setTab('chara')">🎭 キャラ</button>
       <button class="tab-btn" :class="{ active: tab === 'studio' }" @click="setTab('studio')">🎬 紙芝居</button>
+      <button class="tab-btn" :class="{ active: tab === 'bg' }" @click="setTab('bg')">🏞️ 背景</button>
       <button class="tab-btn" :class="{ active: tab === 'free' }" @click="setTab('free')">🎨 自由生成</button>
       <button class="tab-btn" :class="{ active: tab === 'editing' }" @click="setTab('editing')">🎞️ 編集情報</button>
     </div>
@@ -2841,6 +2842,209 @@
       </div>
     </template>
 
+    <template x-if="tab === 'bg'">
+      <div>
+        <div class="card">
+          <h2 style="display:flex;align-items:center;gap:10px">🏞️ 背景アーカイブ
+            <span style="font-size:10px;padding:2px 8px;border-radius:99px;background:#1e293b;color:#94a3b8">台本に縛られない</span>
+          </h2>
+          <p style="font-size:12px;color:#94a3b8;margin:4px 0 14px">
+            Aロール（キャラ単体パネル）の背後に貼る再利用可能な背景ライブラリ。
+            Photoshop側で拡大・ぼかしを掛ける前提なので、生成はディテールより加工しやすさを優先する。
+            語彙・設計判断の正本は <code>Docs/BACKGROUND_ARCHIVE.md</code>。
+          </p>
+
+          <!-- 生成パネル -->
+          <div style="background:#0f172a;border-radius:8px;padding:14px;margin-bottom:16px">
+            <div style="font-size:12px;color:#cbd5e1;margin-bottom:8px">系統
+              <div style="display:flex;gap:16px;margin-top:6px">
+                <label style="display:flex;align-items:center;gap:6px;cursor:pointer;font-size:12px">
+                  <input type="checkbox" :checked="bg.gen.category==='location'" @change="setBgGenCategory('location')"> location（隠し部屋）
+                </label>
+                <label style="display:flex;align-items:center;gap:6px;cursor:pointer;font-size:12px">
+                  <input type="checkbox" :checked="bg.gen.category==='psych'" @change="setBgGenCategory('psych')"> psych（心理背景）
+                </label>
+                <label style="display:flex;align-items:center;gap:6px;cursor:pointer;font-size:12px">
+                  <input type="checkbox" :checked="bg.gen.category==='comic'" @change="setBgGenCategory('comic')"> comic（コミック背景）
+                </label>
+              </div>
+            </div>
+
+            <template x-if="bg.gen.category === 'location'">
+              <div>
+                <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:12px;margin:10px 0">
+                  <label style="font-size:12px;color:#cbd5e1">spot（部屋の場所）
+                    <select x-model="bg.gen.spot" @change="bg.gen.motif=''; bg.gen.era=''" style="width:100%;margin-top:4px">
+                      <option value="">（未選択）</option>
+                      <template x-for="p in (bg.presets?.spot || [])" :key="p.id">
+                        <option :value="p.id" x-text="p.label_ja"></option>
+                      </template>
+                    </select>
+                  </label>
+                  <label style="font-size:12px;color:#cbd5e1">motif（調度品ディテール）
+                    <select x-model="bg.gen.motif" @change="bg.gen.spot=''; bg.gen.era=''" style="width:100%;margin-top:4px">
+                      <option value="">（未選択）</option>
+                      <template x-for="p in (bg.presets?.motif || [])" :key="p.id">
+                        <option :value="p.id" x-text="p.label_ja"></option>
+                      </template>
+                    </select>
+                  </label>
+                  <label style="font-size:12px;color:#cbd5e1">era（現代の携行品・任意）
+                    <select x-model="bg.gen.era" @change="bg.gen.spot=''; bg.gen.motif=''" style="width:100%;margin-top:4px">
+                      <option value="">（未選択）</option>
+                      <template x-for="p in (bg.presets?.era || [])" :key="p.id">
+                        <option :value="p.id" x-text="p.label_ja"></option>
+                      </template>
+                    </select>
+                  </label>
+                </div>
+                <p style="font-size:11px;color:#f59e0b;margin:-4px 0 10px">
+                  ⚠ spot・motif・eraは排他（1つだけ選ぶ）。eraは「携行品」のみ（設備は現代化しない）。
+                </p>
+                <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:12px;margin:10px 0">
+                  <label style="font-size:12px;color:#cbd5e1">light
+                    <select x-model="bg.gen.light" style="width:100%;margin-top:4px">
+                      <template x-for="p in (bg.presets?.light || [])" :key="p.id">
+                        <option :value="p.id" x-text="p.label_ja"></option>
+                      </template>
+                    </select>
+                  </label>
+                  <label style="font-size:12px;color:#cbd5e1">framing（キャラのショットサイズ）
+                    <select x-model="bg.gen.framing" style="width:100%;margin-top:4px">
+                      <template x-for="p in (bg.presets?.framing || [])" :key="p.id">
+                        <option :value="p.id" x-text="p.label_ja + (p.status ? ' ['+p.status+']' : '')"></option>
+                      </template>
+                    </select>
+                  </label>
+                  <label style="font-size:12px;color:#cbd5e1" x-show="['wide','full_body'].includes(bg.gen.framing)">
+                    camera
+                    <select x-model="bg.gen.camera" style="width:100%;margin-top:4px">
+                      <template x-for="p in (bg.presets?.camera || [])" :key="p.id">
+                        <option :value="p.id" x-text="p.label_ja"></option>
+                      </template>
+                    </select>
+                  </label>
+                </div>
+              </div>
+            </template>
+
+            <template x-if="bg.gen.category === 'psych'">
+              <label style="font-size:12px;color:#cbd5e1;display:block;margin:10px 0">form
+                <select x-model="bg.gen.form" style="width:100%;margin-top:4px">
+                  <option value="">（未選択）</option>
+                  <template x-for="p in (bg.presets?.form || [])" :key="p.id">
+                    <option :value="p.id" x-text="p.label_ja"></option>
+                  </template>
+                </select>
+              </label>
+            </template>
+
+            <template x-if="bg.gen.category === 'comic'">
+              <label style="font-size:12px;color:#cbd5e1;display:block;margin:10px 0">effect
+                <select x-model="bg.gen.effect" style="width:100%;margin-top:4px">
+                  <option value="">（未選択）</option>
+                  <template x-for="p in (bg.presets?.effect || [])" :key="p.id">
+                    <option :value="p.id" x-text="p.label_ja"></option>
+                  </template>
+                </select>
+              </label>
+            </template>
+
+            <div style="font-size:12px;color:#cbd5e1;margin:10px 0 4px">mood（サジェスト用タグ・複数可）</div>
+            <div style="display:flex;flex-wrap:wrap;gap:8px;margin-bottom:10px">
+              <template x-for="p in (bg.presets?.mood || [])" :key="p.id">
+                <label style="display:flex;align-items:center;gap:4px;cursor:pointer;font-size:11px;background:#1e293b;padding:3px 8px;border-radius:99px">
+                  <input type="checkbox" :checked="bg.gen.mood.includes(p.id)" @change="toggleBgGenMood(p.id)">
+                  <span x-text="p.label_ja"></span>
+                </label>
+              </template>
+            </div>
+
+            <div style="display:grid;grid-template-columns:2fr 1fr auto;gap:12px;align-items:end;margin-top:10px">
+              <label style="font-size:12px;color:#cbd5e1">モデル
+                <select x-model="bg.gen.model" style="width:100%;margin-top:4px">
+                  <option value="gemini-3.1-flash-lite-image">Nano Banana 2 Lite（既定・廉価）</option>
+                  <option value="gemini-3.1-flash-image">Nano Banana 2（標準）</option>
+                  <option value="gemini-3-pro-image">Nano Banana Pro（高品質・高額）</option>
+                  <option value="">env既定（NANOBANANA_MODEL）</option>
+                </select>
+              </label>
+              <label style="font-size:12px;color:#cbd5e1">枚数
+                <input type="number" x-model.number="bg.gen.count" min="1" max="4" style="width:100%;margin-top:4px">
+              </label>
+              <label style="display:flex;align-items:center;gap:6px;cursor:pointer;font-size:11px;white-space:nowrap">
+                <input type="checkbox" x-model="bg.gen.isKeyframe"> キーフレームとして保存
+              </label>
+            </div>
+            <p style="font-size:11px;color:#94a3b8;margin:6px 0 0">
+              ⚠ 通常のバリエーション量産は枚数=1を推奨（採用率34%の実績あり・課金を無駄にしない）。
+              count&gt;1はキーフレーム作成や新規パターンの初回試行時だけ。
+            </p>
+            <button class="btn btn-primary" style="margin-top:12px" :disabled="bg.genBusy" @click="generateBg()">
+              <span x-show="!bg.genBusy">🖼️ 生成</span><span x-show="bg.genBusy">生成中…</span>
+            </button>
+            <span x-show="bg.msg" style="margin-left:10px;font-size:12px;color:#7dd3fc" x-text="bg.msg"></span>
+          </div>
+
+          <!-- 検索・一覧 -->
+          <h3 style="font-size:14px;color:#e2e8f0;margin:18px 0 8px">アーカイブ内検索</h3>
+          <div style="display:grid;grid-template-columns:repeat(4,1fr) auto;gap:10px;align-items:end;margin-bottom:12px">
+            <label style="font-size:12px;color:#cbd5e1">系統
+              <select x-model="bg.filter.category" @change="searchBg()" style="width:100%;margin-top:4px">
+                <option value="">すべて</option>
+                <option value="location">location</option>
+                <option value="psych">psych</option>
+                <option value="comic">comic</option>
+              </select>
+            </label>
+            <label style="font-size:12px;color:#cbd5e1">framing
+              <select x-model="bg.filter.framing" @change="searchBg()" style="width:100%;margin-top:4px">
+                <option value="">すべて</option>
+                <template x-for="p in (bg.presets?.framing || [])" :key="p.id">
+                  <option :value="p.id" x-text="p.label_ja"></option>
+                </template>
+              </select>
+            </label>
+            <label style="font-size:12px;color:#cbd5e1">light
+              <select x-model="bg.filter.light" @change="searchBg()" style="width:100%;margin-top:4px">
+                <option value="">すべて</option>
+                <template x-for="p in (bg.presets?.light || [])" :key="p.id">
+                  <option :value="p.id" x-text="p.label_ja"></option>
+                </template>
+              </select>
+            </label>
+            <label style="font-size:12px;color:#cbd5e1">mood
+              <select x-model="bg.filter.mood" @change="searchBg()" style="width:100%;margin-top:4px">
+                <option value="">すべて</option>
+                <template x-for="p in (bg.presets?.mood || [])" :key="p.id">
+                  <option :value="p.id" x-text="p.label_ja"></option>
+                </template>
+              </select>
+            </label>
+            <button class="btn btn-ghost btn-sm" @click="searchBg()">🔄 再検索</button>
+          </div>
+
+          <div x-show="bg.busy" style="font-size:12px;color:#94a3b8">読み込み中…</div>
+          <div x-show="!bg.busy && !bg.items.length" class="empty" style="padding:20px">該当する背景がありません</div>
+          <div x-show="!bg.busy && bg.items.length" style="display:grid;grid-template-columns:repeat(auto-fill,minmax(200px,1fr));gap:12px">
+            <template x-for="item in bg.items" :key="item.bg_id">
+              <div style="background:#0f172a;border-radius:8px;overflow:hidden">
+                <img :src="bgImageUrl(item)" style="width:100%;aspect-ratio:16/9;object-fit:cover;display:block">
+                <div style="padding:8px;font-size:10px;color:#94a3b8">
+                  <div style="color:#e2e8f0;font-size:11px;margin-bottom:2px" x-text="item.bg_id"></div>
+                  <div x-text="(item.mood || []).join(' / ')"></div>
+                  <div style="display:flex;justify-content:space-between;align-items:center;margin-top:4px">
+                    <span x-text="item.model || ''" style="opacity:0.6"></span>
+                    <button class="btn btn-ghost btn-sm" style="padding:2px 6px;font-size:10px" @click="deleteBg(item.bg_id)">🗑</button>
+                  </div>
+                </div>
+              </div>
+            </template>
+          </div>
+        </div>
+      </div>
+    </template>
+
     <template x-if="tab === 'free'">
       <div>
         <div class="card">
@@ -3758,6 +3962,16 @@ function app() {
       audioPrompt: '', audioBusy: false, audioMsg: '',
       cnEnabled: true, cnModel: '', cnType: 'canny', cnStrength: 0.9, cnLow: 0.4, cnHigh: 0.8,
       cnStart: 0.0, cnEnd: 1.0,
+    },
+    // 🏞️ 背景アーカイブタブ
+    bg: {
+      presets: null, items: [], busy: false, genBusy: false, msg: '',
+      filter: { category: 'location', spot: '', motif: '', era: '', light: '', framing: '', mood: '' },
+      gen: {
+        category: 'location', spot: '', motif: '', era: '', light: 'bright-day',
+        camera: 'eye-level-wide', framing: 'bust', form: '', effect: '',
+        mood: [], model: 'gemini-3.1-flash-lite-image', count: 1, isKeyframe: false,
+      },
     },
     freeStyles: ['realistic'],
     freeStyleLabels: {
@@ -5238,6 +5452,7 @@ function app() {
       if (t === 'aroll') await this.refreshArollTab();
       if (t === 'chara') await this.refreshCharaTab();
       if (t === 'studio') await this.refreshStudioTab();
+      if (t === 'bg') { await this.loadBgPresets(); await this.searchBg(); }
       if (t === 'free') { await this.loadFreeStyles(); await this.loadFreeControlnets(); await this.loadFreeOutputs(); }
       if (t === 'editing') await this.refreshEditingTab();
     },
@@ -5827,6 +6042,77 @@ function app() {
       this.newChara = { char_id: '', name: '', appearance_prompt: '', description: '', caption: '', voice: { engine: 'irodori', voice_id: '' } };
       await this.loadCharas();
       await this.openChara(id);
+    },
+    // ─── 🏞️ 背景アーカイブタブ ───────────────────────────
+    async loadBgPresets() {
+      if (this.bg.presets) return;
+      try {
+        const d = await (await fetch(`${FAPI}/backgrounds/presets`)).json();
+        this.bg.presets = d.presets || {};
+      } catch { this.bg.presets = {}; }
+    },
+    bgImageUrl(item) {
+      const filename = (item.image || '').split('/').pop();
+      return `${FAPI}/backgrounds/file/${filename}`;
+    },
+    setBgFilterCategory(cat) {
+      this.bg.filter = { category: cat, spot: '', motif: '', era: '', light: '', framing: '', mood: '' };
+      this.searchBg();
+    },
+    setBgGenCategory(cat) {
+      this.bg.gen.category = cat;
+      this.bg.gen.spot = ''; this.bg.gen.motif = ''; this.bg.gen.era = '';
+      this.bg.gen.form = ''; this.bg.gen.effect = '';
+    },
+    toggleBgGenMood(id) {
+      const i = this.bg.gen.mood.indexOf(id);
+      if (i >= 0) this.bg.gen.mood.splice(i, 1); else this.bg.gen.mood.push(id);
+    },
+    async searchBg() {
+      this.bg.busy = true;
+      try {
+        const params = new URLSearchParams();
+        for (const [k, v] of Object.entries(this.bg.filter)) if (v) params.set(k, v);
+        const d = await (await fetch(`${FAPI}/backgrounds?${params}`)).json();
+        this.bg.items = d.backgrounds || [];
+      } catch { this.bg.items = []; }
+      this.bg.busy = false;
+    },
+    async generateBg() {
+      if (this.bg.genBusy) return;
+      const g = this.bg.gen;
+      if (g.category === 'location' && !(g.spot || g.motif || g.era)) {
+        this.bg.msg = 'spot・motif・eraのいずれかを選んでください'; return;
+      }
+      if (g.category === 'psych' && !g.form) { this.bg.msg = 'formを選んでください'; return; }
+      if (g.category === 'comic' && !g.effect) { this.bg.msg = 'effectを選んでください'; return; }
+      this.bg.genBusy = true; this.bg.msg = '';
+      try {
+        const body = {
+          category: g.category, spot: g.spot, motif: g.motif, era: g.era,
+          light: g.light, camera: g.camera, framing: g.framing,
+          form: g.form, effect: g.effect, mood: g.mood, model: g.model,
+          count: g.count, is_keyframe: g.isKeyframe,
+        };
+        const r = await fetch(`${FAPI}/backgrounds/generate`, {
+          method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body),
+        });
+        if (!r.ok) { const e = await r.json().catch(() => ({})); this.bg.msg = `生成失敗: ${e.detail || r.status}`; return; }
+        const d = await r.json();
+        this.bg.msg = `${(d.backgrounds || []).length}枚生成しました`;
+        await this.searchBg();
+      } catch (e) {
+        this.bg.msg = `生成失敗: ${e}`;
+      } finally {
+        this.bg.genBusy = false;
+      }
+    },
+    async deleteBg(bgId) {
+      if (!confirm(`${bgId} を削除しますか？（取り消し不可）`)) return;
+      try {
+        await fetch(`${FAPI}/backgrounds/${bgId}`, { method: 'DELETE' });
+        this.bg.items = this.bg.items.filter(b => b.bg_id !== bgId);
+      } catch { /* noop */ }
     },
     // ─── 🎨 自由生成タブ ───────────────────────────────
     async loadFreeStyles() {
