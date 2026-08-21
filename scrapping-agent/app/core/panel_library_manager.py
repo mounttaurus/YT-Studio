@@ -88,7 +88,7 @@ def save_index(char_id: str, data: dict) -> None:
 
 
 def list_entries(char_id: str, *, emotion: str = "", shot: str = "", angle: str = "") -> list[dict]:
-    """索引一覧を返す。各entryに現在のappearance_versionと比較した is_stale を付与する。"""
+    """索引一覧を返す。各entryに is_stale（世代違いか）と review_status（欠落は"approved"扱い）を正規化して付与する。"""
     current = appearance_version(char_id)
     out = []
     for e in load_index(char_id).get("entries", []):
@@ -98,20 +98,42 @@ def list_entries(char_id: str, *, emotion: str = "", shot: str = "", angle: str 
             continue
         if angle and e.get("angle") != angle:
             continue
-        out.append({**e, "is_stale": e.get("appearance_version") != current})
+        out.append({
+            **e,
+            "is_stale": e.get("appearance_version") != current,
+            "review_status": e.get("review_status", "approved"),
+        })
     return out
 
 
 def find_current(char_id: str, emotion: str, shot: str, angle: str) -> dict | None:
-    """slot(emotion/shot/angle)に一致し、かつappearance_versionが今と同じ1件を返す。
+    """slot(emotion/shot/angle)に一致し、appearance_versionが今と同じ・かつ承認済みの1件を返す。
 
-    世代違いは対象外（Noneを返す＝呼び出し側は通常どおり新規生成にフォールバックする）。
+    世代違い・review_status="pending"（未承認）は対象外（Noneを返す＝呼び出し側は通常どおり
+    新規生成にフォールバックする）。review_status欠落は既存資産の後方互換として承認済み扱い
+    （複数バリアントの一括生成が導入される前のentryは、生成＝1件だけの明示的な行為だったため）。
+    複数の承認済みentryが同じslotにある場合は先頭の1件を返す（ラウンドロビン選択は未実装。
+    Docs/AROLL_ASSET_PLAN.md §14「次の課題」参照）。
     """
     current = appearance_version(char_id)
     for e in load_index(char_id).get("entries", []):
         if e.get("emotion") == emotion and e.get("shot") == shot and e.get("angle") == angle:
-            if e.get("appearance_version") == current:
-                return e
+            if e.get("appearance_version") != current:
+                continue
+            if e.get("review_status", "approved") != "approved":
+                continue
+            return e
+    return None
+
+
+def approve_entry(char_id: str, slot_id: str) -> dict | None:
+    """pending状態のentryを承認する（review_status="approved"）。以後find_currentの対象になる。"""
+    data = load_index(char_id)
+    for e in data.get("entries", []):
+        if e.get("slot_id") == slot_id:
+            e["review_status"] = "approved"
+            save_index(char_id, data)
+            return e
     return None
 
 
@@ -164,11 +186,18 @@ def _resolve_refs(char_id: str) -> list[tuple[bytes, str, str]]:
 async def generate_and_register(
     char_id: str, *, emotion: str, shot: str, angle: str, pose: str = "",
     style_name: str = "kamishibai", model: str = "", replace_stale: bool = True,
+    review_status: str = "approved",
 ) -> dict:
     """1スロット生成し、panel_library/images/へ保存・索引登録して返す。
 
     replace_stale=True（既定）: 同じ(emotion,shot,angle)を持つ旧世代（appearance_version不一致）
     のentryがあれば実体ごと削除してから追加する（世代混在を索引に残さない）。
+
+    review_status="approved"（既定）: 1件だけ明示的に生成する通常の呼び出しは、呼び出した人が
+    その場で結果を見て判断できるためそのまま承認済み扱いにする。generate_variants()経由の
+    一括バリアント生成だけは"pending"で登録し、人の目視確認（approve_entry）を経てから
+    find_current（Aロール消費）の対象になる（同一キャラなのに瞳の色が違う等の個体差が
+    無審査で本番に流れるのを防ぐ。Docs/AROLL_ASSET_PLAN.md §14参照）。
     """
     c = character_manager.read_character(char_id)
     if not c:
@@ -224,7 +253,32 @@ async def generate_and_register(
         "provider": "nanobanana",
         "created_at": _now(),
         "note": "",
+        "review_status": review_status,
     }
     idx["entries"].append(entry)
     save_index(char_id, idx)
     return entry
+
+
+async def generate_variants(
+    char_id: str, *, emotion: str, shot: str, angle: str, poses: list[str],
+    style_name: str = "kamishibai", model: str = "",
+) -> list[dict]:
+    """同じ(emotion,shot,angle)にposeだけを変えて複数バリアントを一括生成する。
+
+    matching key（slot_key）はemotion/shot/angleの3軸のまま変えない（組み合わせ爆発を避ける。
+    Docs/AROLL_SLOT_REUSE_BRIEF.md §2-2の踏襲）。poseは既存の固定語彙（panel_presets.py）から
+    選ぶ想定＝真に自由なLLM即興文にはしない（識別情報のブレを最小化するため）。
+
+    生成物は全てreview_status="pending"で登録される。承認するまでfind_current（Aロール消費）
+    からは見えない＝人が目視確認してapprove_entry()を呼ぶまで本番に流れない設計。
+    """
+    entries = []
+    for pose in poses:
+        entry = await generate_and_register(
+            char_id, emotion=emotion, shot=shot, angle=angle, pose=pose,
+            style_name=style_name, model=model, replace_stale=False,
+            review_status="pending",
+        )
+        entries.append(entry)
+    return entries

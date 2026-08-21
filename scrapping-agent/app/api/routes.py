@@ -323,9 +323,52 @@ async def generate_panel_library_entry(char_id: str, req: PanelLibraryGenerateRe
     return entry
 
 
+class PanelLibraryVariantsRequest(BaseModel):
+    emotion: str
+    shot: str
+    angle: str
+    poses: list[str]            # 既存pose語彙のid列（panel_presets参照）。1件ごとに1バリアント生成
+    style: str = "kamishibai"
+    model: str = ""
+
+
+@router.post("/characters/{char_id}/panel_library/generate_variants")
+async def generate_panel_library_variants(char_id: str, req: PanelLibraryVariantsRequest):
+    """同じ(emotion,shot,angle)でposeだけ変えた複数バリアントを一括生成する（全てreview_status="pending"）。
+
+    生成直後はAロールから見えない。目視確認して approve へ回すか、不要ならDELETEで捨てる
+    （組み合わせ爆発を避けつつ表現の幅を出す設計。Docs/AROLL_ASSET_PLAN.md §14参照）。
+    """
+    if character_manager.read_character(char_id) is None:
+        raise HTTPException(status_code=404, detail=f"character not found: {char_id}")
+    if not nanobanana_client.is_configured():
+        raise HTTPException(status_code=400, detail="NanoBanana (GEMINI/OPENROUTER key) is not configured")
+    if not req.poses:
+        raise HTTPException(status_code=400, detail="poses must not be empty")
+    try:
+        entries = await panel_library_manager.generate_variants(
+            char_id, emotion=req.emotion, shot=req.shot, angle=req.angle, poses=req.poses,
+            style_name=req.style, model=req.model,
+        )
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    except Exception as e:
+        raise HTTPException(status_code=502, detail=f"panel library variant generation failed: {e}")
+    return {"entries": entries}
+
+
+@router.post("/characters/{char_id}/panel_library/{slot_id}/approve")
+async def approve_panel_library_entry(char_id: str, slot_id: str):
+    """pending状態のentryを承認する（以後Aロール生成から引かれるようになる）。"""
+    entry = panel_library_manager.approve_entry(char_id, slot_id)
+    if entry is None:
+        raise HTTPException(status_code=404, detail=f"panel library entry not found: {slot_id}")
+    return entry
+
+
 @router.delete("/characters/{char_id}/panel_library/{slot_id}")
 async def delete_panel_library_entry(char_id: str, slot_id: str):
-    """索引から除去し実体ファイルも削除する。"""
+    """索引から除去し実体ファイルも削除する（pending中の却下にも使う）。"""
     if not panel_library_manager.delete_entry(char_id, slot_id):
         raise HTTPException(status_code=404, detail=f"panel library entry not found: {slot_id}")
     return {"deleted": slot_id}

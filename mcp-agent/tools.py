@@ -639,8 +639,28 @@ async def generate_panel_library_entry(char_id: str, emotion: str, shot: str, an
 
 
 async def delete_panel_library_entry(char_id: str, slot_id: str) -> dict:
-    """キャラのライブラリから1件削除する(索引・実体ファイルとも)。取り消し不可。"""
+    """キャラのライブラリから1件削除する(索引・実体ファイルとも)。取り消し不可。pending中の却下にも使う。"""
     return await dc.request("DELETE", f"api/scrapping/characters/{char_id}/panel_library/{slot_id}")
+
+
+async def generate_panel_library_variants(char_id: str, emotion: str, shot: str, angle: str,
+                                           poses: list[str], style: str = "kamishibai",
+                                           model: str = "") -> dict:
+    """同じ(emotion,shot,angle)でposeだけ変えた複数バリアントを一括生成する(NanoBanana・外部API課金)。
+
+    matching key(emotion/shot/angle)は変えない(組み合わせ爆発回避)。poseは既存語彙
+    (list_panel_presetsのpose)から選ぶ。生成物は全てreview_status="pending"で登録され、
+    approve_panel_library_entryで承認するまでAロール生成からは引かれない(色ブレ等の個体差が
+    無審査で本番に流れるのを防ぐ設計。実測で瞳の色が違う個体が出た実例あり)。COST分類。
+    """
+    body = {"emotion": emotion, "shot": shot, "angle": angle, "poses": poses,
+            "style": style, "model": model}
+    return await dc.request("POST", f"api/scrapping/characters/{char_id}/panel_library/generate_variants", json=body)
+
+
+async def approve_panel_library_entry(char_id: str, slot_id: str) -> dict:
+    """pending状態のライブラリentryを承認する(以後Aロール生成から引かれるようになる)。"""
+    return await dc.request("POST", f"api/scrapping/characters/{char_id}/panel_library/{slot_id}/approve")
 
 
 # ── リサーチ（research / 別件1: 探索→蒸留→ラフ台本） ─────────────────
@@ -886,6 +906,8 @@ TOOLS = [
     # キャラ所有ライブラリ（Phase 3・Aロール演技スロットの作り置き）
     {"fn": list_panel_library,   "side_effects": [S.READ]},
     {"fn": generate_panel_library_entry, "side_effects": [S.COST]},
+    {"fn": generate_panel_library_variants, "side_effects": [S.COST]},
+    {"fn": approve_panel_library_entry,  "side_effects": [S.WRITE]},
     {"fn": delete_panel_library_entry,   "side_effects": [S.WRITE]},
     # 自由生成（台本非依存）
     {"fn": list_imagegen_styles, "side_effects": [S.READ]},
