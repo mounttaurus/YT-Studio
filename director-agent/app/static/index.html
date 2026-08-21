@@ -515,6 +515,7 @@
       <button class="tab-btn" :class="{ active: tab === 'chara' }" @click="setTab('chara')">🎭 キャラ</button>
       <button class="tab-btn" :class="{ active: tab === 'studio' }" @click="setTab('studio')">🎬 紙芝居</button>
       <button class="tab-btn" :class="{ active: tab === 'bg' }" @click="setTab('bg')">🏞️ 背景</button>
+      <button class="tab-btn" :class="{ active: tab === 'panelLib' }" @click="setTab('panelLib')">📚 キャラ画像</button>
       <button class="tab-btn" :class="{ active: tab === 'free' }" @click="setTab('free')">🎨 自由生成</button>
       <button class="tab-btn" :class="{ active: tab === 'editing' }" @click="setTab('editing')">🎞️ 編集情報</button>
     </div>
@@ -3045,6 +3046,190 @@
       </div>
     </template>
 
+    <template x-if="tab === 'panelLib'">
+      <div>
+        <div class="card">
+          <h2 style="display:flex;align-items:center;gap:10px">📚 キャラ画像ライブラリ
+            <span style="font-size:10px;padding:2px 8px;border-radius:99px;background:#1e293b;color:#94a3b8">台本に縛られない・Phase3</span>
+          </h2>
+          <p style="font-size:12px;color:#94a3b8;margin:4px 0 14px">
+            キャラ別に演技パターン（表情×ショット×アングル）を作り置きし、Aロール生成時に無料で引けるようにする。
+            設計の正本は <code>Docs/AROLL_ASSET_PLAN.md</code>。
+          </p>
+
+          <label style="font-size:12px;color:#cbd5e1;display:block;margin-bottom:14px">キャラクター
+            <select x-model="panelLib.charId" @change="searchPanelLib()" style="width:280px;margin-top:4px">
+              <template x-for="c in charas" :key="c.char_id">
+                <option :value="c.char_id" x-text="c.name || c.char_id"></option>
+              </template>
+            </select>
+          </label>
+
+          <!-- 1枚だけ生成 -->
+          <div style="background:#0f172a;border-radius:8px;padding:14px;margin-bottom:16px">
+            <h3 style="font-size:13px;color:#e2e8f0;margin:0 0 8px">1枚だけ生成（即承認）</h3>
+            <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:12px">
+              <label style="font-size:12px;color:#cbd5e1">表情
+                <select x-model="panelLib.gen.emotion" style="width:100%;margin-top:4px">
+                  <option value="">（未選択）</option>
+                  <template x-for="p in (studioPresets.emotion||[])" :key="p.id"><option :value="p.id" x-text="p.label_ja"></option></template>
+                </select>
+              </label>
+              <label style="font-size:12px;color:#cbd5e1">ショット
+                <select x-model="panelLib.gen.shot" style="width:100%;margin-top:4px">
+                  <option value="">（未選択）</option>
+                  <template x-for="p in (studioPresets.shot||[])" :key="p.id"><option :value="p.id" x-text="p.label_ja"></option></template>
+                </select>
+              </label>
+              <label style="font-size:12px;color:#cbd5e1">アングル
+                <select x-model="panelLib.gen.angle" style="width:100%;margin-top:4px">
+                  <option value="">（未選択）</option>
+                  <template x-for="p in (studioPresets.angle||[])" :key="p.id"><option :value="p.id" x-text="p.label_ja"></option></template>
+                </select>
+              </label>
+              <label style="font-size:12px;color:#cbd5e1">ポーズ（任意）
+                <select x-model="panelLib.gen.pose" style="width:100%;margin-top:4px">
+                  <option value="">（未選択）</option>
+                  <template x-for="p in (studioPresets.pose||[])" :key="p.id"><option :value="p.id" x-text="p.label_ja"></option></template>
+                </select>
+              </label>
+            </div>
+            <div style="display:flex;gap:12px;align-items:end;margin-top:10px">
+              <label style="font-size:12px;color:#cbd5e1">モデル
+                <select x-model="panelLib.gen.model" style="width:220px;margin-top:4px">
+                  <option value="gemini-3.1-flash-lite-image">Nano Banana 2 Lite（既定・廉価）</option>
+                  <option value="gemini-3.1-flash-image">Nano Banana 2（標準）</option>
+                  <option value="gemini-3-pro-image">Nano Banana Pro（高品質・高額）</option>
+                  <option value="">env既定（NANOBANANA_MODEL）</option>
+                </select>
+              </label>
+              <button class="btn btn-primary" :disabled="panelLib.genBusy" @click="generatePanelLib()">
+                <span x-show="!panelLib.genBusy">🖼️ 生成</span><span x-show="panelLib.genBusy">生成中…</span>
+              </button>
+            </div>
+          </div>
+
+          <!-- バリアント一括生成 -->
+          <div style="background:#0f172a;border-radius:8px;padding:14px;margin-bottom:16px">
+            <h3 style="font-size:13px;color:#e2e8f0;margin:0 0 4px">バリアント一括生成（承認待ちで登録）</h3>
+            <p style="font-size:11px;color:#f59e0b;margin:0 0 10px">
+              ⚠ 同じ表情×ショット×アングルのままposeだけ変えて複数生成する。生成物は承認待ちで登録され、
+              下の「承認待ち」欄で目視確認してから承認するまでAロールからは引かれない（色ブレ等の個体差対策）。
+              角度と競合するpose（見上げる/見下ろす等）は避けること。
+            </p>
+            <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:12px">
+              <label style="font-size:12px;color:#cbd5e1">表情
+                <select x-model="panelLib.variantGen.emotion" style="width:100%;margin-top:4px">
+                  <option value="">（未選択）</option>
+                  <template x-for="p in (studioPresets.emotion||[])" :key="p.id"><option :value="p.id" x-text="p.label_ja"></option></template>
+                </select>
+              </label>
+              <label style="font-size:12px;color:#cbd5e1">ショット
+                <select x-model="panelLib.variantGen.shot" style="width:100%;margin-top:4px">
+                  <option value="">（未選択）</option>
+                  <template x-for="p in (studioPresets.shot||[])" :key="p.id"><option :value="p.id" x-text="p.label_ja"></option></template>
+                </select>
+              </label>
+              <label style="font-size:12px;color:#cbd5e1">アングル
+                <select x-model="panelLib.variantGen.angle" style="width:100%;margin-top:4px">
+                  <option value="">（未選択）</option>
+                  <template x-for="p in (studioPresets.angle||[])" :key="p.id"><option :value="p.id" x-text="p.label_ja"></option></template>
+                </select>
+              </label>
+            </div>
+            <div style="font-size:12px;color:#cbd5e1;margin:10px 0 4px">pose（複数選択・バリアント数=選択数）</div>
+            <div style="display:flex;flex-wrap:wrap;gap:8px;margin-bottom:10px">
+              <template x-for="p in (studioPresets.pose||[])" :key="p.id">
+                <label style="display:flex;align-items:center;gap:4px;cursor:pointer;font-size:11px;background:#1e293b;padding:3px 8px;border-radius:99px">
+                  <input type="checkbox" :checked="panelLib.variantGen.poses.includes(p.id)" @change="togglePanelLibVariantPose(p.id)">
+                  <span x-text="p.label_ja"></span>
+                </label>
+              </template>
+            </div>
+            <div style="display:flex;gap:12px;align-items:end">
+              <label style="font-size:12px;color:#cbd5e1">モデル
+                <select x-model="panelLib.variantGen.model" style="width:220px;margin-top:4px">
+                  <option value="gemini-3.1-flash-lite-image">Nano Banana 2 Lite（既定・廉価）</option>
+                  <option value="gemini-3.1-flash-image">Nano Banana 2（標準）</option>
+                  <option value="gemini-3-pro-image">Nano Banana Pro（高品質・高額）</option>
+                  <option value="">env既定（NANOBANANA_MODEL）</option>
+                </select>
+              </label>
+              <button class="btn btn-primary" :disabled="panelLib.variantBusy" @click="generatePanelLibVariants()">
+                <span x-show="!panelLib.variantBusy">🖼️ バリアント生成</span><span x-show="panelLib.variantBusy">生成中…</span>
+              </button>
+            </div>
+            <span x-show="panelLib.msg" style="margin-left:0;display:block;margin-top:8px;font-size:12px;color:#7dd3fc" x-text="panelLib.msg"></span>
+          </div>
+
+          <!-- 承認待ちキュー -->
+          <template x-if="panelLib.pending.length">
+            <div style="margin-bottom:20px">
+              <h3 style="font-size:14px;color:#fbbf24;margin:0 0 8px">⏳ 承認待ち（<span x-text="panelLib.pending.length"></span>件・Aロールからはまだ引かれません）</h3>
+              <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(180px,1fr));gap:12px">
+                <template x-for="item in panelLib.pending" :key="item.slot_id">
+                  <div style="background:#2d1b00;border:1px solid #92400e;border-radius:8px;overflow:hidden">
+                    <img :src="panelLibImageUrl(item)" style="width:100%;aspect-ratio:16/9;object-fit:cover;display:block">
+                    <div style="padding:8px;font-size:10px;color:#94a3b8">
+                      <div style="color:#e2e8f0;font-size:11px;margin-bottom:2px" x-text="item.slot_id"></div>
+                      <div x-text="'pose: ' + (item.pose || '-')"></div>
+                      <div style="display:flex;gap:6px;margin-top:6px">
+                        <button class="btn btn-success btn-sm" style="flex:1;font-size:10px;padding:3px" @click="approvePanelLib(item.slot_id)">✓ 承認</button>
+                        <button class="btn btn-ghost btn-sm" style="font-size:10px;padding:3px 6px" @click="deletePanelLib(item.slot_id)">🗑 却下</button>
+                      </div>
+                    </div>
+                  </div>
+                </template>
+              </div>
+            </div>
+          </template>
+
+          <!-- 検索・一覧 -->
+          <h3 style="font-size:14px;color:#e2e8f0;margin:18px 0 8px">ライブラリ一覧（承認済み）</h3>
+          <div style="display:grid;grid-template-columns:repeat(3,1fr) auto;gap:10px;align-items:end;margin-bottom:12px">
+            <label style="font-size:12px;color:#cbd5e1">表情
+              <select x-model="panelLib.filter.emotion" @change="searchPanelLib()" style="width:100%;margin-top:4px">
+                <option value="">すべて</option>
+                <template x-for="p in (studioPresets.emotion||[])" :key="p.id"><option :value="p.id" x-text="p.label_ja"></option></template>
+              </select>
+            </label>
+            <label style="font-size:12px;color:#cbd5e1">ショット
+              <select x-model="panelLib.filter.shot" @change="searchPanelLib()" style="width:100%;margin-top:4px">
+                <option value="">すべて</option>
+                <template x-for="p in (studioPresets.shot||[])" :key="p.id"><option :value="p.id" x-text="p.label_ja"></option></template>
+              </select>
+            </label>
+            <label style="font-size:12px;color:#cbd5e1">アングル
+              <select x-model="panelLib.filter.angle" @change="searchPanelLib()" style="width:100%;margin-top:4px">
+                <option value="">すべて</option>
+                <template x-for="p in (studioPresets.angle||[])" :key="p.id"><option :value="p.id" x-text="p.label_ja"></option></template>
+              </select>
+            </label>
+            <button class="btn btn-ghost btn-sm" @click="searchPanelLib()">🔄 再検索</button>
+          </div>
+
+          <div x-show="panelLib.busy" style="font-size:12px;color:#94a3b8">読み込み中…</div>
+          <div x-show="!panelLib.busy && !panelLib.items.length" class="empty" style="padding:20px">該当するスロットがありません</div>
+          <div x-show="!panelLib.busy && panelLib.items.length" style="display:grid;grid-template-columns:repeat(auto-fill,minmax(180px,1fr));gap:12px">
+            <template x-for="item in panelLib.items" :key="item.slot_id">
+              <div style="background:#0f172a;border-radius:8px;overflow:hidden" :style="item.is_stale ? 'outline:2px solid #dc2626' : ''">
+                <img :src="panelLibImageUrl(item)" style="width:100%;aspect-ratio:16/9;object-fit:cover;display:block">
+                <div style="padding:8px;font-size:10px;color:#94a3b8">
+                  <div style="color:#e2e8f0;font-size:11px;margin-bottom:2px" x-text="item.slot_id"></div>
+                  <div x-text="'使用回数: ' + (item.times_used || 0)"></div>
+                  <div x-show="item.is_stale" style="color:#f87171">⚠ 外見が更新済み（古い）</div>
+                  <div style="display:flex;justify-content:space-between;align-items:center;margin-top:4px">
+                    <span x-text="item.model || ''" style="opacity:0.6"></span>
+                    <button class="btn btn-ghost btn-sm" style="padding:2px 6px;font-size:10px" @click="deletePanelLib(item.slot_id)">🗑</button>
+                  </div>
+                </div>
+              </div>
+            </template>
+          </div>
+        </div>
+      </div>
+    </template>
+
     <template x-if="tab === 'free'">
       <div>
         <div class="card">
@@ -3972,6 +4157,13 @@ function app() {
         camera: 'eye-level-wide', framing: 'bust', form: '', effect: '',
         mood: [], model: 'gemini-3.1-flash-lite-image', count: 1, isKeyframe: false,
       },
+    },
+    // 📚 キャラ画像ライブラリタブ（Phase 3・Aロール演技スロットの作り置き）
+    panelLib: {
+      charId: '', items: [], pending: [], busy: false, genBusy: false, variantBusy: false, msg: '',
+      filter: { emotion: '', shot: '', angle: '' },
+      gen: { emotion: '', shot: '', angle: '', pose: '', model: 'gemini-3.1-flash-lite-image' },
+      variantGen: { emotion: '', shot: '', angle: '', poses: [], model: 'gemini-3.1-flash-lite-image' },
     },
     freeStyles: ['realistic'],
     freeStyleLabels: {
@@ -5453,6 +5645,12 @@ function app() {
       if (t === 'chara') await this.refreshCharaTab();
       if (t === 'studio') await this.refreshStudioTab();
       if (t === 'bg') { await this.loadBgPresets(); await this.searchBg(); }
+      if (t === 'panelLib') {
+        await this.loadStudioPresets();
+        if (!this.charas.length) await this.loadCharas();
+        if (!this.panelLib.charId && this.charas.length) this.panelLib.charId = this.charas[0].char_id;
+        await this.searchPanelLib();
+      }
       if (t === 'free') { await this.loadFreeStyles(); await this.loadFreeControlnets(); await this.loadFreeOutputs(); }
       if (t === 'editing') await this.refreshEditingTab();
     },
@@ -6112,6 +6310,81 @@ function app() {
       try {
         await fetch(`${FAPI}/backgrounds/${bgId}`, { method: 'DELETE' });
         this.bg.items = this.bg.items.filter(b => b.bg_id !== bgId);
+      } catch { /* noop */ }
+    },
+    // ─── 📚 キャラ画像ライブラリタブ（Phase 3） ───────────────────
+    panelLibImageUrl(item) {
+      const filename = (item.image || '').split('/').pop();
+      return `${FAPI}/characters/${this.panelLib.charId}/panel_library/file/${filename}`;
+    },
+    togglePanelLibVariantPose(id) {
+      const i = this.panelLib.variantGen.poses.indexOf(id);
+      if (i >= 0) this.panelLib.variantGen.poses.splice(i, 1); else this.panelLib.variantGen.poses.push(id);
+    },
+    async searchPanelLib() {
+      if (!this.panelLib.charId) { this.panelLib.items = []; this.panelLib.pending = []; return; }
+      this.panelLib.busy = true;
+      try {
+        const params = new URLSearchParams();
+        for (const [k, v] of Object.entries(this.panelLib.filter)) if (v) params.set(k, v);
+        const d = await (await fetch(`${FAPI}/characters/${this.panelLib.charId}/panel_library?${params}`)).json();
+        const entries = d.entries || [];
+        this.panelLib.pending = entries.filter(e => e.review_status === 'pending');
+        this.panelLib.items = entries.filter(e => e.review_status !== 'pending');
+      } catch { this.panelLib.items = []; this.panelLib.pending = []; }
+      this.panelLib.busy = false;
+    },
+    async generatePanelLib() {
+      if (this.panelLib.genBusy || !this.panelLib.charId) return;
+      const g = this.panelLib.gen;
+      if (!g.emotion || !g.shot || !g.angle) { this.panelLib.msg = 'emotion・shot・angleを選んでください'; return; }
+      this.panelLib.genBusy = true; this.panelLib.msg = '';
+      try {
+        const r = await fetch(`${FAPI}/characters/${this.panelLib.charId}/panel_library/generate`, {
+          method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ emotion: g.emotion, shot: g.shot, angle: g.angle, pose: g.pose, model: g.model }),
+        });
+        if (!r.ok) { const e = await r.json().catch(() => ({})); this.panelLib.msg = `生成失敗: ${e.detail || r.status}`; return; }
+        this.panelLib.msg = '1枚生成しました（承認済み・即座にAロールから引かれます）';
+        await this.searchPanelLib();
+      } catch (e) {
+        this.panelLib.msg = `生成失敗: ${e}`;
+      } finally {
+        this.panelLib.genBusy = false;
+      }
+    },
+    async generatePanelLibVariants() {
+      if (this.panelLib.variantBusy || !this.panelLib.charId) return;
+      const g = this.panelLib.variantGen;
+      if (!g.emotion || !g.shot || !g.angle) { this.panelLib.msg = 'emotion・shot・angleを選んでください'; return; }
+      if (!g.poses.length) { this.panelLib.msg = 'poseを1つ以上選んでください'; return; }
+      this.panelLib.variantBusy = true; this.panelLib.msg = '';
+      try {
+        const r = await fetch(`${FAPI}/characters/${this.panelLib.charId}/panel_library/generate_variants`, {
+          method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ emotion: g.emotion, shot: g.shot, angle: g.angle, poses: g.poses, model: g.model }),
+        });
+        if (!r.ok) { const e = await r.json().catch(() => ({})); this.panelLib.msg = `生成失敗: ${e.detail || r.status}`; return; }
+        const d = await r.json();
+        this.panelLib.msg = `${(d.entries || []).length}枚生成しました（承認待ち・下の「承認待ち」欄で確認してください）`;
+        await this.searchPanelLib();
+      } catch (e) {
+        this.panelLib.msg = `生成失敗: ${e}`;
+      } finally {
+        this.panelLib.variantBusy = false;
+      }
+    },
+    async approvePanelLib(slotId) {
+      try {
+        await fetch(`${FAPI}/characters/${this.panelLib.charId}/panel_library/${slotId}/approve`, { method: 'POST' });
+        await this.searchPanelLib();
+      } catch { /* noop */ }
+    },
+    async deletePanelLib(slotId) {
+      if (!confirm(`${slotId} を削除しますか？（取り消し不可）`)) return;
+      try {
+        await fetch(`${FAPI}/characters/${this.panelLib.charId}/panel_library/${slotId}`, { method: 'DELETE' });
+        await this.searchPanelLib();
       } catch { /* noop */ }
     },
     // ─── 🎨 自由生成タブ ───────────────────────────────
