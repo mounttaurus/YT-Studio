@@ -130,11 +130,12 @@ def get_episode_script(project_id: str, episode_number: int) -> dict | None:
     return None
 
 
-# ─── PS-Assist（合成結果QA）─────────────────────────────────────────────
+# ─── Photoshop 合成結果のQA（psassist/）───────────────────────────────
 #
-# PS-Assist は別リポ・別ネットワーク（ps-assist-net）で、director とは
-# **HTTPで繋がない**。PS-Assist が episode 配下の psassist/ に qa_report.json と
-# 表示用画像を書き、director は既存の /shared マウントをそのまま読むだけにする。
+# psassist/ の検査は **ホスト常駐のスクリプト**（Photoshop / win32com）が走らせる。
+# コンテナではないので叩ける API が存在せず、連携は共有フォルダ経由が唯一の道。
+# スクリプトが episode 配下の psassist/ に qa_report.json と表示用画像を書き、
+# director は既存の /shared マウントをそのまま読むだけにする。
 
 def episode_dir(project_id: str, episode_number: int) -> Path | None:
     matches = list(PROJECTS_DIR.glob(f"{project_id}*"))

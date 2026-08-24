@@ -842,7 +842,7 @@ NanoBanana（参照画像同梱）でパネルを生成する。吹き出しは�
 
 ```json
 {
-  "schema_version": "1.1.0",
+  "schema_version": "1.2.0",
   "project_id": "20250603_001",
   "episode": 1,
   "aspect": "16:9",
@@ -862,9 +862,12 @@ NanoBanana（参照画像同梱）でパネルを生成する。吹き出しは�
       "prompt_text_hash": "9f2c1a...",
       "slot": {"emotion": "serious", "pose": "talking", "shot": "bust", "angle": "low_angle"},
       "slot_key": "002|serious|bust|low_angle",
-      "slot_source": "llm | derived | none",
+      "slot_source": "llm | derived | none | user",
       "status": "pending | done | failed",
       "image": "panel_line_001.png",
+      "image_source": "generated | copied | library",
+      "library_slot_id": null,
+      "background_id": null,
       "provider": "nanobanana",
       "error": null,
       "generated_at": "...",
@@ -920,9 +923,50 @@ $概算を確認できる。`GET .../aroll/status` の `job.total` は実生成�
 終わるため母数に入れると進捗が嘘になる）。`job.copy_total` / `job.copy_done` でコピー側の
 進捗も別途確認できる。
 
-**現在のスコープ**: dedupは**同一バッチ内**のみ。台本に行を追加して別バッチを走らせた時、
-既存の生成済み画像を新規行の再利用元にする「バッチをまたいだ再利用」は未実装（将来拡張、
-詳細はDocs/AROLL_SLOT_REUSE_BRIEF.md §4-5・§7）。
+**現在のスコープ**: 話をまたいだ再利用は下記「キャラ所有ライブラリ」で解消済み（Phase 3）。
+バッチ**内**のこの仕組み（Phase 2）はバッチ内dedupとして残る。
+
+### キャラ所有ライブラリ（Phase 3・2026-08-21新規 — 話をまたいだ再利用）
+
+キャラ別に演技パターン（`slot`のemotion/shot/angle）を作り置きしたライブラリ
+（`shared/characters/{char_id}/panel_library/library.json`。詳細は`Docs/AROLL_ASSET_PLAN.md`）
+から、話をまたいで無料でコピーできるようにしたもの。`image_source`に3つ目の値を追加:
+
+| フィールド | 意味 |
+|---|---|
+| `image_source` | `"generated"` / `"copied"`（Phase2・同バッチ内） / **`"library"`**（Phase3・話をまたいだ再利用） |
+| `library_slot_id` | コピー元のライブラリentry`slot_id`（`image_source="library"`の時のみ） |
+
+`slot`のemotion/shot/angleは`POST .../aroll/generate`のLLM生成やprompt手編集からの正規表現推定
+だけでなく、`PUT .../aroll/lines/{line_id}`に`slot`を直接渡すことでも設定できる
+（`slot_source="user"`。UIの「根拠」欄）。3軸が揃うとライブラリからの自動再解決を試みる
+（`library_only=true`ガード＝ライブラリ不一致でも課金生成へは絶対にフォールバックしない）。
+
+ユーザーが承認済みバリアントを直接選ぶ場合は `POST .../aroll/lines/{line_id}/set_library_image`
+（`{char_id, slot_id}`）。ライブラリ側の`times_used`（使用回数）が最小のentryが優先消費される
+ローテーション方式（`panel_library_manager.find_current`）で、手動選択も`record_usage`を通じて
+この均等化に参加する。
+
+### 背景の行単位自動割当（2026-08-22新規・schema_version 1.2.0）
+
+各パネルに`background_id`（`shared/backgrounds/backgrounds.json`の`bg_id`、null許容）を追加。
+背景は**行ごとに変わるのがこの番組の正しい演出**（マンガ文法。場面の連続性という映像的発想は
+不要。詳細は`Docs/AROLL_ASSET_PLAN.md`§19）。
+
+| フィールド | 意味 |
+|---|---|
+| `background_id` | 背景アーカイブの`bg_id`。null=未割当 |
+
+`POST .../aroll/backgrounds/auto_assign`（`{only_missing}`）で全行に自動割当できる
+（無料・画像生成なし）。`slot.shot`→背景の`framing`、`slot.emotion`→`mood`対応表
+（`background_presets.EMOTION_TO_MOOD`）でサジェスト候補を絞り、背景側にも
+`times_used`最小優先ローテーション＋直近使用回避（既定6行）を適用し、キャラ画像と同じ
+考え方で反復感を機械側が抑える。手動での上書きは`PUT .../aroll/lines/{line_id}`に
+`background_id`を渡す（空文字で未割当に戻せる）。
+
+⚠️ 実体は合成しない。`a_roll/panel_{line_id}.png`はキャラ単体のまま、背景は別ファイル
+（`shared/backgrounds/images/{bg_id}.png`）として存在し、ユーザーがPhotoshopで手作業合成する
+運用は変えない。
 
 ### 台本との同期判定（2026-08-09 新規）
 

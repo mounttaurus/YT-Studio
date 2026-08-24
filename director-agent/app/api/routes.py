@@ -57,15 +57,16 @@ async def get_episode_tts(project_id: str, episode_number: int, lang: str | None
     return data
 
 
-# ─── PS-Assist（合成結果QA）連携 ────────────────────────────────────────
+# ─── Photoshop 合成結果のQA（psassist/）連携 ────────────────────────────
 #
-# PS-Assist（別リポ・別ネットワーク）とは **HTTPで繋がない**。PS-Assist が
-# episode 配下の psassist/ に qa_report.json と表示用画像を書き、director は
-# 既存の /shared マウントを読むだけにする（ps-assist-net を跨がせない）。
+# 検査は psassist/ の**ホスト常駐スクリプト**（Photoshop / win32com）が走らせる。
+# コンテナではないので叩ける API が無く、連携は共有フォルダ経由が唯一の道。
+# スクリプトが episode 配下の psassist/ に qa_report.json と表示用画像を書き、
+# director は既存の /shared マウントを読むだけにする。
 
 @router.get("/projects/{project_id}/episodes/{episode_number}/psassist/qa")
 async def get_psassist_qa(project_id: str, episode_number: int):
-    """合成結果の検査レポート（PS-Assist の scripts/qa_check.py が書く）。"""
+    """合成結果の検査レポート（psassist/scripts/qa_check.py が書く）。"""
     data = project_manager.get_psassist_qa(project_id, episode_number)
     if data is None:
         raise HTTPException(status_code=404, detail="qa_report.json not found")

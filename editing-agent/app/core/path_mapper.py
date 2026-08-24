@@ -34,7 +34,7 @@ def to_host_path(container_path: Path) -> PureWindowsPath:
     """コンテナ内絶対パス（SHARED_DIR配下）をホスト側Windowsパスに変換する。
 
     例: /shared/projects/foo/episodes/ep01/audio/line_001.wav
-        -> PureWindowsPath("D:/Docker/Youtube-Auto/shared/projects/foo/episodes/ep01/audio/line_001.wav")
+        -> PureWindowsPath("<HOST_SHARED_DIR>/projects/foo/episodes/ep01/audio/line_001.wav")
     """
     rel = container_path.resolve().relative_to(SHARED_DIR.resolve())
     host_root = PureWindowsPath(HOST_SHARED_DIR)

@@ -137,13 +137,13 @@ shared/projects/{id}/episodes/epNN/
 
 OTIO/edit.json を読むのは**ホスト側のResolve**なので、メディア参照はホストのパスで書く必要がある。
 
-- 環境変数 `HOST_SHARED_DIR`（例: `D:\Docker\Youtube-Auto\shared`）を導入
+- 環境変数 `HOST_SHARED_DIR`（例: `<インストール先>\YT-Studio\shared`）を導入
 - コンテナ内 `/shared/projects/{id}/episodes/ep01/audio/line_001.wav`
   → `PureWindowsPath(HOST_SHARED_DIR) / "projects" / id / ...` に変換
 - OTIOの `ExternalReference.target_url` への書き込み形式は環境変数 `OTIO_PATH_STYLE` で切替：
-  - `file_uri`（既定）: `PureWindowsPath.as_uri()` → `file:///D:/Docker/.../line_001.wav`
+  - `file_uri`（既定）: `PureWindowsPath.as_uri()` → `file:///<HOST_SHARED_DIR>/.../line_001.wav`
     （日本語はpercent-encodeされる）
-  - `windows`: 生のWindowsパス `D:\Docker\...\line_001.wav` をそのまま入れる
+  - `windows`: 生のWindowsパス `<HOST_SHARED_DIR>\...\line_001.wav` をそのまま入れる
     （file_uri が Resolve実機で日本語パスをリンクできなかった場合のフォールバック。
     OTIOのtarget_urlは非URI文字列も許容され、Resolveは絶対パスも解釈する）
 
@@ -292,7 +292,7 @@ editing-agent/
 ├── requirements.txt            ← fastapi / uvicorn[standard] / opentimelineio==0.17.* / python-dotenv
 ├── .env.example
 │     SHARED_DIR=/shared
-│     HOST_SHARED_DIR=D:\Docker\Youtube-Auto\shared
+│     HOST_SHARED_DIR=<インストール先>\YT-Studio\shared
 │     DEFAULT_FPS=30
 │     OTIO_PATH_STYLE=file_uri
 ├── app/

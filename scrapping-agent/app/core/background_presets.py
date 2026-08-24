@@ -6,10 +6,18 @@ panel_presets.py（Aロールの演技スロット）と対の存在。語彙の
 shared/imagegen/background_presets.json に外出しし、ユーザーが項目を追加・編集できる。
 無ければデフォルトを書き出す（panel_presets / style_manager と同じ方針）。
 
-背景は3系統（category）:
+背景は5系統（category）:
   location = 隠し部屋の各所（spot または motif を1つ選ぶ・排他）
   psych    = 心理背景（form）
   comic    = コミック背景（effect）
+  effect   = 集中線・フォーカスライン（effect）※2026-08-23 追加
+  backdrop = ハーフトーン/グラデーション等の下地（form）※2026-08-23 追加
+
+effect と backdrop は **本システムでは生成しない**（外部調達＝Vecteezy 等）。
+Photoshop 合成側（PS-Assist）が使う素材で、索引に載せるのは
+「どの素材があるか」を機械が引けるようにするため。
+  - effect  は透過素材（不透明率 2〜9% 実測）。**キャラの後ろ・背景の前**に重ねる
+  - backdrop は不透明。部屋背景の代わりに使うアクセント・場面転換用
 
 location はさらに framing（キャラのショットサイズ）で寄り引きを切り替える。
 framing の id は panel_presets.json の shot と同一（Aロールのslot.shotからそのまま引ける）。
@@ -25,7 +33,17 @@ PRESETS_FILE = SHARED_DIR / "imagegen" / "background_presets.json"
 
 # 背景用スタイル（画風）は shared/imagegen/styles.json 側に定義する（style_manager.py の
 # kamishibai_bg / kamishibai_fx）。ここでは「どちらを使うか」の対応だけを持つ。
-STYLE_BY_CATEGORY = {"location": "kamishibai_bg", "psych": "kamishibai_fx", "comic": "kamishibai_fx"}
+STYLE_BY_CATEGORY = {
+    "location": "kamishibai_bg",
+    "psych": "kamishibai_fx",
+    "comic": "kamishibai_fx",
+    # effect / backdrop は生成対象外（外部調達）。索引上の整合のため同じ画風を指す
+    "effect": "kamishibai_fx",
+    "backdrop": "kamishibai_fx",
+}
+
+# 本システムが生成できる系統。effect / backdrop は外部調達のため含めない。
+GENERATED_CATEGORIES = ("location", "psych", "comic")
 
 # ── 部屋の署名（location 共通・必須。§6） ──────────────────────────
 SIGNATURE_FULL = (
@@ -302,6 +320,12 @@ def load_presets() -> dict:
                 if item["id"] not in existing_ids:
                     data[g].append(item)
                     changed = True
+        # emotion→mood 対応表も書き出す。コンテナ外（PS-Assist の Photoshop 合成側）が
+        # 「セリフの感情に合う演出背景」を選ぶのにこの表を必要とするため、コードに
+        # 抱えたままにせず共有JSONへ出す＝正本はここ、配布先が shared/imagegen/。
+        if data.get("emotion_to_mood") != EMOTION_TO_MOOD:
+            data["emotion_to_mood"] = EMOTION_TO_MOOD
+            changed = True
         if changed:
             save_presets(data)
         return data

@@ -10,8 +10,8 @@
 #
 # Advanced: -FromOldRoot <path> carries over .env keys / voices / SD models / irodori cache
 # from a previous install of this same repo (re-installs, not needed for a first-time setup):
-#   .\install.ps1 -FromOldRoot D:\Docker\YT-Studio-old
-#   .\install.ps1 -FromOldRoot D:\Docker\YT-Studio-old -SkipBuild   # prepare only, no docker build/up
+#   .\install.ps1 -FromOldRoot <path-to-old-root>
+#   .\install.ps1 -FromOldRoot <path-to-old-root> -SkipBuild   # prepare only, no docker build/up
 #
 # Config is a SINGLE root .env (users edit only this one file).
 # All large data/models live in visible host folders (no named Docker volumes).
