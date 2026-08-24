@@ -2421,7 +2421,12 @@
                   <div x-show="!qaFiltered.length" class="empty" style="padding:24px">該当するコマはありません</div>
 
                   <div style="font-size:11px;color:#64748b;margin-top:12px;line-height:1.8;border-top:1px solid #2d3748;padding-top:10px">
-                    直したら再検査（ホスト側で実行 → 上の「🔄 再読込」）。<b>全部緑になったら完了</b>です。
+                    <b style="color:#94a3b8">直す作業に入るなら、ホスト側でこれを出しっぱなしにする</b>
+                    ── Photoshop で保存するたびに、その1枚だけ自動で検査し直します（Photoshop は占有しません）。
+                    あとはここで「🔄 再読込」を押すだけ。<b>全部緑になったら完了</b>です。
+                    <div style="margin-top:4px;padding:8px 10px;background:#0f172a;border-radius:6px;font-family:monospace;color:#a5b4fc;user-select:all;overflow-x:auto"
+                         x-text="qaWatchCommand"></div>
+                    <div style="margin-top:6px">全部まとめて検査し直す場合:</div>
                     <div style="margin-top:4px;padding:8px 10px;background:#0f172a;border-radius:6px;font-family:monospace;color:#cbd5e1;user-select:all;overflow-x:auto"
                          x-text="qaCheckCommand"></div>
                     <div style="margin-top:6px">納品用の 1920×1080 PNG（Photoshop でベクター再描画）:</div>
@@ -2429,6 +2434,7 @@
                          x-text="qaExportCommand"></div>
                     <div style="margin-top:6px;color:#4b5563">
                       ⚠️ 書き出しは Photoshop を占有します（作業中は流さないこと）。マスターPSDは1376×768のまま保たれます。
+                      直したのに書き出し直していない行は<b>「書き出しが古い」</b>として助言に出ます。
                     </div>
                   </div>
                 </div>
@@ -7170,10 +7176,14 @@ function app() {
         || `<エピソードのフォルダ>\\episodes\\ep${String(this.activeEpisodeNumber).padStart(2, '0')}`;
     },
     get qaCheckCommand() {
-      return `python scripts/qa_check.py --episode "${this.qaEpisodeDir}"`;
+      return `python psassist/scripts/qa_check.py --episode "${this.qaEpisodeDir}"`;
+    },
+    get qaWatchCommand() {
+      // 直す作業中はこれを出しっぱなしにする＝保存するたびに1枚だけ検査し直される
+      return `python psassist/scripts/qa_check.py --episode "${this.qaEpisodeDir}" --watch`;
     },
     get qaExportCommand() {
-      return `python host-bridge/export_png.py --episode "${this.qaEpisodeDir}" --all --resume`;
+      return `python psassist/host-bridge/export_png.py --episode "${this.qaEpisodeDir}" --all --resume`;
     },
     get qaFiltered() {
       const panels = this.qa?.panels || [];
@@ -7214,6 +7224,7 @@ function app() {
         MISSING_CHARACTER: 'キャラ欠落', MISSING_BUBBLE: '吹き出し欠落',
         MISSING_TEXT: '文字欠落', NO_VISIBLE_BACKGROUND: '背景なし',
         EXPORT_MISSING: '書き出し未', EXPORT_SIZE: '書き出し寸法',
+        EXPORT_STALE: '書き出しが古い',
         EXPORT_UNREADABLE: '書き出し不良', PSD_UNREADABLE: 'PSD不良',
       }[code] || code;
     },
