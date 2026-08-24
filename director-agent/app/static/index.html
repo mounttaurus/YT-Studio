@@ -2317,10 +2317,10 @@
               <div x-show="arollExportResult" style="font-size:11px;color:#94a3b8;margin-top:8px;line-height:1.7">
                 <span x-text="`✔ ${arollExportResult?.exported_count ?? 0}枚を書き出しました → ${arollExportResult?.export_dir ?? ''}`"></span>
                 <span x-show="arollExportResult?.missing?.length" style="color:#fbbf24">
-                  （欠番: <span x-text="(arollExportResult.missing || []).map(m => m.order).join(', ')"></span>）
+                  （欠番: <span x-text="(arollExportResult?.missing || []).map(m => m.order).join(', ')"></span>）
                 </span>
                 <span x-show="arollExportResult?.stale?.length" style="color:#fbbf24">
-                  （絵が古く未書き出し: <span x-text="(arollExportResult.stale || []).map(m => m.order).join(', ')"></span>）
+                  （絵が古く未書き出し: <span x-text="(arollExportResult?.stale || []).map(m => m.order).join(', ')"></span>）
                 </span>
               </div>
             </div>
@@ -2338,6 +2338,101 @@
               <button class="btn btn-primary" :disabled="arollBgAssignBusy" @click="arollAutoAssignBackgrounds()">
                 <span x-text="arollBgAssignBusy ? '割当中...' : '🏞️ 未割当の行に自動割当'"></span>
               </button>
+            </div>
+
+            <!-- ⑤ 合成チェック（PS-Assist の qa_report.json を読む） -->
+            <div class="card" x-show="arollManifest"
+                 :style="qaCounts.blocking ? 'border-color:#7f1d1d' : ''">
+              <h2>🔍 合成チェック
+                <span style="font-weight:400;text-transform:none;color:#4b5563;font-size:11px"
+                      x-text="qa ? `PS-Assist が組んだPSD ${qaCounts.total}枚 — 1枚ずつ開かずに問題のあるコマだけ見つける` : 'PS-Assist（別リポ）で検査すると、ここに結果が出ます'"></span>
+              </h2>
+
+              <!-- 未検査 -->
+              <template x-if="!qa">
+                <div style="font-size:11px;color:#94a3b8;margin-top:8px;line-height:1.8">
+                  合成結果の検査レポートがまだありません。ホスト側（Docker外）で次を実行してください。
+                  <div style="margin-top:6px;padding:8px 10px;background:#0f172a;border-radius:6px;font-family:monospace;font-size:11px;color:#cbd5e1;user-select:all;overflow-x:auto"
+                       x-text="qaCheckCommand"></div>
+                  <div style="margin-top:6px;color:#64748b">
+                    Photoshop は不要です（PSD が持つ合成プレビューをそのまま読みます）。196枚で約1分。
+                  </div>
+                </div>
+              </template>
+
+              <template x-if="qa">
+                <div>
+                  <!-- 集計バー -->
+                  <div style="display:flex;gap:16px;align-items:center;flex-wrap:wrap;margin-top:10px">
+                    <span style="font-size:12px;color:#fecaca"
+                          x-text="`● 要対応 ${qaCounts.blocking}`"></span>
+                    <span style="font-size:12px;color:#fde68a"
+                          x-text="`● 助言 ${qaCounts.advisory}`"></span>
+                    <span style="font-size:12px;color:#86efac"
+                          x-text="`○ 問題なし ${qaCounts.clean}`"></span>
+                    <span style="font-size:11px;color:#4b5563;margin-left:auto"
+                          x-text="`最終検査 ${qaCheckedAt}　/　検査元 ${qa.source}`"></span>
+                    <button class="btn btn-sm" @click="loadPsassistQa()" :disabled="qaBusy">🔄 再読込</button>
+                  </div>
+
+                  <!-- 絞り込みチップ -->
+                  <div style="display:flex;gap:6px;flex-wrap:wrap;margin-top:10px">
+                    <button class="btn btn-sm" :style="qaFilter === 'all' ? 'background:#4c1d95;color:#ede9fe' : ''"
+                            @click="qaFilter = 'all'" x-text="`すべて ${qaCounts.total}`"></button>
+                    <button class="btn btn-sm" x-show="qaCounts.blocking"
+                            :style="qaFilter === 'blocking' ? 'background:#7f1d1d;color:#fecaca' : ''"
+                            @click="qaFilter = 'blocking'" x-text="`要対応のみ ${qaCounts.blocking}`"></button>
+                    <button class="btn btn-sm" x-show="qaCounts.advisory"
+                            :style="qaFilter === 'advisory' ? 'background:#78350f;color:#fde68a' : ''"
+                            @click="qaFilter = 'advisory'" x-text="`助言のみ ${qaCounts.advisory}`"></button>
+                    <template x-for="[code, n] in Object.entries(qa.summary?.by_code || {})" :key="code">
+                      <button class="btn btn-sm" :style="qaFilter === 'code:' + code ? 'background:#1e3a8a;color:#bfdbfe' : ''"
+                              @click="qaFilter = 'code:' + code"
+                              x-text="`${qaCodeLabel(code)} ${n}`"></button>
+                    </template>
+                  </div>
+                  <div style="font-size:11px;color:#64748b;margin-top:8px;line-height:1.7">
+                    既定は<b>全コマ表示</b>です。光源の違和感や手のアーティファクトのように
+                    <b>機械では判定できない問題は目視でしか見つからない</b>ため、指摘の一覧ではなく
+                    「全コマ一覧＋指摘の色付け」として使ってください。クリックで拡大＋指摘箇所の赤枠。
+                  </div>
+
+                  <!-- サムネイル一覧 -->
+                  <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(148px,1fr));gap:8px;margin-top:12px">
+                    <template x-for="p in qaFiltered" :key="p.line_id">
+                      <div :style="`cursor:zoom-in;border-radius:6px;overflow:hidden;background:#0f172a;border:2px solid ${qaSevColor(p.severity)}`"
+                           @click="qaOpen(p)">
+                        <template x-if="p.thumb">
+                          <img :src="qaFileUrl(p.thumb)" loading="lazy"
+                               style="width:100%;display:block;aspect-ratio:16/9;object-fit:cover">
+                        </template>
+                        <template x-if="!p.thumb">
+                          <div style="width:100%;aspect-ratio:16/9;display:flex;align-items:center;justify-content:center;color:#4b5563;font-size:10px">画像なし</div>
+                        </template>
+                        <div style="padding:4px 6px;display:flex;align-items:center;gap:5px">
+                          <span style="font-size:10px;color:#64748b" x-text="p.order ?? '—'"></span>
+                          <span style="font-size:11px" x-text="qaSevMark(p.severity)"></span>
+                          <span style="font-size:9px;color:#94a3b8;overflow:hidden;text-overflow:ellipsis;white-space:nowrap"
+                                x-text="qaMainIssue(p)"></span>
+                        </div>
+                      </div>
+                    </template>
+                  </div>
+                  <div x-show="!qaFiltered.length" class="empty" style="padding:24px">該当するコマはありません</div>
+
+                  <div style="font-size:11px;color:#64748b;margin-top:12px;line-height:1.8;border-top:1px solid #2d3748;padding-top:10px">
+                    直したら再検査（ホスト側で実行 → 上の「🔄 再読込」）。<b>全部緑になったら完了</b>です。
+                    <div style="margin-top:4px;padding:8px 10px;background:#0f172a;border-radius:6px;font-family:monospace;color:#cbd5e1;user-select:all;overflow-x:auto"
+                         x-text="qaCheckCommand"></div>
+                    <div style="margin-top:6px">納品用の 1920×1080 PNG（Photoshop でベクター再描画）:</div>
+                    <div style="margin-top:4px;padding:8px 10px;background:#0f172a;border-radius:6px;font-family:monospace;color:#cbd5e1;user-select:all;overflow-x:auto"
+                         x-text="qaExportCommand"></div>
+                    <div style="margin-top:6px;color:#4b5563">
+                      ⚠️ 書き出しは Photoshop を占有します（作業中は流さないこと）。マスターPSDは1376×768のまま保たれます。
+                    </div>
+                  </div>
+                </div>
+              </template>
             </div>
 
             <!-- パネル一覧 -->
@@ -3806,6 +3901,87 @@
   </div>
 </div>
 
+<!-- 🔍 合成チェック 詳細ビュー（指摘箇所を赤枠で重ねる） -->
+<div class="modal-overlay" x-show="qaDetail" x-cloak
+     @keydown.escape.window="qaDetail = null"
+     @keydown.arrow-left.window="qaStep(-1)"
+     @keydown.arrow-right.window="qaStep(1)"
+     @click.self="qaDetail = null">
+  <template x-if="qaDetail">
+    <div style="background:#1a1d2e;border:1px solid #4c1d95;border-radius:10px;padding:16px;
+                width:1180px;max-width:96vw;max-height:92vh;overflow-y:auto;
+                display:flex;gap:16px;flex-wrap:wrap">
+      <!-- 左: 大きいプレビュー＋指摘箇所の赤枠 -->
+      <div style="flex:1 1 620px;min-width:320px">
+        <div style="position:relative;line-height:0">
+          <img :src="qaFileUrl(qaDetail.view || qaDetail.thumb)"
+               style="width:100%;border-radius:6px;display:block">
+          <template x-for="(it, i) in (qaDetail.issues || []).filter(x => x.region)" :key="i">
+            <div :style="qaRegionStyle(qaDetail, it)"></div>
+          </template>
+        </div>
+        <div style="display:flex;gap:8px;align-items:center;margin-top:10px;flex-wrap:wrap">
+          <button class="btn btn-sm" @click="qaStep(-1)">← 前</button>
+          <span style="font-size:11px;color:#64748b" x-text="qaPositionLabel"></span>
+          <button class="btn btn-sm" @click="qaStep(1)">次 →</button>
+          <span style="font-size:10px;color:#4b5563">（← → キーでも移動）</span>
+          <a x-show="qaDetail.export" :href="qaFileUrl(qaDetail.export)" target="_blank"
+             class="btn btn-sm" style="text-decoration:none">🖼 納品PNG（1920×1080）</a>
+        </div>
+      </div>
+
+      <!-- 右: 指摘とセリフ -->
+      <div style="flex:0 1 300px;min-width:260px;display:flex;flex-direction:column;gap:12px">
+        <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">
+          <span style="font-size:15px;font-weight:700;color:#c4b5fd" x-text="qaDetail.line_id"></span>
+          <span style="font-size:11px;color:#64748b" x-text="'#' + (qaDetail.order ?? '—')"></span>
+          <span class="status-badge" :style="`background:${qaSevBg(qaDetail.severity)};color:#fff`"
+                x-text="qaSevLabel(qaDetail.severity)"></span>
+          <button class="btn btn-sm" style="margin-left:auto" @click="qaDetail = null">✕</button>
+        </div>
+        <div style="font-size:11px;color:#94a3b8">
+          <span x-text="qaDetail.speaker || ''"></span>
+          <span x-show="qaDetail.measured?.shot" x-text="' / ' + (qaDetail.measured?.shot || '')"></span>
+          <span x-show="qaDetail.measured?.background" style="color:#4b5563"
+                x-text="' / ' + (qaDetail.measured?.background || '')"></span>
+        </div>
+
+        <div style="display:flex;flex-direction:column;gap:6px">
+          <template x-for="(it, i) in (qaDetail.issues || [])" :key="i">
+            <div :style="`padding:7px 9px;background:#0f172a;border-radius:6px;border-left:3px solid ${qaSevColor(it.severity)}`">
+              <div style="font-size:11px;color:#e2e8f0;line-height:1.6">
+                <span x-text="it.severity === 'blocking' ? '🔴' : '🟡'"></span>
+                <span x-text="it.label"></span>
+              </div>
+              <div style="font-size:9px;color:#4b5563;margin-top:2px" x-text="it.code"></div>
+            </div>
+          </template>
+          <div x-show="!(qaDetail.issues || []).length"
+               style="padding:8px;background:#0d2014;border-radius:6px;font-size:11px;color:#86efac">
+            ✔ 機械検査では問題なし（光源の違和感・手の乱れなどは目視で確認してください）
+          </div>
+        </div>
+
+        <div x-show="qaDetail.text">
+          <div style="font-size:10px;color:#64748b;text-transform:uppercase;letter-spacing:0.06em">セリフ</div>
+          <div style="font-size:12px;color:#cbd5e1;line-height:1.7;margin-top:4px" x-text="qaDetail.text"></div>
+        </div>
+
+        <div style="font-size:10px;color:#4b5563;line-height:1.8;border-top:1px solid #2d3748;padding-top:8px">
+          <div>実測値</div>
+          <template x-for="[k, v] in qaMeasuredRows(qaDetail)" :key="k">
+            <div><span style="color:#64748b" x-text="k"></span>: <span x-text="v"></span></div>
+          </template>
+          <div style="margin-top:6px;color:#64748b">Photoshop で直す:</div>
+          <div style="padding:6px 8px;background:#0f172a;border-radius:4px;font-family:monospace;
+                      color:#94a3b8;user-select:all;word-break:break-all"
+               x-text="qaDetail.psd"></div>
+        </div>
+      </div>
+    </div>
+  </template>
+</div>
+
 <!-- 新規キャラ作成モーダル -->
 <div class="modal-overlay" x-show="showNewCharaModal" x-cloak @keydown.escape.window="showNewCharaModal=false; clearNewCharaFiles()">
   <div class="modal-box">
@@ -4419,6 +4595,13 @@ function app() {
     arollSyncBusy: false,
     arollExportBusy: false,
     arollExportResult: null,      // 直近の /aroll/export レスポンス
+
+    // 🔍 合成チェック（PS-Assist が書いた qa_report.json を読むだけ）
+    qa: null,                     // psassist/qa_report.json
+    qaBusy: false,
+    qaFilter: 'all',              // all | blocking | advisory | code:<CODE>
+    qaDetail: null,               // 詳細ビューで開いているパネル
+    qaVersion: 0,                 // 画像のキャッシュバスター
 
     // 🎞️ 編集情報タブ
     editOk: false,
@@ -6958,6 +7141,133 @@ function app() {
       ]);
     },
 
+    // ─── 🔍 合成チェック（PS-Assist 連携・読むだけ） ──────────────────
+    //
+    // PS-Assist とは **HTTPで繋がない**（ps-assist-net と youtube-auto-net を
+    // 跨がせない）。PS-Assist が共有フォルダへ書いた qa_report.json と表示用画像を
+    // director が既存の /shared マウント越しに読む。検査・書き出しの実行は
+    // ホスト側のコマンド（カードに表示）で行う。
+    get qaBase() {
+      return `/projects/${this.currentProject?.id}/episodes/${this.activeEpisodeNumber}/psassist`;
+    },
+    get qaCounts() {
+      const s = this.qa?.summary || {};
+      return {
+        total: s.total || 0, blocking: s.blocking || 0,
+        advisory: s.advisory || 0, clean: s.clean || 0,
+      };
+    },
+    get qaCheckedAt() {
+      if (!this.qa?.checked_at) return '—';
+      const d = new Date(this.qa.checked_at);
+      return isNaN(d) ? this.qa.checked_at
+        : `${d.getMonth() + 1}/${d.getDate()} ${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`;
+    },
+    get qaEpisodeDir() {
+      // ホストの実パスは director（コンテナ）からは分からない。検査を書いた側が
+      // qa_report.json に記録しているので、あればそれを使う。
+      return this.qa?.episode_dir
+        || `<エピソードのフォルダ>\\episodes\\ep${String(this.activeEpisodeNumber).padStart(2, '0')}`;
+    },
+    get qaCheckCommand() {
+      return `python scripts/qa_check.py --episode "${this.qaEpisodeDir}"`;
+    },
+    get qaExportCommand() {
+      return `python host-bridge/export_png.py --episode "${this.qaEpisodeDir}" --all --resume`;
+    },
+    get qaFiltered() {
+      const panels = this.qa?.panels || [];
+      const f = this.qaFilter;
+      if (f === 'all') return panels;
+      if (f.startsWith('code:')) {
+        const code = f.slice(5);
+        return panels.filter(p => (p.issues || []).some(i => i.code === code));
+      }
+      return panels.filter(p => p.severity === f);
+    },
+    get qaPositionLabel() {
+      const list = this.qaFiltered;
+      const i = list.findIndex(p => p.line_id === this.qaDetail?.line_id);
+      return i < 0 ? '' : `${i + 1} / ${list.length}`;
+    },
+    qaFileUrl(rel) {
+      return `${this.qaBase}/file/${rel}?v=${this.qaVersion}`;
+    },
+    qaSevColor(sev) {
+      return { blocking: '#ef4444', advisory: '#f59e0b', clean: '#334155' }[sev] || '#334155';
+    },
+    qaSevBg(sev) {
+      return { blocking: '#7f1d1d', advisory: '#78350f', clean: '#14532d' }[sev] || '#1e293b';
+    },
+    qaSevMark(sev) {
+      return { blocking: '🔴', advisory: '🟡', clean: '✓' }[sev] || '';
+    },
+    qaSevLabel(sev) {
+      return { blocking: '要対応', advisory: '助言', clean: '問題なし' }[sev] || sev;
+    },
+    qaCodeLabel(code) {
+      return {
+        BUBBLE_OVERLAP: '吹き出し重なり', TEXT_OVERFLOW: '文字はみ出し',
+        TEXT_OFF_CANVAS: '文字が画面外', BUBBLE_ON_FACE: '顔に被る',
+        FRAMING_MISMATCH: '画角不一致', LIGHT_CONFLICT: '光源が逆',
+        EMPTY_LAYER: '空レイヤー', NO_ADJUSTMENT: '色調整なし',
+        MISSING_CHARACTER: 'キャラ欠落', MISSING_BUBBLE: '吹き出し欠落',
+        MISSING_TEXT: '文字欠落', NO_VISIBLE_BACKGROUND: '背景なし',
+        EXPORT_MISSING: '書き出し未', EXPORT_SIZE: '書き出し寸法',
+        EXPORT_UNREADABLE: '書き出し不良', PSD_UNREADABLE: 'PSD不良',
+      }[code] || code;
+    },
+    qaMainIssue(p) {
+      // タイルには主要因を1つだけ出す（詳細はクリック）。要対応を優先する。
+      const list = p.issues || [];
+      const it = list.find(i => i.severity === 'blocking') || list[0];
+      return it ? this.qaCodeLabel(it.code) : '';
+    },
+    qaRegionStyle(p, it) {
+      // region は PSD 座標（1376×768）。表示サイズが違うので % に直して重ねる。
+      const [cw, ch] = p.measured?.canvas || [1376, 768];
+      const [x0, y0, x1, y1] = it.region;
+      const c = this.qaSevColor(it.severity);
+      // ⚠️ Alpine の :style は**文字列を渡すと static な style 属性を丸ごと置き換える**。
+      //    position:absolute を静的側に書くと消える（赤枠が画像の下に流れる）ので、
+      //    重ねるのに必要な指定はすべてここに含める。
+      return `position:absolute;pointer-events:none;border-radius:2px;`
+           + `left:${(x0 / cw) * 100}%;top:${(y0 / ch) * 100}%;`
+           + `width:${((x1 - x0) / cw) * 100}%;height:${((y1 - y0) / ch) * 100}%;`
+           + `border:2px solid ${c};box-shadow:0 0 0 1px rgba(0,0,0,0.6)`;
+    },
+    qaMeasuredRows(p) {
+      const m = p.measured || {};
+      const rows = [];
+      if (m.overlap !== undefined) rows.push(['吹き出し重なり', `${(m.overlap * 100).toFixed(1)}%`]);
+      if (m.text_outside !== undefined) rows.push(['文字はみ出し', `${(m.text_outside * 100).toFixed(1)}%`]);
+      if (m.face_overlap !== undefined) rows.push(['顔に被る', `${(m.face_overlap * 100).toFixed(1)}%`]);
+      if (m.heads !== undefined) rows.push(['頭身', m.heads]);
+      if (m.light_dx !== undefined && m.light_dx !== null) {
+        rows.push(['光の向き', `キャラ ${m.light_dx > 0 ? '+' : ''}${m.light_dx}`
+          + (m.bg_light_dx !== undefined ? ` / 背景 ${m.bg_light_dx > 0 ? '+' : ''}${m.bg_light_dx}` : '')]);
+      }
+      if (m.export_size) rows.push(['納品PNG', m.export_size.join('×')]);
+      return rows;
+    },
+    qaOpen(p) { this.qaDetail = p; },
+    qaStep(d) {
+      const list = this.qaFiltered;
+      if (!list.length || !this.qaDetail) return;
+      let i = list.findIndex(p => p.line_id === this.qaDetail.line_id);
+      if (i < 0) i = 0;
+      this.qaDetail = list[(i + d + list.length) % list.length];
+    },
+    async loadPsassistQa() {
+      if (!this.currentProject || !this.activeEpisodeNumber) { this.qa = null; return; }
+      this.qaBusy = true;
+      try {
+        const r = await fetch(`${this.qaBase}/qa`);
+        this.qa = r.ok ? await r.json() : null;
+      } catch { this.qa = null; }
+      finally { this.qaBusy = false; this.qaVersion++; }
+    },
+
     // ─── 🖼️ Aロールタブ（マンガ形式パネル） ────────────────────────
     get arollApiBase() {
       return `${FAPI}/projects/${this.currentProject?.id}/episodes/${this.activeEpisodeNumber}/aroll`;
@@ -7022,6 +7332,7 @@ function app() {
       await this.loadArollManifest();
       await this.loadArollSync();
       await this.pollArollStatus();
+      await this.loadPsassistQa();
     },
     async loadArollSync() {
       if (!this.currentProject || !this.activeEpisodeNumber) { this.arollSync = null; return; }

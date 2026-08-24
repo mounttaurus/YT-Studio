@@ -128,3 +128,44 @@ def get_episode_script(project_id: str, episode_number: int) -> dict | None:
             data["_source"] = name
             return data
     return None
+
+
+# ─── PS-Assist（合成結果QA）─────────────────────────────────────────────
+#
+# PS-Assist は別リポ・別ネットワーク（ps-assist-net）で、director とは
+# **HTTPで繋がない**。PS-Assist が episode 配下の psassist/ に qa_report.json と
+# 表示用画像を書き、director は既存の /shared マウントをそのまま読むだけにする。
+
+def episode_dir(project_id: str, episode_number: int) -> Path | None:
+    matches = list(PROJECTS_DIR.glob(f"{project_id}*"))
+    if not matches:
+        return None
+    d = matches[0] / "episodes" / f"ep{episode_number:02d}"
+    return d if d.is_dir() else None
+
+
+def get_psassist_qa(project_id: str, episode_number: int) -> dict | None:
+    """PS-Assist が書いた qa_report.json を返す。未検査ならNone。"""
+    ep = episode_dir(project_id, episode_number)
+    if ep is None:
+        return None
+    f = ep / "psassist" / "qa_report.json"
+    if not f.exists():
+        return None
+    return _read_json(f)
+
+
+def psassist_file(project_id: str, episode_number: int, rel: str) -> Path | None:
+    """psassist/ 配下のファイルの実パスを返す（パストラバーサル防止）。"""
+    ep = episode_dir(project_id, episode_number)
+    if ep is None:
+        return None
+    base = (ep / "psassist").resolve()
+    # レポートは "psassist/qa/thumb/line_001.jpg" の形で持っているので前置を許す
+    rel = rel.lstrip("/")
+    if rel.startswith("psassist/"):
+        rel = rel[len("psassist/") :]
+    f = (base / rel).resolve()
+    if not f.is_relative_to(base) or not f.is_file():
+        return None
+    return f

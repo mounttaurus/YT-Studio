@@ -3,7 +3,7 @@ import re
 
 import httpx
 from fastapi import APIRouter, HTTPException, Request, Response
-from fastapi.responses import JSONResponse
+from fastapi.responses import FileResponse, JSONResponse
 
 from app.core import project_manager
 
@@ -16,6 +16,10 @@ SCRAPPING_AGENT_URL = os.getenv("SCRAPPING_AGENT_URL", "http://scrapping-agent:8
 EDITING_AGENT_URL = os.getenv("EDITING_AGENT_URL", "http://editing-agent:8006")
 
 PROJECT_PATH_RE = re.compile(r"^projects/([^/]+)")
+
+_PSASSIST_MEDIA_TYPES = {".jpg": "image/jpeg", ".jpeg": "image/jpeg",
+                         ".png": "image/png", ".webp": "image/webp",
+                         ".json": "application/json"}
 
 
 @router.get("/health")
@@ -51,6 +55,31 @@ async def get_episode_tts(project_id: str, episode_number: int, lang: str | None
     if data is None:
         raise HTTPException(status_code=404, detail="tts.json not found")
     return data
+
+
+# ─── PS-Assist（合成結果QA）連携 ────────────────────────────────────────
+#
+# PS-Assist（別リポ・別ネットワーク）とは **HTTPで繋がない**。PS-Assist が
+# episode 配下の psassist/ に qa_report.json と表示用画像を書き、director は
+# 既存の /shared マウントを読むだけにする（ps-assist-net を跨がせない）。
+
+@router.get("/projects/{project_id}/episodes/{episode_number}/psassist/qa")
+async def get_psassist_qa(project_id: str, episode_number: int):
+    """合成結果の検査レポート（PS-Assist の scripts/qa_check.py が書く）。"""
+    data = project_manager.get_psassist_qa(project_id, episode_number)
+    if data is None:
+        raise HTTPException(status_code=404, detail="qa_report.json not found")
+    return data
+
+
+@router.get("/projects/{project_id}/episodes/{episode_number}/psassist/file/{rel:path}")
+async def get_psassist_file(project_id: str, episode_number: int, rel: str):
+    """psassist/ 配下の表示用画像を配信する（サムネ・詳細ビュー・納品PNG）。"""
+    f = project_manager.psassist_file(project_id, episode_number, rel)
+    if f is None:
+        raise HTTPException(status_code=404, detail=f"file not found: {rel}")
+    return FileResponse(f, media_type=_PSASSIST_MEDIA_TYPES.get(f.suffix.lower(),
+                                                               "application/octet-stream"))
 
 
 # ─── TTS連携 ──────────────────────────────────────────────────────────
