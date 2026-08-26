@@ -516,6 +516,7 @@
       <button class="tab-btn" :class="{ active: tab === 'studio' }" @click="setTab('studio')">🎬 紙芝居</button>
       <button class="tab-btn" :class="{ active: tab === 'bg' }" @click="setTab('bg')">🏞️ 背景</button>
       <button class="tab-btn" :class="{ active: tab === 'panelLib' }" @click="setTab('panelLib')">📚 キャラ画像</button>
+      <button class="tab-btn" :class="{ active: tab === 'cutout' }" @click="setTab('cutout')">✂️ 切り抜き</button>
       <button class="tab-btn" :class="{ active: tab === 'free' }" @click="setTab('free')">🎨 自由生成</button>
       <button class="tab-btn" :class="{ active: tab === 'editing' }" @click="setTab('editing')">🎞️ 編集情報</button>
     </div>
@@ -2518,6 +2519,11 @@
                              @click="window.open(arollImageUrl(p), '_blank')">
                       </template>
                       <span x-show="p.image_source === 'library'" style="font-size:9px;color:#7dd3fc" x-text="'📚 ' + (p.library_slot_id || '')"></span>
+                      <span x-show="p.cutout_slot_id" style="font-size:9px;color:#a5f3fc;display:flex;align-items:center;gap:4px">
+                        <span x-text="'✂️ ' + (p.cutout_slot_id || '')" style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:120px"></span>
+                        <button class="btn btn-ghost btn-sm" style="font-size:9px;padding:0 4px"
+                                @click="arollClearCutout(p)" title="割り当てを外す">×</button>
+                      </span>
                       <div x-show="arollLineBusy === p.line_id" class="progress-indeterminate" style="width:160px"></div>
                       <button class="btn btn-sm" style="width:160px"
                               @click="arollGenerateLine(p)"
@@ -2526,8 +2532,8 @@
                       </button>
                       <div style="display:flex;gap:4px;width:160px">
                         <button class="btn btn-ghost btn-sm" style="flex:1;font-size:10px;padding:3px"
-                                @click="arollTogglePicker(p)" :disabled="arollRunning || arollLineBusy || !p.slot_key"
-                                title="ライブラリの承認済みバリアントから選び直す（無料）">🔀 差替</button>
+                                @click="arollTogglePicker(p)" :disabled="arollRunning || arollLineBusy || (p.characters||[]).length !== 1"
+                                title="切り抜き在庫から選ぶ（無料）。直近の行から遠い順に並びます">🔀 在庫</button>
                         <button class="btn btn-ghost btn-sm" style="flex:1;font-size:10px;padding:3px"
                                 @click="arollGenerateLineFresh(p)" :disabled="arollRunning || arollLineBusy || !p.prompt"
                                 title="ライブラリを使わず必ず新規課金生成する">🎲 新規</button>
@@ -2535,18 +2541,26 @@
                       <!-- キャラ画像ピッカー -->
                       <div x-show="arollPickerFor === p.line_id"
                            style="position:absolute;top:0;right:172px;z-index:20;background:#0f172a;border:1px solid #374151;border-radius:8px;padding:8px;width:280px;max-height:320px;overflow-y:auto">
-                        <div style="font-size:10px;color:#94a3b8;margin-bottom:6px">承認済みバリアントから選ぶ（クリックで即差替・無料）</div>
+                        <div style="font-size:10px;color:#94a3b8;margin-bottom:6px">切り抜き在庫から選ぶ（クリックで即割当・無料）— <b>直近の行から遠い順</b></div>
                         <div x-show="arollPickerBusy" style="font-size:11px;color:#64748b">読み込み中…</div>
-                        <div x-show="!arollPickerBusy && !arollPickerItems.length" style="font-size:11px;color:#64748b">このスロットに承認済みバリアントがありません</div>
+                        <div x-show="!arollPickerBusy && arollPickerNote" style="font-size:11px;color:#fbbf24;line-height:1.6" x-text="arollPickerNote"></div>
                         <div style="display:grid;grid-template-columns:repeat(2,1fr);gap:6px">
                           <template x-for="item in arollPickerItems" :key="item.slot_id">
-                            <div style="cursor:pointer" @click="arollPickLibraryImage(p, item)">
+                            <div style="cursor:pointer" @click="arollPickLibraryImage(p, item)"
+                                 :style="item.too_close ? 'opacity:0.45' : ''"
+                                 :title="item.too_close ? '直近の行と近すぎます（使い回しに見える恐れ）' : ''">
                               <img :src="arollPickerImageUrl((p.characters||[])[0], item)"
-                                   style="width:100%;aspect-ratio:16/9;object-fit:cover;border-radius:4px"
-                                   :style="item.slot_id === p.library_slot_id ? 'outline:2px solid #7c3aed' : ''">
-                              <div style="font-size:9px;color:#64748b;text-align:center" x-text="'使用' + (item.times_used||0) + '回'"></div>
+                                   style="width:100%;aspect-ratio:16/9;object-fit:contain;border-radius:4px;background:#334155"
+                                   :style="item.slot_id === p.cutout_slot_id ? 'outline:2px solid #7c3aed' : ''">
+                              <div style="font-size:9px;text-align:center"
+                                   :style="item.too_close ? 'color:#f87171' : 'color:#64748b'"
+                                   x-text="`距離${item.distance} / 使用${item.times_used||0}回`"></div>
                             </div>
                           </template>
+                        </div>
+                        <div x-show="arollPickerItems.length" style="font-size:9px;color:#4b5563;margin-top:6px;line-height:1.6">
+                          距離が <span x-text="arollPickerThreshold"></span> 未満は赤字＝使い回しに見える恐れ。
+                          全部赤いなら在庫が尽きているので新規生成が要ります。
                         </div>
                       </div>
                       <!-- 背景 -->
@@ -3422,6 +3436,94 @@
       </div>
     </template>
 
+    <!-- ════════ ✂️ 切り抜きタブ（合成素材の在庫。UIは🔍合成チェックと同じ作り） ════════ -->
+    <template x-if="tab === 'cutout'">
+      <div>
+        <div class="card">
+          <h2>✂️ 切り抜き
+            <span style="font-weight:400;text-transform:none;color:#4b5563;font-size:11px">
+              背景を抜いたキャラ素材の在庫 — 台本行に割り当てて背景・吹き出しと合成します
+            </span>
+          </h2>
+
+          <!-- キャラ選択（プルダウンでなくボタン。一覧性を優先） -->
+          <div style="display:flex;gap:6px;flex-wrap:wrap;margin-top:10px;align-items:center">
+            <template x-for="c in charas" :key="c.char_id">
+              <button class="btn btn-sm"
+                      :style="cutoutLib.charId === c.char_id ? 'background:#4c1d95;color:#ede9fe' : ''"
+                      @click="cutoutLib.charId = c.char_id; loadCutoutLib()"
+                      x-text="c.name || c.char_id"></button>
+            </template>
+            <button class="btn btn-sm" style="margin-left:auto" @click="loadCutoutLib()"
+                    :disabled="cutoutLib.busy || !cutoutLib.charId">🔄 再読込</button>
+          </div>
+
+          <template x-if="!cutoutLib.charId">
+            <div class="empty" style="padding:24px">キャラクターを選んでください</div>
+          </template>
+
+          <template x-if="cutoutLib.charId">
+            <div>
+              <!-- 集計バー -->
+              <div style="display:flex;gap:16px;align-items:center;flex-wrap:wrap;margin-top:12px">
+                <span style="font-size:12px;color:#86efac" x-text="`● 承認済み ${cutoutCounts.approved}`"></span>
+                <span style="font-size:12px;color:#fde68a" x-text="`● 未承認 ${cutoutCounts.pending}`"></span>
+                <span style="font-size:12px;color:#fecaca" x-show="cutoutCounts.stale"
+                      x-text="`● 世代違い ${cutoutCounts.stale}`"></span>
+                <span style="font-size:11px;color:#4b5563;margin-left:auto"
+                      x-text="`生涯上限 ${cutoutThresholds.max_uses ?? 3}回 / 使い回し判定 距離 ${cutoutThresholds.repetitive_below ?? 0.073} 未満`"></span>
+                <button class="btn btn-primary btn-sm" x-show="cutoutCounts.pending"
+                        :disabled="cutoutLib.busy" @click="approveAllCutouts()"
+                        x-text="`✔ 未承認 ${cutoutCounts.pending} 件をまとめて承認`"></button>
+              </div>
+
+              <!-- 絞り込みチップ（プルダウンでなくボタン） -->
+              <div style="display:flex;gap:6px;flex-wrap:wrap;margin-top:10px">
+                <button class="btn btn-sm" :style="cutoutLib.filter === 'all' ? 'background:#4c1d95;color:#ede9fe' : ''"
+                        @click="cutoutLib.filter = 'all'" x-text="`すべて ${cutoutCounts.total}`"></button>
+                <button class="btn btn-sm" x-show="cutoutCounts.pending"
+                        :style="cutoutLib.filter === 'pending' ? 'background:#78350f;color:#fde68a' : ''"
+                        @click="cutoutLib.filter = 'pending'" x-text="`未承認 ${cutoutCounts.pending}`"></button>
+                <button class="btn btn-sm" x-show="cutoutCounts.unused"
+                        :style="cutoutLib.filter === 'unused' ? 'background:#164e63;color:#a5f3fc' : ''"
+                        @click="cutoutLib.filter = 'unused'" x-text="`未使用 ${cutoutCounts.unused}`"></button>
+                <button class="btn btn-sm" x-show="cutoutCounts.exhausted"
+                        :style="cutoutLib.filter === 'exhausted' ? 'background:#7f1d1d;color:#fecaca' : ''"
+                        @click="cutoutLib.filter = 'exhausted'" x-text="`上限到達 ${cutoutCounts.exhausted}`"></button>
+                <template x-for="[emo, n] in cutoutByEmotion" :key="emo">
+                  <button class="btn btn-sm" :style="cutoutLib.filter === 'emo:' + emo ? 'background:#1e3a8a;color:#bfdbfe' : ''"
+                          @click="cutoutLib.filter = 'emo:' + emo" x-text="`${emo} ${n}`"></button>
+                </template>
+              </div>
+              <div style="font-size:11px;color:#64748b;margin-top:8px;line-height:1.7">
+                <b>未承認のものは台本行に割り当てられません</b>（安全弁）。要らないものだけ消して、
+                残りをまとめて承認する運用です。クリックで詳細（実測値・由来・使用回数）。
+              </div>
+
+              <!-- サムネイル一覧 -->
+              <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(148px,1fr));gap:8px;margin-top:12px">
+                <template x-for="e in cutoutFiltered" :key="e.slot_id">
+                  <div :style="`cursor:zoom-in;border-radius:6px;overflow:hidden;background:#0f172a;border:2px solid ${cutoutBorder(e)}`"
+                       @click="cutoutLib.detail = e">
+                    <img :src="cutoutUrl(e)" loading="lazy"
+                         style="width:100%;display:block;aspect-ratio:16/9;object-fit:contain;background:#334155">
+                    <div style="padding:4px 6px;display:flex;align-items:center;gap:5px">
+                      <span style="font-size:11px" x-text="e.review_status === 'pending' ? '⏳' : '✔'"></span>
+                      <span style="font-size:9px;color:#94a3b8;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;flex:1"
+                            x-text="e.emotion || '感情なし'"></span>
+                      <span style="font-size:9px;color:#64748b" x-text="`${e.times_used || 0}/${cutoutThresholds.max_uses ?? 3}`"></span>
+                    </div>
+                  </div>
+                </template>
+              </div>
+              <div x-show="!cutoutFiltered.length" class="empty" style="padding:24px">該当する切り抜きはありません</div>
+            </div>
+          </template>
+          <div x-show="cutoutLib.msg" style="font-size:11px;color:#a5b4fc;margin-top:8px" x-text="cutoutLib.msg"></div>
+        </div>
+      </div>
+    </template>
+
     <template x-if="tab === 'free'">
       <div>
         <div class="card">
@@ -3905,6 +4007,75 @@
     </template>
 
   </div>
+</div>
+
+<!-- ✂️ 切り抜き 詳細ビュー（実測値と由来。合成チェックの詳細と同じ作り） -->
+<div class="modal-overlay" x-show="cutoutLib.detail" x-cloak
+     @keydown.escape.window="cutoutLib.detail = null"
+     @click.self="cutoutLib.detail = null">
+  <template x-if="cutoutLib.detail">
+    <div style="background:#1a1d2e;border:1px solid #4c1d95;border-radius:10px;padding:16px;
+                width:1100px;max-width:96vw;max-height:92vh;overflow-y:auto;
+                display:flex;gap:16px;flex-wrap:wrap">
+      <!-- 左: 大きいプレビュー（透過が分かるよう市松の代わりに中間グレー） -->
+      <div style="flex:1 1 560px;min-width:320px">
+        <img :src="cutoutUrl(cutoutLib.detail)"
+             style="width:100%;border-radius:6px;display:block;background:#808080">
+        <div style="font-size:10px;color:#4b5563;margin-top:6px">
+          背景の灰色は表示用です（実体は透過PNG）
+        </div>
+      </div>
+
+      <!-- 右: メタ情報と操作 -->
+      <div style="flex:1 1 340px;min-width:280px;display:flex;flex-direction:column;gap:10px">
+        <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">
+          <span style="font-size:14px;font-weight:700;color:#c4b5fd" x-text="cutoutLib.detail.slot_id"></span>
+          <span class="status-badge"
+                :style="cutoutLib.detail.review_status === 'pending' ? 'background:#78350f;color:#fde68a' : 'background:#166534;color:#bbf7d0'"
+                x-text="cutoutLib.detail.review_status === 'pending' ? '未承認' : '承認済み'"></span>
+          <span class="status-badge" x-show="cutoutLib.detail.is_stale"
+                style="background:#7f1d1d;color:#fecaca">世代違い</span>
+        </div>
+
+        <div style="font-size:11px;color:#94a3b8;line-height:1.9">
+          <div><span style="color:#64748b">使用回数</span>:
+            <span x-text="`${cutoutLib.detail.times_used || 0} / ${cutoutThresholds.max_uses ?? 3}（生涯）`"></span></div>
+          <div><span style="color:#64748b">感情（LLM判定）</span>:
+            <span x-text="cutoutLib.detail.emotion || '—'"></span></div>
+          <div><span style="color:#64748b">ショット</span>:
+            <span x-text="`${cutoutLib.detail.shot || '—'}（ラベル） / ${cutoutLib.detail.measured?.shot || '—'}（実測 ${cutoutLib.detail.measured?.heads ?? '—'}頭身）`"></span></div>
+          <div><span style="color:#64748b">アングル</span>:
+            <span x-text="cutoutLib.detail.angle || '—'"></span></div>
+        </div>
+
+        <div style="font-size:10px;color:#4b5563;line-height:1.8;border-top:1px solid #2d3748;padding-top:8px">
+          <div style="color:#64748b;margin-bottom:2px">実測値</div>
+          <div>画面占有: <span x-text="cutoutLib.detail.measured?.coverage ?? '—'"></span></div>
+          <div>光源（左右差）: <span x-text="cutoutLib.detail.measured?.light_dx ?? '—'"></span></div>
+          <div>接している辺: <span x-text="cutoutEdges(cutoutLib.detail)"></span>
+            <span style="color:#64748b">（接する辺は生成時に切れている＝縮小すると断面が出る）</span></div>
+        </div>
+
+        <div style="font-size:10px;color:#4b5563;line-height:1.8;border-top:1px solid #2d3748;padding-top:8px">
+          <div style="color:#64748b;margin-bottom:2px">由来</div>
+          <div x-text="`${cutoutLib.detail.source?.project_id || '—'} / ep${cutoutLib.detail.source?.episode ?? '—'} / ${cutoutLib.detail.source?.line_id || '—'}`"></div>
+          <div>生成: <span x-text="`${cutoutLib.detail.provider || '—'}${cutoutLib.detail.model ? ' / ' + cutoutLib.detail.model : '（モデル未記録）'}`"></span></div>
+          <div>指紋: <span x-text="cutoutLib.detail.fingerprint?.version || '—'"></span></div>
+        </div>
+
+        <div style="display:flex;gap:6px;margin-top:auto;padding-top:10px;border-top:1px solid #2d3748">
+          <button class="btn btn-primary btn-sm" style="flex:1"
+                  x-show="cutoutLib.detail.review_status === 'pending'"
+                  :disabled="cutoutLib.busy" @click="approveCutout(cutoutLib.detail)">✔ 承認する</button>
+          <button class="btn btn-danger btn-sm" style="flex:1"
+                  :disabled="cutoutLib.busy" @click="deleteCutout(cutoutLib.detail)">🗑 削除</button>
+        </div>
+        <div style="font-size:10px;color:#4b5563">
+          削除は実体ファイルごと消します（元の話数の切り抜きは残ります）。
+        </div>
+      </div>
+    </div>
+  </template>
 </div>
 
 <!-- 🔍 合成チェック 詳細ビュー（指摘箇所を赤枠で重ねる） -->
@@ -4438,6 +4609,11 @@ function app() {
       gen: { emotion: '', shot: '', angle: '', pose: '', model: 'gemini-3.1-flash-lite-image' },
       variantGen: { emotion: '', shot: '', angle: '', poses: [], model: 'gemini-3.1-flash-lite-image' },
     },
+    cutoutLib: {
+      charId: '', items: [], busy: false, msg: '', filter: 'all', detail: null,
+    },
+    // 選択の閾値（正本は shared/characters/character_overrides.json。APIから読む）
+    cutoutThresholds: { repetitive_below: 0.073, max_uses: 3, recent_window: 5 },
     freeStyles: ['realistic'],
     freeStyleLabels: {
       realistic: 'realistic photo-style', anime: 'anime-style',
@@ -4581,6 +4757,8 @@ function app() {
     arollLineBusy: null,          // 行単位生成中の line_id
     arollPickerFor: null,          // キャラ画像ピッカーを開いている line_id
     arollPickerItems: [],
+    arollPickerNote: '',
+    arollPickerThreshold: 0.073,
     arollPickerBusy: false,
     arollBgPickerFor: null,        // 背景ピッカーを開いている line_id
     arollBgPickerItems: [],
@@ -5932,6 +6110,11 @@ function app() {
       if (t === 'chara') await this.refreshCharaTab();
       if (t === 'studio') await this.refreshStudioTab();
       if (t === 'bg') { await this.loadBgPresets(); await this.searchBg(); }
+      if (t === 'cutout') {
+        if (!this.charas.length) await this.refreshCharaTab();
+        if (!this.cutoutLib.charId && this.charas.length) this.cutoutLib.charId = this.charas[0].char_id;
+        await this.loadCutoutLib();
+      }
       if (t === 'panelLib') {
         await this.loadStudioPresets();
         if (!this.charas.length) await this.loadCharas();
@@ -7261,6 +7444,111 @@ function app() {
       if (m.export_size) rows.push(['納品PNG', m.export_size.join('×')]);
       return rows;
     },
+    // ─── ✂️ 切り抜きタブ（合成素材の在庫） ────────────────────────
+    // 選択のロジックは持たない。指紋での選び方は scrapping-agent の cutout_selector が本籍で、
+    // ここは在庫を見て承認/削除するだけ（1事実1ホーム）。
+    get cutoutCounts() {
+      const it = this.cutoutLib.items || [];
+      const cap = this.cutoutThresholds.max_uses ?? 3;
+      return {
+        total: it.length,
+        approved: it.filter(e => e.review_status !== 'pending').length,
+        pending: it.filter(e => e.review_status === 'pending').length,
+        stale: it.filter(e => e.is_stale).length,
+        unused: it.filter(e => !(e.times_used || 0)).length,
+        exhausted: it.filter(e => (e.times_used || 0) >= cap).length,
+      };
+    },
+    get cutoutByEmotion() {
+      const m = {};
+      for (const e of this.cutoutLib.items || []) {
+        const k = e.emotion || '感情なし';
+        m[k] = (m[k] || 0) + 1;
+      }
+      return Object.entries(m).sort((a, b) => b[1] - a[1]);
+    },
+    get cutoutFiltered() {
+      const f = this.cutoutLib.filter;
+      const cap = this.cutoutThresholds.max_uses ?? 3;
+      const it = this.cutoutLib.items || [];
+      if (f === 'pending') return it.filter(e => e.review_status === 'pending');
+      if (f === 'unused') return it.filter(e => !(e.times_used || 0));
+      if (f === 'exhausted') return it.filter(e => (e.times_used || 0) >= cap);
+      if (f.startsWith('emo:')) {
+        const k = f.slice(4);
+        return it.filter(e => (e.emotion || '感情なし') === k);
+      }
+      return it;
+    },
+    cutoutUrl(e) {
+      const filename = (e.cutout || '').split('/').pop();
+      return `${FAPI}/characters/${this.cutoutLib.charId}/panel_library/cutout/${filename}`;
+    },
+    cutoutBorder(e) {
+      if (e.is_stale) return '#7f1d1d';
+      if (e.review_status === 'pending') return '#78350f';
+      if ((e.times_used || 0) >= (this.cutoutThresholds.max_uses ?? 3)) return '#334155';
+      return '#166534';
+    },
+    cutoutEdges(e) {
+      const ed = e.measured?.edges || {};
+      const on = Object.entries(ed).filter(([, v]) => v).map(([k]) => k);
+      return on.length ? on.join(' / ') : 'なし（四辺とも余白あり）';
+    },
+    async loadCutoutLib() {
+      if (!this.cutoutLib.charId) return;
+      this.cutoutLib.busy = true;
+      this.cutoutLib.msg = '';
+      try {
+        const [d, th] = await Promise.all([
+          (await fetch(`${FAPI}/characters/${this.cutoutLib.charId}/panel_library?kind=cutout`)).json(),
+          (await fetch(`${FAPI}/cutout/thresholds`)).json(),
+        ]);
+        this.cutoutThresholds = th || this.cutoutThresholds;
+        this.cutoutLib.items = d.entries || [];
+      } catch (e) {
+        this.cutoutLib.msg = '読み込みに失敗しました: ' + e;
+      } finally {
+        this.cutoutLib.busy = false;
+      }
+    },
+    async approveAllCutouts() {
+      // 194件を1枚ずつ承認するのは現実的でないので、まとめて入れて要らないものを消す運用
+      this.cutoutLib.busy = true;
+      try {
+        const r = await (await fetch(
+          `${FAPI}/characters/${this.cutoutLib.charId}/panel_library/approve-all?kind=cutout`,
+          { method: 'POST' })).json();
+        this.cutoutLib.msg = `${r.approved} 件を承認しました`;
+        await this.loadCutoutLib();
+      } finally {
+        this.cutoutLib.busy = false;
+      }
+    },
+    async approveCutout(e) {
+      this.cutoutLib.busy = true;
+      try {
+        await fetch(`${FAPI}/characters/${this.cutoutLib.charId}/panel_library/${e.slot_id}/approve`,
+                    { method: 'POST' });
+        this.cutoutLib.detail = null;
+        await this.loadCutoutLib();
+      } finally {
+        this.cutoutLib.busy = false;
+      }
+    },
+    async deleteCutout(e) {
+      if (!confirm(`${e.slot_id} を削除します（実体ファイルも消えます）。よろしいですか？`)) return;
+      this.cutoutLib.busy = true;
+      try {
+        await fetch(`${FAPI}/characters/${this.cutoutLib.charId}/panel_library/${e.slot_id}`,
+                    { method: 'DELETE' });
+        this.cutoutLib.detail = null;
+        await this.loadCutoutLib();
+      } finally {
+        this.cutoutLib.busy = false;
+      }
+    },
+
     qaOpen(p) { this.qaDetail = p; },
     qaStep(d) {
       const list = this.qaFiltered;
@@ -7510,35 +7798,65 @@ function app() {
       } catch { /* noop */ }
       finally { this.arollLineBusy = null; }
     },
+    // 切り抜き在庫からの選択。**slot一致では並べない**（スロット軸は使い回し感を説明しない）。
+    // 直近の行から遠い順に並び、閾値未満は too_close として出す（隠さない ──
+    // 全部近ければ「生成すべき」と一目で分かる方がよい）。本籍は
+    // psassist/Docs/CHARACTER_CUTOUT_PLAN.md §10、選び方は scrapping-agent の cutout_selector。
     async arollTogglePicker(p) {
       if (this.arollPickerFor === p.line_id) { this.arollPickerFor = null; return; }
       this.arollPickerFor = p.line_id;
       this.arollPickerItems = [];
-      const charId = (p.characters || [])[0];
-      if (!charId || !p.slot?.emotion || !p.slot?.shot || !p.slot?.angle) return;
+      this.arollPickerNote = '';
+      if (!((p.characters || []).length === 1)) {
+        this.arollPickerNote = 'キャラが1人に確定していない行には割り当てられません';
+        return;
+      }
       this.arollPickerBusy = true;
       try {
-        const params = new URLSearchParams({ emotion: p.slot.emotion, shot: p.slot.shot, angle: p.slot.angle });
-        const d = await (await fetch(`${FAPI}/characters/${charId}/panel_library?${params}`)).json();
-        this.arollPickerItems = (d.entries || []).filter(e => (e.review_status || 'approved') === 'approved' && !e.is_stale);
-      } catch { this.arollPickerItems = []; }
+        const d = await (await fetch(
+          `${this.arollApiBase}/cutout-candidates?line_id=${encodeURIComponent(p.line_id)}&limit=24`)).json();
+        this.arollPickerItems = d.items || [];
+        this.arollPickerThreshold = d.threshold ?? 0.073;
+        if (!this.arollPickerItems.length) {
+          this.arollPickerNote = d.reason
+            || '適格な在庫がありません（未承認・世代違い・生涯上限・感情の不一致）。✂️切り抜きタブで承認してください';
+        }
+      } catch { this.arollPickerItems = []; this.arollPickerNote = '候補の取得に失敗しました'; }
       this.arollPickerBusy = false;
     },
     arollPickerImageUrl(charId, item) {
-      const filename = (item.image || '').split('/').pop();
-      return `${FAPI}/characters/${charId}/panel_library/file/${filename}`;
+      const filename = (item.cutout || '').split('/').pop();
+      return `${FAPI}/characters/${charId}/panel_library/cutout/${filename}`;
     },
     async arollPickLibraryImage(p, item) {
-      const charId = (p.characters || [])[0];
+      // ⚠️ パネル画像の差し替えではない。psassist の合成プランに渡す素材を決めるだけ。
       this.arollLineBusy = p.line_id;
       try {
-        const r = await fetch(`${this.arollApiBase}/lines/${p.line_id}/set_library_image`, {
+        const r = await fetch(`${this.arollApiBase}/lines/${p.line_id}/cutout`, {
           method: 'POST', headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ char_id: charId, slot_id: item.slot_id }),
+          body: JSON.stringify({ slot_id: item.slot_id }),
         });
-        if (r.ok) { Object.assign(p, await r.json()); this.arollImgVersion++; }
+        if (r.ok) {
+          const d = await r.json();
+          p.cutout_slot_id = d.cutout_slot_id;
+          p.cutout_char_id = (p.characters || [])[0];
+          this.arollImgVersion++;
+        } else {
+          this.arollMsg = (await r.json()).detail || '割り当てに失敗しました';
+        }
       } catch { /* noop */ }
       finally { this.arollLineBusy = null; this.arollPickerFor = null; }
+    },
+    async arollClearCutout(p) {
+      this.arollLineBusy = p.line_id;
+      try {
+        const r = await fetch(`${this.arollApiBase}/lines/${p.line_id}/cutout`, {
+          method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ slot_id: null }),
+        });
+        if (r.ok) { p.cutout_slot_id = null; p.cutout_char_id = null; }
+      } catch { /* noop */ }
+      finally { this.arollLineBusy = null; }
     },
     async arollAutoAssignBackgrounds() {
       if (!confirm('全行の背景を自動割当します（無料・画像生成なし）。手動で選んだ行は変更しません。よろしいですか？')) return;

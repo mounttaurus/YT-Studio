@@ -29,7 +29,7 @@ from pathlib import Path
 
 from app.core import character_manager, nanobanana_client, panel_presets, style_manager
 
-SCHEMA_VERSION = "1.0.0"
+SCHEMA_VERSION = "1.1.0"  # 1.1.0: kind="cutout" / cutout / measured / fingerprint を追加（追加のみ・後方互換）
 
 BACKGROUND_FRAGMENT = "plain solid pastel background, flat single color, no scenery"
 PROMPT_SUFFIX = "No text, no letters, no speech bubbles, no watermark in the image."
@@ -87,11 +87,19 @@ def save_index(char_id: str, data: dict) -> None:
     index_file(char_id).write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
 
 
-def list_entries(char_id: str, *, emotion: str = "", shot: str = "", angle: str = "") -> list[dict]:
-    """索引一覧を返す。各entryに is_stale（世代違いか）と review_status（欠落は"approved"扱い）を正規化して付与する。"""
+def list_entries(char_id: str, *, emotion: str = "", shot: str = "", angle: str = "",
+                 kind: str = "panel") -> list[dict]:
+    """索引一覧を返す。各entryに is_stale（世代違いか）と review_status（欠落は"approved"扱い）を正規化して付与する。
+
+    kind: 既定は "panel"＝そのまま1コマになる画像だけ。"cutout"（背景を抜いた合成素材・
+    2026-08-25に196枚を取り込み）は `image` を持たないため、既定の一覧に混ぜると
+    UIのサムネイルが全滅する。空文字を渡すと全種別を返す。
+    """
     current = appearance_version(char_id)
     out = []
     for e in load_index(char_id).get("entries", []):
+        if kind and e.get("kind", "panel") != kind:
+            continue
         if emotion and e.get("emotion") != emotion:
             continue
         if shot and e.get("shot") != shot:
@@ -125,7 +133,10 @@ def find_current(char_id: str, emotion: str, shot: str, angle: str) -> dict | No
     current = appearance_version(char_id)
     candidates = [
         e for e in load_index(char_id).get("entries", [])
-        if e.get("emotion") == emotion and e.get("shot") == shot and e.get("angle") == angle
+        # ⚠️ kind="cutout" は背景を抜いた合成素材。そのまま配ると背景の無いコマになる。
+        #    切り抜きの選択は指紋ベースの別系統で行う（CHARACTER_CUTOUT_PLAN.md §10）。
+        if e.get("kind", "panel") == "panel"
+        and e.get("emotion") == emotion and e.get("shot") == shot and e.get("angle") == angle
         and e.get("appearance_version") == current
         and e.get("review_status", "approved") == "approved"
     ]
@@ -146,6 +157,37 @@ def record_usage(char_id: str, slot_id: str) -> None:
             e["times_used"] = e.get("times_used", 0) + 1
             save_index(char_id, data)
             return
+
+
+def release_usage(char_id: str, slot_id: str) -> None:
+    """times_used を-1する（0未満にはしない）。選び直しで前の1枚を解放する時に使う。
+
+    record_usage と対で使わないと、ピッカーで選び直すたびに前の絵の使用回数が
+    増えっぱなしになり、生涯上限に嘘の消費で早く到達する。
+    """
+    data = load_index(char_id)
+    for e in data.get("entries", []):
+        if e.get("slot_id") == slot_id:
+            e["times_used"] = max(0, e.get("times_used", 0) - 1)
+            save_index(char_id, data)
+            return
+
+
+def approve_all(char_id: str, kind: str = "cutout") -> int:
+    """指定 kind の pending をまとめて承認し、件数を返す。
+
+    取り込み直後は全件 pending（安全弁）で、194件を1枚ずつ承認するのは現実的でない。
+    却下は既存の DELETE（1件ずつ）で行う＝**まとめて入れて、要らないものを落とす**運用。
+    """
+    data = load_index(char_id)
+    n = 0
+    for e in data.get("entries", []):
+        if e.get("kind", "panel") == kind and e.get("review_status") == "pending":
+            e["review_status"] = "approved"
+            n += 1
+    if n:
+        save_index(char_id, data)
+    return n
 
 
 def get_entry(char_id: str, slot_id: str) -> dict | None:
@@ -186,12 +228,17 @@ def delete_entry(char_id: str, slot_id: str) -> bool:
         return False
     data["entries"] = [e for e in entries if e.get("slot_id") != slot_id]
     save_index(char_id, data)
-    img = (library_dir(char_id) / target.get("image", "")).resolve()
-    if img.is_relative_to(images_dir(char_id).resolve()) and img.is_file():
-        try:
-            img.unlink()
-        except OSError:
-            pass
+    # kind="cutout" は image を持たず cutout だけを持つ。Noneをパス結合に渡すと落ちるので両方見る。
+    for key, root in (("image", images_dir(char_id)), ("cutout", library_dir(char_id) / "cutouts")):
+        rel = target.get(key)
+        if not rel:
+            continue
+        f = (library_dir(char_id) / rel).resolve()
+        if f.is_relative_to(root.resolve()) and f.is_file():
+            try:
+                f.unlink()
+            except OSError:
+                pass
     return True
 
 

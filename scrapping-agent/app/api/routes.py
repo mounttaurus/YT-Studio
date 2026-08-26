@@ -26,6 +26,7 @@ from app.core import (
     character_manager,
     cloudflare_client,
     comfy_client,
+    cutout_selector,
     grok_image_client,
     lyria_client,
     model_downloader,
@@ -284,12 +285,14 @@ async def get_background_file(filename: str):
 # 無料で引けるようにする。Docs/AROLL_ASSET_PLAN.md が設計の正本。
 
 @router.get("/characters/{char_id}/panel_library")
-async def list_panel_library(char_id: str, emotion: str = "", shot: str = "", angle: str = ""):
+async def list_panel_library(char_id: str, emotion: str = "", shot: str = "", angle: str = "",
+                             kind: str = "panel"):
     """ライブラリ索引の検索。各entryに現在のappearance_versionと比較した is_stale を付与する。"""
     if character_manager.read_character(char_id) is None:
         raise HTTPException(status_code=404, detail=f"character not found: {char_id}")
     return {
-        "entries": panel_library_manager.list_entries(char_id, emotion=emotion, shot=shot, angle=angle),
+        "entries": panel_library_manager.list_entries(char_id, emotion=emotion, shot=shot,
+                                                     angle=angle, kind=kind),
         "appearance_version": panel_library_manager.appearance_version(char_id),
     }
 
@@ -1997,3 +2000,80 @@ async def aroll_get_image(project_id: str, episode_number: int, filename: str):
     if not f.is_relative_to(base) or not f.is_file():
         raise HTTPException(status_code=404, detail=f"file not found: {filename}")
     return FileResponse(f, media_type=_IMAGE_MEDIA_TYPES.get(f.suffix.lower(), "image/png"))
+
+
+@router.get("/projects/{project_id}/episodes/{episode_number}/aroll/cutout-plan")
+async def aroll_cutout_plan(project_id: str, episode_number: int):
+    """切り抜き在庫で全行を賄えるかの試算（検査のみ・生成も保存もしない）。
+
+    「生成」と「選択」をユーザーから見て1つの操作にするための土台。どの行が在庫で足り、
+    どの行に新規生成が要るかを指紋距離で判定して返す。
+    """
+    try:
+        return aroll_manager.cutout_plan(project_id, episode_number)
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+
+
+@router.get("/projects/{project_id}/episodes/{episode_number}/aroll/cutout-candidates")
+async def aroll_cutout_candidates(project_id: str, episode_number: int, line_id: str, limit: int = 12):
+    """1行分の切り抜き候補を直近から遠い順に返す（検査のみ）。差替ピッカーの供給元。"""
+    try:
+        return aroll_manager.cutout_candidates(project_id, episode_number, line_id, limit)
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+
+
+class CutoutSelectRequest(BaseModel):
+    slot_id: Optional[str] = None   # None で選択解除
+
+
+@router.post("/projects/{project_id}/episodes/{episode_number}/aroll/lines/{line_id}/cutout")
+async def aroll_set_cutout(project_id: str, episode_number: int, line_id: str, req: CutoutSelectRequest):
+    """その行で使う切り抜きを決める（パネル画像の差し替えではなく合成素材の指定）。"""
+    try:
+        return aroll_manager.set_cutout_selection(project_id, episode_number, line_id, req.slot_id)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+class CutoutApplyRequest(BaseModel):
+    line_ids: Optional[list[str]] = None   # 省略時は在庫で賄える全行
+
+
+@router.post("/projects/{project_id}/episodes/{episode_number}/aroll/cutout-plan/apply")
+async def aroll_apply_cutout_plan(project_id: str, episode_number: int, req: CutoutApplyRequest):
+    """試算の結果を書き込む。在庫で賄えない行は触らない（そこは新規生成の担当）。"""
+    try:
+        return aroll_manager.apply_cutout_plan(project_id, episode_number, req.line_ids)
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+
+
+@router.post("/characters/{char_id}/panel_library/approve-all")
+async def approve_all_panel_library(char_id: str, kind: str = "cutout"):
+    """指定 kind の pending をまとめて承認する（取り込み直後の194件などを一括で通す）。"""
+    return {"char_id": char_id, "kind": kind, "approved": panel_library_manager.approve_all(char_id, kind)}
+
+
+@router.get("/characters/{char_id}/panel_library/cutout/{filename}")
+async def get_panel_library_cutout(char_id: str, filename: str):
+    """切り抜きの配信（shared/characters/{char_id}/panel_library/cutouts/配下限定）。
+
+    images/ とは別のディレクトリなので専用の窓口を持つ（既存の file/ は images/ 限定で、
+    そこを緩めると配信範囲が広がってしまう）。
+    """
+    cutouts_dir = panel_library_manager.library_dir(char_id) / "cutouts"
+    f = (cutouts_dir / filename).resolve()
+    if not f.is_relative_to(cutouts_dir.resolve()) or not f.is_file():
+        raise HTTPException(status_code=404, detail=f"file not found: {filename}")
+    return FileResponse(f, media_type="image/png")
+
+
+@router.get("/cutout/thresholds")
+async def get_cutout_thresholds():
+    """切り抜き選択の閾値（character_overrides.json の thresholds ＋ 既定値）。
+
+    プロジェクトに依らない設定なので、話数を選んでいなくても引ける窓口として分けている。
+    """
+    return cutout_selector.thresholds()

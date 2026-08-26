@@ -33,8 +33,8 @@ from pathlib import Path
 import httpx
 
 from app.core import (
-    aroll_prompt_generator, background_manager, character_manager, nanobanana_client,
-    panel_library_manager, project_manager, style_manager,
+    aroll_prompt_generator, background_manager, character_manager, cutout_selector,
+    nanobanana_client, panel_library_manager, project_manager, style_manager,
 )
 
 SCHEMA_VERSION = "1.2.0"  # 1.2.0: panels[].background_id を追加（行単位の背景自動割当・§19）
@@ -1290,3 +1290,166 @@ def status(project_id: str, episode: int) -> dict:
         "job": {k: v for k, v in job.items() if k != "cancel"},
         "running": bool(job.get("running")),
     }
+
+
+def cutout_plan(project_id: str, episode: int) -> dict:
+    """切り抜き在庫から全行を割り当ててみる（**検査のみ・何も変更しない**）。
+
+    「在庫で賄える行」と「新規生成が要る行」を分ける。UI の予算のつまみはこの結果を使う ──
+    モードを選ばせるのではなく、**新規生成が要ると出た行のうち何枚を実際に作るか**を
+    決めるのがユーザーの操作（Docs/../CHARACTER_CUTOUT_PLAN.md §7-4・§10-9）。
+
+    ⚠️ times_used は増やさない。実際に消費した時だけ record_usage を呼ぶこと
+       （find_current と同じ約束。ドライランで増やすとローテーションが狂う）。
+    """
+    manifest = load_manifest(project_id, episode)
+    if manifest is None:
+        raise ValueError("aroll.json not found")
+
+    panels = manifest.get("panels", [])
+    seq = []
+    for p in panels:
+        chars = p.get("characters") or []
+        seq.append((chars[0] if len(chars) == 1 else None, (p.get("slot") or {}).get("emotion")))
+
+    plan = cutout_selector.plan_episode(seq)
+    lines, from_stock = [], 0
+    for p, r in zip(panels, plan):
+        e = r.get("entry")
+        if e:
+            from_stock += 1
+        lines.append({
+            "line_id": p.get("line_id"),
+            "char_id": r.get("char_id"),
+            "emotion": r.get("emotion"),
+            "slot_id": e.get("slot_id") if e else None,
+            "cutout": e.get("cutout") if e else None,
+            "times_used": e.get("times_used", 0) if e else None,
+            "reason": r.get("reason"),
+        })
+    return {
+        "thresholds": cutout_selector.thresholds(),
+        "total": len(lines),
+        "from_stock": from_stock,
+        "need_generation": len(lines) - from_stock,
+        "lines": lines,
+    }
+
+
+def cutout_candidates(project_id: str, episode: int, line_id: str, limit: int = 12) -> dict:
+    """1行分の切り抜き候補を「直近から遠い順」に返す（検査のみ・何も変更しない）。
+
+    slot(emotion/shot/angle)一致では並べない ── 実測でスロット軸は使い回し感を
+    説明しなかった（CHARACTER_CUTOUT_PLAN.md §10-1）。`distance` は直近W行との最短距離で、
+    大きいほど「新鮮」。閾値未満のものは `too_close` を立てて返す（**隠さない**）:
+    ユーザーが承知で選ぶ場合があるし、「全部近い＝生成すべき」と一目で分かる方がよい。
+    """
+    manifest = load_manifest(project_id, episode)
+    if manifest is None:
+        raise ValueError("aroll.json not found")
+    panels = manifest.get("panels", [])
+    idx = next((i for i, p in enumerate(panels) if p.get("line_id") == line_id), None)
+    if idx is None:
+        raise ValueError(f"line not found: {line_id}")
+
+    p = panels[idx]
+    chars = p.get("characters") or []
+    char_id = chars[0] if len(chars) == 1 else None
+    emotion = (p.get("slot") or {}).get("emotion")
+    th = cutout_selector.thresholds()
+    if not char_id:
+        return {"line_id": line_id, "char_id": None, "emotion": emotion,
+                "threshold": th["repetitive_below"], "recent": [], "items": [],
+                "reason": "キャラが1人に確定していない行（2人写り等）"}
+
+    # 直近W行に実際に割り当たっている切り抜きを集める（無ければ空＝どれでも新鮮）
+    recent_ids, recent = [], []
+    for q in panels[max(0, idx - th["recent_window"]):idx]:
+        # ⚠️ 直近の行が使っている切り抜きは `cutout_slot_id`。`library_slot_id` は
+        #    パネル画像（背景込み）の方で、ここで見ると直近が常に空になり
+        #    「近すぎ」判定が一度も発火しない（実際にそのバグを出した）。
+        sid = q.get("cutout_slot_id")
+        if not sid or (q.get("cutout_char_id") or (q.get("characters") or [None])[0]) != char_id:
+            continue
+        e = panel_library_manager.get_entry(char_id, sid)
+        if e and e.get("kind") == "cutout":
+            recent_ids.append(q.get("line_id"))
+            recent.append(e)
+
+    items = []
+    # 手動ピッカーなので感情未指定でも全候補を出す（人が見て選ぶなら制約は要らない）
+    for e in cutout_selector.candidates(char_id, emotion, allow_unknown_emotion=True):
+        d = min((cutout_selector.distance(e.get("fingerprint"), r.get("fingerprint")) for r in recent),
+                default=1.0)
+        items.append({
+            "slot_id": e["slot_id"], "cutout": e.get("cutout"),
+            "times_used": e.get("times_used", 0), "distance": round(d, 3),
+            "too_close": d < th["repetitive_below"],
+            "current": e["slot_id"] == p.get("library_slot_id"),
+        })
+    items.sort(key=lambda x: (-x["distance"], x["times_used"], x["slot_id"]))
+    return {"line_id": line_id, "char_id": char_id, "emotion": emotion,
+            "threshold": th["repetitive_below"], "recent": recent_ids,
+            "items": items[:limit], "total_candidates": len(items)}
+
+
+def set_cutout_selection(project_id: str, episode: int, line_id: str, slot_id: str | None) -> dict:
+    """その行で使う切り抜きを決める（`panel["cutout_slot_id"]`）。
+
+    ⚠️ **パネル画像を差し替えるのではない。** 切り抜きは背景を持たないので、そのままでは
+    コマにならない。ここで決めるのは「psassist の合成プランにどの素材を渡すか」だけ。
+    背景は `background_id`、生成画像は `image` と、行ごとに3つが対になる。
+
+    slot_id=None で選択を解除する。前の選択があれば times_used を戻す
+    （戻さないと選び直すたびに嘘の消費が積もり、生涯上限へ早く到達する）。
+    """
+    manifest = load_manifest(project_id, episode)
+    if manifest is None:
+        raise ValueError("aroll.json not found")
+    panel = next((p for p in manifest.get("panels", []) if p.get("line_id") == line_id), None)
+    if panel is None:
+        raise ValueError(f"line not found: {line_id}")
+    chars = panel.get("characters") or []
+    if len(chars) != 1:
+        raise ValueError("キャラが1人に確定していない行には切り抜きを割り当てられません")
+    char_id = chars[0]
+
+    prev = panel.get("cutout_slot_id")
+    if prev == slot_id:
+        return {"line_id": line_id, "cutout_slot_id": slot_id, "changed": False}
+
+    if slot_id:
+        entry = panel_library_manager.get_entry(char_id, slot_id)
+        if not entry or entry.get("kind") != "cutout":
+            raise ValueError(f"cutout entry not found: {char_id}/{slot_id}")
+        if entry.get("review_status", "approved") != "approved":
+            raise ValueError(f"未承認の切り抜きは割り当てられません: {slot_id}")
+
+    if prev:
+        panel_library_manager.release_usage(char_id, prev)
+    if slot_id:
+        panel_library_manager.record_usage(char_id, slot_id)
+
+    panel["cutout_slot_id"] = slot_id
+    panel["cutout_char_id"] = char_id if slot_id else None
+    panel["cutout_source"] = "user" if slot_id else None
+    save_manifest(project_id, episode, manifest)
+    return {"line_id": line_id, "cutout_slot_id": slot_id, "previous": prev, "changed": True}
+
+
+def apply_cutout_plan(project_id: str, episode: int, line_ids: list[str] | None = None) -> dict:
+    """試算（cutout_plan）の結果を実際に書き込む。**在庫で賄える行だけ**。
+
+    賄えない行は触らない ── そこは新規生成の担当で、無理に在庫から埋めると
+    ワンパターンの発生源になる（在庫から選ばないこと自体が設計）。
+    """
+    plan = cutout_plan(project_id, episode)
+    targets = set(line_ids) if line_ids else None
+    applied, skipped = [], 0
+    for line in plan["lines"]:
+        if not line["slot_id"] or (targets and line["line_id"] not in targets):
+            skipped += 1
+            continue
+        set_cutout_selection(project_id, episode, line["line_id"], line["slot_id"])
+        applied.append(line["line_id"])
+    return {"applied": len(applied), "skipped": skipped, "line_ids": applied}
