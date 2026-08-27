@@ -2374,12 +2374,12 @@
                  :style="qaCounts.blocking ? 'border-color:#7f1d1d' : ''">
               <h2>🔍 合成チェック
                 <span style="font-weight:400;text-transform:none;color:#4b5563;font-size:11px"
-                      x-text="qa ? `PS-Assist が組んだPSD ${qaCounts.total}枚 — 1枚ずつ開かずに問題のあるコマだけ見つける` : 'PS-Assist（別リポ）で検査すると、ここに結果が出ます'"></span>
+                      x-text="`台本 ${qaCounts.total} 行 — 未生成・未合成・検査結果を1つの一覧で追う`"></span>
               </h2>
 
-              <!-- 未検査 -->
-              <template x-if="!qa">
-                <div style="font-size:11px;color:#94a3b8;margin-top:8px;line-height:1.8">
+              <!-- 未検査（一覧は出したまま案内だけ添える。検査前でも進捗は見えるべき） -->
+              <div x-show="!qa" style="font-size:11px;color:#94a3b8;margin-top:8px;line-height:1.8">
+                <div>
                   合成結果の検査レポートがまだありません。ホスト側（Docker外）で次を実行してください。
                   <div style="margin-top:6px;padding:8px 10px;background:#0f172a;border-radius:6px;font-family:monospace;font-size:11px;color:#cbd5e1;user-select:all;overflow-x:auto"
                        x-text="qaCheckCommand"></div>
@@ -2387,9 +2387,9 @@
                     Photoshop は不要です（PSD が持つ合成プレビューをそのまま読みます）。196枚で約1分。
                   </div>
                 </div>
-              </template>
+              </div>
 
-              <template x-if="qa">
+              <template x-if="arollPanels.length">
                 <div>
                   <!-- 集計バー -->
                   <div style="display:flex;gap:16px;align-items:center;flex-wrap:wrap;margin-top:10px">
@@ -2403,8 +2403,8 @@
                           x-text="`🔧 未合成 ${qaCounts.unbuilt}`"></span>
                     <span style="font-size:12px;color:#a1a1aa" x-show="qaCounts.ungenerated"
                           x-text="`○ 未生成 ${qaCounts.ungenerated}`"></span>
-                    <span style="font-size:11px;color:#4b5563;margin-left:auto"
-                          x-text="`最終検査 ${qaCheckedAt}　/　検査元 ${qa.source}`"></span>
+                    <span style="font-size:11px;color:#4b5563;margin-left:auto" x-show="qa"
+                          x-text="`最終検査 ${qaCheckedAt}　/　検査元 ${qa?.source || '—'}`"></span>
                     <button class="btn btn-sm" @click="loadPsassistQa()" :disabled="qaBusy">🔄 再読込</button>
                   </div>
 
@@ -2424,7 +2424,7 @@
                     <button class="btn btn-sm" x-show="qaCounts.ungenerated"
                             :style="qaFilter === 'ungenerated' ? 'background:#3f3f46;color:#e4e4e7' : ''"
                             @click="qaFilter = 'ungenerated'" x-text="`未生成 ${qaCounts.ungenerated}`"></button>
-                    <template x-for="[code, n] in Object.entries(qa.summary?.by_code || {})" :key="code">
+                    <template x-for="[code, n] in Object.entries(qa?.summary?.by_code || {})" :key="code">
                       <button class="btn btn-sm" :style="qaFilter === 'code:' + code ? 'background:#1e3a8a;color:#bfdbfe' : ''"
                               @click="qaFilter = 'code:' + code"
                               x-text="`${qaCodeLabel(code)} ${n}`"></button>
