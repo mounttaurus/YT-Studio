@@ -2234,6 +2234,34 @@
                 </button>
                 <button class="btn btn-danger" @click="arollStop()" :disabled="!arollRunning">⏸ 中断</button>
               </div>
+
+              <!-- 在庫で賄える分の試算（生成の前に、無料で埋まる行を先に確定させる） -->
+              <div style="margin-top:12px;border-top:1px solid #2d3748;padding-top:10px">
+                <div style="display:flex;gap:12px;align-items:center;flex-wrap:wrap">
+                  <span style="font-size:12px;color:#a5f3fc">✂️ 切り抜き在庫からの割当</span>
+                  <button class="btn btn-sm" @click="loadCutoutPlan()" :disabled="cutoutPlanBusy">🔄 試算</button>
+                  <template x-if="cutoutPlan">
+                    <span style="font-size:12px;color:#94a3b8"
+                          x-text="`在庫で ${cutoutPlan.from_stock} 行（無料）／ 新規生成が要る ${cutoutPlan.need_generation} 行 ≈ $${(cutoutPlan.need_generation * 0.04).toFixed(2)}`"></span>
+                  </template>
+                  <template x-if="cutoutPlan && cutoutPlan.from_stock">
+                    <button class="btn btn-primary btn-sm" :disabled="cutoutPlanBusy || arollRunning"
+                            @click="applyCutoutPlan()"
+                            x-text="`✂️ 在庫 ${cutoutPlan.from_stock} 行を割り当てる（無料）`"></button>
+                  </template>
+                </div>
+                <div x-show="cutoutPlan" style="font-size:11px;color:#64748b;margin-top:6px;line-height:1.7">
+                  在庫は<b>直近の行と視覚的に離れているもの</b>から順に、使用回数の少ないものを選びます。
+                  賄えない行は<b>無理に在庫から埋めません</b>（ワンパターンの発生源になるため）。
+                  <span style="color:#4b5563">生成した絵はまだ背景付きなので、素材にするには切り抜き工程が要ります。</span>
+                </div>
+                <div x-show="cutoutPlanReasons.length" style="font-size:11px;color:#64748b;margin-top:6px">
+                  <template x-for="[why, n] in cutoutPlanReasons" :key="why">
+                    <div><span style="color:#fbbf24" x-text="n + '行'"></span> <span x-text="why"></span></div>
+                  </template>
+                </div>
+                <div x-show="cutoutPlanMsg" style="font-size:11px;color:#a5b4fc;margin-top:6px" x-text="cutoutPlanMsg"></div>
+              </div>
               <div class="progress-bar" x-show="arollRunning || (arollJob.total > 0)">
                 <div class="progress-fill" :style="`width:${arollJob.total ? Math.round(((arollJob.done + arollJob.failed) / arollJob.total) * 100) : 0}%`"></div>
               </div>
@@ -2371,6 +2399,10 @@
                           x-text="`● 助言 ${qaCounts.advisory}`"></span>
                     <span style="font-size:12px;color:#86efac"
                           x-text="`○ 問題なし ${qaCounts.clean}`"></span>
+                    <span style="font-size:12px;color:#93c5fd" x-show="qaCounts.unbuilt"
+                          x-text="`🔧 未合成 ${qaCounts.unbuilt}`"></span>
+                    <span style="font-size:12px;color:#a1a1aa" x-show="qaCounts.ungenerated"
+                          x-text="`○ 未生成 ${qaCounts.ungenerated}`"></span>
                     <span style="font-size:11px;color:#4b5563;margin-left:auto"
                           x-text="`最終検査 ${qaCheckedAt}　/　検査元 ${qa.source}`"></span>
                     <button class="btn btn-sm" @click="loadPsassistQa()" :disabled="qaBusy">🔄 再読込</button>
@@ -2386,6 +2418,12 @@
                     <button class="btn btn-sm" x-show="qaCounts.advisory"
                             :style="qaFilter === 'advisory' ? 'background:#78350f;color:#fde68a' : ''"
                             @click="qaFilter = 'advisory'" x-text="`助言のみ ${qaCounts.advisory}`"></button>
+                    <button class="btn btn-sm" x-show="qaCounts.unbuilt"
+                            :style="qaFilter === 'unbuilt' ? 'background:#1e3a8a;color:#bfdbfe' : ''"
+                            @click="qaFilter = 'unbuilt'" x-text="`未合成 ${qaCounts.unbuilt}`"></button>
+                    <button class="btn btn-sm" x-show="qaCounts.ungenerated"
+                            :style="qaFilter === 'ungenerated' ? 'background:#3f3f46;color:#e4e4e7' : ''"
+                            @click="qaFilter = 'ungenerated'" x-text="`未生成 ${qaCounts.ungenerated}`"></button>
                     <template x-for="[code, n] in Object.entries(qa.summary?.by_code || {})" :key="code">
                       <button class="btn btn-sm" :style="qaFilter === 'code:' + code ? 'background:#1e3a8a;color:#bfdbfe' : ''"
                               @click="qaFilter = 'code:' + code"
@@ -2393,9 +2431,12 @@
                     </template>
                   </div>
                   <div style="font-size:11px;color:#64748b;margin-top:8px;line-height:1.7">
-                    既定は<b>全コマ表示</b>です。光源の違和感や手のアーティファクトのように
+                    <b>台本の全行</b>を出します（🔧未合成＝絵はあるがPhotoshopで組んでいない、
+                    ○未生成＝絵がまだ無い）。光源の違和感や手のアーティファクトのように
                     <b>機械では判定できない問題は目視でしか見つからない</b>ため、指摘の一覧ではなく
-                    「全コマ一覧＋指摘の色付け」として使ってください。クリックで拡大＋指摘箇所の赤枠。
+                    「全コマ一覧＋指摘の色付け」として使ってください。
+                    <b>クリックすると拡大＋指摘の赤枠に加えて、その行の再生成・在庫からの選択・
+                    表情/ショット/アングル/ポーズ・プロンプト編集ができます。</b>
                   </div>
 
                   <!-- サムネイル一覧 -->
@@ -2407,7 +2448,11 @@
                           <img :src="qaFileUrl(p.thumb)" loading="lazy"
                                style="width:100%;display:block;aspect-ratio:16/9;object-fit:cover">
                         </template>
-                        <template x-if="!p.thumb">
+                        <template x-if="!p.thumb && qaFallbackThumb(p)">
+                          <img :src="qaFallbackThumb(p)" loading="lazy"
+                               style="width:100%;display:block;aspect-ratio:16/9;object-fit:contain;background:#334155">
+                        </template>
+                        <template x-if="!p.thumb && !qaFallbackThumb(p)">
                           <div style="width:100%;aspect-ratio:16/9;display:flex;align-items:center;justify-content:center;color:#4b5563;font-size:10px">画像なし</div>
                         </template>
                         <div style="padding:4px 6px;display:flex;align-items:center;gap:5px">
@@ -3448,6 +3493,9 @@
 
           <!-- キャラ選択（プルダウンでなくボタン。一覧性を優先） -->
           <div style="display:flex;gap:6px;flex-wrap:wrap;margin-top:10px;align-items:center">
+            <button class="btn btn-sm"
+                    :style="cutoutLib.charId === '*' ? 'background:#4c1d95;color:#ede9fe' : ''"
+                    @click="cutoutLib.charId = '*'; loadCutoutLib()">すべてのキャラ</button>
             <template x-for="c in charas" :key="c.char_id">
               <button class="btn btn-sm"
                       :style="cutoutLib.charId === c.char_id ? 'background:#4c1d95;color:#ede9fe' : ''"
@@ -3502,7 +3550,7 @@
 
               <!-- サムネイル一覧 -->
               <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(148px,1fr));gap:8px;margin-top:12px">
-                <template x-for="e in cutoutFiltered" :key="e.slot_id">
+                <template x-for="e in cutoutFiltered" :key="(e.char_id || '') + '/' + e.slot_id">
                   <div :style="`cursor:zoom-in;border-radius:6px;overflow:hidden;background:#0f172a;border:2px solid ${cutoutBorder(e)}`"
                        @click="cutoutLib.detail = e">
                     <img :src="cutoutUrl(e)" loading="lazy"
@@ -3510,7 +3558,7 @@
                     <div style="padding:4px 6px;display:flex;align-items:center;gap:5px">
                       <span style="font-size:11px" x-text="e.review_status === 'pending' ? '⏳' : '✔'"></span>
                       <span style="font-size:9px;color:#94a3b8;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;flex:1"
-                            x-text="e.emotion || '感情なし'"></span>
+                            x-text="(cutoutLib.charId === '*' ? (charaName(e.char_id) + ' / ') : '') + (e.emotion || '感情なし')"></span>
                       <span style="font-size:9px;color:#64748b" x-text="`${e.times_used || 0}/${cutoutThresholds.max_uses ?? 3}`"></span>
                     </div>
                   </div>
@@ -4012,6 +4060,8 @@
 <!-- ✂️ 切り抜き 詳細ビュー（実測値と由来。合成チェックの詳細と同じ作り） -->
 <div class="modal-overlay" x-show="cutoutLib.detail" x-cloak
      @keydown.escape.window="cutoutLib.detail = null"
+     @keydown.arrow-left.window="cutoutStep(-1)"
+     @keydown.arrow-right.window="cutoutStep(1)"
      @click.self="cutoutLib.detail = null">
   <template x-if="cutoutLib.detail">
     <div style="background:#1a1d2e;border:1px solid #4c1d95;border-radius:10px;padding:16px;
@@ -4021,6 +4071,12 @@
       <div style="flex:1 1 560px;min-width:320px">
         <img :src="cutoutUrl(cutoutLib.detail)"
              style="width:100%;border-radius:6px;display:block;background:#808080">
+        <div style="display:flex;gap:8px;align-items:center;margin-top:10px;flex-wrap:wrap">
+          <button class="btn btn-sm" @click="cutoutStep(-1)">← 前</button>
+          <span style="font-size:11px;color:#64748b" x-text="cutoutPositionLabel"></span>
+          <button class="btn btn-sm" @click="cutoutStep(1)">次 →</button>
+          <span style="font-size:10px;color:#4b5563">（← → キーでも移動）</span>
+        </div>
         <div style="font-size:10px;color:#4b5563;margin-top:6px">
           背景の灰色は表示用です（実体は透過PNG）
         </div>
@@ -4035,6 +4091,7 @@
                 x-text="cutoutLib.detail.review_status === 'pending' ? '未承認' : '承認済み'"></span>
           <span class="status-badge" x-show="cutoutLib.detail.is_stale"
                 style="background:#7f1d1d;color:#fecaca">世代違い</span>
+          <button class="btn btn-sm" style="margin-left:auto" @click="cutoutLib.detail = null">✕</button>
         </div>
 
         <div style="font-size:11px;color:#94a3b8;line-height:1.9">
@@ -4091,8 +4148,14 @@
       <!-- 左: 大きいプレビュー＋指摘箇所の赤枠 -->
       <div style="flex:1 1 620px;min-width:320px">
         <div style="position:relative;line-height:0">
-          <img :src="qaFileUrl(qaDetail.view || qaDetail.thumb)"
-               style="width:100%;border-radius:6px;display:block">
+          <img :src="qaDetail.view || qaDetail.thumb ? qaFileUrl(qaDetail.view || qaDetail.thumb) : qaFallbackThumb(qaDetail)"
+               x-show="qaDetail.view || qaDetail.thumb || qaFallbackThumb(qaDetail)"
+               style="width:100%;border-radius:6px;display:block;background:#334155">
+          <div x-show="!(qaDetail.view || qaDetail.thumb || qaFallbackThumb(qaDetail))"
+               style="aspect-ratio:16/9;display:flex;align-items:center;justify-content:center;
+                      background:#0f172a;border-radius:6px;color:#4b5563;font-size:12px">
+            まだ絵がありません（下で生成するか、在庫から選んでください）
+          </div>
           <template x-for="(it, i) in (qaDetail.issues || []).filter(x => x.region)" :key="i">
             <div :style="qaRegionStyle(qaDetail, it)"></div>
           </template>
@@ -4138,6 +4201,84 @@
             ✔ 機械検査では問題なし（光源の違和感・手の乱れなどは目視で確認してください）
           </div>
         </div>
+
+        <!-- ── その行を作り直す（コマ一覧と同じ操作をここに統合） ────────────── -->
+        <template x-if="arollPanelOf(qaDetail.line_id)">
+          <div style="border-top:1px solid #2d3748;padding-top:10px;display:flex;flex-direction:column;gap:6px">
+            <div style="font-size:10px;color:#64748b;text-transform:uppercase;letter-spacing:0.06em">この行を作り直す</div>
+
+            <!-- 表情 / ショット / アングル / ポーズ -->
+            <div style="display:flex;gap:4px;flex-wrap:wrap">
+              <template x-for="axis in [['emotion','表情'],['shot','ショット'],['angle','アングル'],['pose','ポーズ(任意)']]" :key="axis[0]">
+                <select style="font-size:10px;padding:2px"
+                        :value="arollPanelOf(qaDetail.line_id).slot?.[axis[0]] || ''"
+                        @change="arollSetSlot(arollPanelOf(qaDetail.line_id), axis[0], $event.target.value)">
+                  <option value="" x-text="axis[1]"></option>
+                  <template x-for="o in (studioPresets[axis[0]] || [])" :key="o.id">
+                    <option :value="o.id" x-text="o.label_ja"></option>
+                  </template>
+                </select>
+              </template>
+            </div>
+            <div style="font-size:9px;color:#4b5563">
+              語彙は固定です（自由入力にすると在庫の分類が崩れるため）。細かい指示は下のプロンプトへ。
+            </div>
+
+            <!-- プロンプト -->
+            <textarea rows="3" style="width:100%;font-size:10px;font-family:monospace"
+                      :value="arollPanelOf(qaDetail.line_id).prompt"
+                      placeholder="（プロンプト未生成 — ①を実行するか手入力）"
+                      @change="arollSavePrompt(arollPanelOf(qaDetail.line_id), $event.target.value)"></textarea>
+            <div style="font-size:9px;color:#4b5563">英語で書いてください（画像モデルに渡すため）。</div>
+
+            <!-- 割当中の切り抜き -->
+            <div x-show="arollPanelOf(qaDetail.line_id).cutout_slot_id"
+                 style="font-size:10px;color:#a5f3fc;display:flex;align-items:center;gap:6px">
+              <span x-text="'✂️ ' + (arollPanelOf(qaDetail.line_id).cutout_slot_id || '')"
+                    style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap"></span>
+              <button class="btn btn-ghost btn-sm" style="font-size:9px;padding:0 4px"
+                      @click="arollClearCutout(arollPanelOf(qaDetail.line_id))" title="割り当てを外す">×</button>
+            </div>
+
+            <!-- 生成と選択は同じ列に置く（ユーザーから見れば「この行の絵を決める」1つの操作） -->
+            <div style="display:flex;gap:6px;flex-wrap:wrap">
+              <button class="btn btn-sm" style="flex:1 1 120px"
+                      :disabled="arollRunning || arollLineBusy || !arollPanelOf(qaDetail.line_id).prompt"
+                      @click="arollGenerateLine(arollPanelOf(qaDetail.line_id))"
+                      x-text="arollLineBusy === qaDetail.line_id ? '生成中...' : '↻ 生成し直す'"></button>
+              <button class="btn btn-sm" style="flex:1 1 100px"
+                      :disabled="arollRunning || arollLineBusy || (arollPanelOf(qaDetail.line_id).characters||[]).length !== 1"
+                      @click="arollTogglePicker(arollPanelOf(qaDetail.line_id))"
+                      title="切り抜き在庫から選ぶ（無料）">🔀 在庫</button>
+            </div>
+
+            <!-- 在庫ピッカー（コマ一覧と同じ供給元・同じ並び） -->
+            <div x-show="arollPickerFor === qaDetail.line_id"
+                 style="background:#0f172a;border:1px solid #374151;border-radius:8px;padding:8px;max-height:260px;overflow-y:auto">
+              <div style="font-size:10px;color:#94a3b8;margin-bottom:6px">直近の行から遠い順（クリックで即割当・無料）</div>
+              <div x-show="arollPickerBusy" style="font-size:11px;color:#64748b">読み込み中…</div>
+              <div x-show="!arollPickerBusy && arollPickerNote"
+                   style="font-size:11px;color:#fbbf24;line-height:1.6" x-text="arollPickerNote"></div>
+              <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:6px">
+                <template x-for="item in arollPickerItems" :key="item.slot_id">
+                  <div style="cursor:pointer" :style="item.too_close ? 'opacity:0.45' : ''"
+                       @click="arollPickLibraryImage(arollPanelOf(qaDetail.line_id), item)">
+                    <img :src="arollPickerImageUrl((arollPanelOf(qaDetail.line_id).characters||[])[0], item)"
+                         style="width:100%;aspect-ratio:16/9;object-fit:contain;border-radius:4px;background:#334155">
+                    <div style="font-size:9px;text-align:center"
+                         :style="item.too_close ? 'color:#f87171' : 'color:#64748b'"
+                         x-text="`${item.distance} / ${item.times_used||0}回`"></div>
+                  </div>
+                </template>
+              </div>
+            </div>
+
+            <div style="font-size:9px;color:#4b5563;line-height:1.6">
+              生成し直した絵は<b>まだ背景付き</b>です。素材にするには切り抜き工程が要ります。
+              在庫から選んだ場合はそのまま合成に進めます。
+            </div>
+          </div>
+        </template>
 
         <div x-show="qaDetail.text">
           <div style="font-size:10px;color:#64748b;text-transform:uppercase;letter-spacing:0.06em">セリフ</div>
@@ -4759,6 +4900,9 @@ function app() {
     arollPickerItems: [],
     arollPickerNote: '',
     arollPickerThreshold: 0.073,
+    cutoutPlan: null,
+    cutoutPlanBusy: false,
+    cutoutPlanMsg: '',
     arollPickerBusy: false,
     arollBgPickerFor: null,        // 背景ピッカーを開いている line_id
     arollBgPickerItems: [],
@@ -6112,7 +6256,7 @@ function app() {
       if (t === 'bg') { await this.loadBgPresets(); await this.searchBg(); }
       if (t === 'cutout') {
         if (!this.charas.length) await this.refreshCharaTab();
-        if (!this.cutoutLib.charId && this.charas.length) this.cutoutLib.charId = this.charas[0].char_id;
+        if (!this.cutoutLib.charId && this.charas.length) this.cutoutLib.charId = '*';  // 既定は全キャラ
         await this.loadCutoutLib();
       }
       if (t === 'panelLib') {
@@ -7340,10 +7484,11 @@ function app() {
       return `/projects/${this.currentProject?.id}/episodes/${this.activeEpisodeNumber}/psassist`;
     },
     get qaCounts() {
-      const s = this.qa?.summary || {};
+      const m = this.qaMerged;
+      const by = sev => m.filter(p => p.severity === sev).length;
       return {
-        total: s.total || 0, blocking: s.blocking || 0,
-        advisory: s.advisory || 0, clean: s.clean || 0,
+        total: m.length, blocking: by('blocking'), advisory: by('advisory'),
+        clean: by('clean'), unbuilt: by('unbuilt'), ungenerated: by('ungenerated'),
       };
     },
     get qaCheckedAt() {
@@ -7368,8 +7513,19 @@ function app() {
     get qaExportCommand() {
       return `python psassist/host-bridge/export_png.py --episode "${this.qaEpisodeDir}" --all --resume`;
     },
+    // 合成チェックの一覧は**台本の全行**を持つ（3状態: 未生成 / 生成済み(未合成) / 合成済み）。
+    // qa_report.json は Photoshop で組んだ後にしか存在しないので、それだけを並べると
+    // 「まだ組んでいない行」が画面から消える＝進捗が分からない。
+    get qaMerged() {
+      const built = new Map((this.qa?.panels || []).map(p => [p.line_id, p]));
+      return this.arollPanels.map(a => built.get(a.line_id) || {
+        line_id: a.line_id, order: a.order, speaker: a.speaker_name, text: a.text,
+        severity: a.status === 'done' || a.cutout_slot_id ? 'unbuilt' : 'ungenerated',
+        issues: [], unbuilt: true,
+      });
+    },
     get qaFiltered() {
-      const panels = this.qa?.panels || [];
+      const panels = this.qaMerged;
       const f = this.qaFilter;
       if (f === 'all') return panels;
       if (f.startsWith('code:')) {
@@ -7377,6 +7533,21 @@ function app() {
         return panels.filter(p => (p.issues || []).some(i => i.code === code));
       }
       return panels.filter(p => p.severity === f);
+    },
+    // その行のAロール情報（プロンプト・slot・割当）を引く。編集操作の対象
+    arollPanelOf(lineId) {
+      return this.arollPanels.find(a => a.line_id === lineId) || null;
+    },
+    // まだ組んでいない行のサムネ。割当済みの切り抜き → 生成した絵、の順で出す
+    // （どちらも無ければ「まだ絵が無い」＝生成か在庫選択が要る行）
+    qaFallbackThumb(p) {
+      const a = this.arollPanelOf(p.line_id);
+      if (!a) return '';
+      if (a.cutout_slot_id) {
+        const charId = a.cutout_char_id || (a.characters || [])[0];
+        if (charId) return `${FAPI}/characters/${charId}/panel_library/cutout/${a.cutout_slot_id}.png`;
+      }
+      return a.image ? this.arollImageUrl(a) : '';
     },
     get qaPositionLabel() {
       const list = this.qaFiltered;
@@ -7386,17 +7557,21 @@ function app() {
     qaFileUrl(rel) {
       return `${this.qaBase}/file/${rel}?v=${this.qaVersion}`;
     },
+    // unbuilt=絵はあるがPhotoshopで組んでいない / ungenerated=絵がまだ無い
     qaSevColor(sev) {
-      return { blocking: '#ef4444', advisory: '#f59e0b', clean: '#334155' }[sev] || '#334155';
+      return { blocking: '#ef4444', advisory: '#f59e0b', clean: '#334155',
+               unbuilt: '#1e3a8a', ungenerated: '#3f3f46' }[sev] || '#334155';
     },
     qaSevBg(sev) {
-      return { blocking: '#7f1d1d', advisory: '#78350f', clean: '#14532d' }[sev] || '#1e293b';
+      return { blocking: '#7f1d1d', advisory: '#78350f', clean: '#14532d',
+               unbuilt: '#1e3a8a', ungenerated: '#3f3f46' }[sev] || '#1e293b';
     },
     qaSevMark(sev) {
-      return { blocking: '🔴', advisory: '🟡', clean: '✓' }[sev] || '';
+      return { blocking: '🔴', advisory: '🟡', clean: '✓', unbuilt: '🔧', ungenerated: '○' }[sev] || '';
     },
     qaSevLabel(sev) {
-      return { blocking: '要対応', advisory: '助言', clean: '問題なし' }[sev] || sev;
+      return { blocking: '要対応', advisory: '助言', clean: '問題なし',
+               unbuilt: '未合成', ungenerated: '未生成' }[sev] || sev;
     },
     qaCodeLabel(code) {
       return {
@@ -7480,9 +7655,72 @@ function app() {
       }
       return it;
     },
+    // 全キャラ表示では charId が '*' なので、実体は entry 側の char_id で引く
     cutoutUrl(e) {
       const filename = (e.cutout || '').split('/').pop();
-      return `${FAPI}/characters/${this.cutoutLib.charId}/panel_library/cutout/${filename}`;
+      return `${FAPI}/characters/${e.char_id || this.cutoutLib.charId}/panel_library/cutout/${filename}`;
+    },
+    // ② の試算。**生成の前に無料で埋まる行を確定させる**ための窓口。
+    // 「賄えない行」は在庫から無理に埋めない（ワンパターンの発生源になる）。
+    get cutoutPlanReasons() {
+      if (!this.cutoutPlan) return [];
+      const m = {};
+      for (const l of this.cutoutPlan.lines || []) {
+        if (l.slot_id) continue;
+        const k = (l.reason || '').split('（')[0];
+        m[k] = (m[k] || 0) + 1;
+      }
+      return Object.entries(m).sort((a, b) => b[1] - a[1]);
+    },
+    async loadCutoutPlan() {
+      if (!this.currentProject || !this.activeEpisodeNumber) return;
+      this.cutoutPlanBusy = true;
+      this.cutoutPlanMsg = '';
+      try {
+        this.cutoutPlan = await (await fetch(`${this.arollApiBase}/cutout-plan`)).json();
+      } catch (e) {
+        this.cutoutPlanMsg = '試算に失敗しました: ' + e;
+      } finally {
+        this.cutoutPlanBusy = false;
+      }
+    },
+    async applyCutoutPlan() {
+      if (!this.cutoutPlan) return;
+      if (!confirm(`在庫から ${this.cutoutPlan.from_stock} 行に割り当てます（無料・画像生成なし）。よろしいですか？`)) return;
+      this.cutoutPlanBusy = true;
+      try {
+        const r = await fetch(`${this.arollApiBase}/cutout-plan/apply`, {
+          method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({}),
+        });
+        const d = await r.json();
+        this.cutoutPlanMsg = r.ok
+          ? `${d.applied} 行に割り当てました（${d.skipped} 行は在庫で賄えないため触っていません）`
+          : `失敗: ${d.detail || r.status}`;
+        if (r.ok) { await this.refreshArollTab(); await this.loadCutoutPlan(); }
+      } catch (e) {
+        this.cutoutPlanMsg = '失敗: ' + e;
+      } finally {
+        this.cutoutPlanBusy = false;
+      }
+    },
+    // 一覧の並び（絞り込み後）を順に送る。合成チェックの qaStep と同じ作り
+    cutoutStep(d) {
+      const list = this.cutoutFiltered;
+      if (!list.length || !this.cutoutLib.detail) return;
+      const key = e => (e.char_id || '') + '/' + e.slot_id;
+      let i = list.findIndex(e => key(e) === key(this.cutoutLib.detail));
+      if (i < 0) i = 0;
+      this.cutoutLib.detail = list[(i + d + list.length) % list.length];
+    },
+    get cutoutPositionLabel() {
+      const list = this.cutoutFiltered;
+      if (!this.cutoutLib.detail) return '';
+      const key = e => (e.char_id || '') + '/' + e.slot_id;
+      const i = list.findIndex(e => key(e) === key(this.cutoutLib.detail));
+      return `${i < 0 ? '—' : i + 1} / ${list.length}`;
+    },
+    charaName(charId) {
+      return (this.charas.find(c => c.char_id === charId) || {}).name || charId || '';
     },
     cutoutBorder(e) {
       if (e.is_stale) return '#7f1d1d';
@@ -7500,12 +7738,19 @@ function app() {
       this.cutoutLib.busy = true;
       this.cutoutLib.msg = '';
       try {
-        const [d, th] = await Promise.all([
-          (await fetch(`${FAPI}/characters/${this.cutoutLib.charId}/panel_library?kind=cutout`)).json(),
+        const ids = this.cutoutLib.charId === '*'
+          ? this.charas.map(c => c.char_id) : [this.cutoutLib.charId];
+        const [lists, th] = await Promise.all([
+          Promise.all(ids.map(async id => {
+            const d = await (await fetch(`${FAPI}/characters/${id}/panel_library?kind=cutout`)).json();
+            // 実体の場所を引くのに char_id が要る。slot_id はキャラ内でしか一意でないので
+            // 全キャラ表示では :key も char_id で修飾する
+            return (d.entries || []).map(e => ({ ...e, char_id: id }));
+          })),
           (await fetch(`${FAPI}/cutout/thresholds`)).json(),
         ]);
         this.cutoutThresholds = th || this.cutoutThresholds;
-        this.cutoutLib.items = d.entries || [];
+        this.cutoutLib.items = lists.flat();
       } catch (e) {
         this.cutoutLib.msg = '読み込みに失敗しました: ' + e;
       } finally {
@@ -7516,10 +7761,11 @@ function app() {
       // 194件を1枚ずつ承認するのは現実的でないので、まとめて入れて要らないものを消す運用
       this.cutoutLib.busy = true;
       try {
-        const r = await (await fetch(
-          `${FAPI}/characters/${this.cutoutLib.charId}/panel_library/approve-all?kind=cutout`,
-          { method: 'POST' })).json();
-        this.cutoutLib.msg = `${r.approved} 件を承認しました`;
+        const ids = this.cutoutLib.charId === '*'
+          ? this.charas.map(c => c.char_id) : [this.cutoutLib.charId];
+        const rs = await Promise.all(ids.map(async id => (await fetch(
+          `${FAPI}/characters/${id}/panel_library/approve-all?kind=cutout`, { method: 'POST' })).json()));
+        this.cutoutLib.msg = `${rs.reduce((a, r) => a + (r.approved || 0), 0)} 件を承認しました`;
         await this.loadCutoutLib();
       } finally {
         this.cutoutLib.busy = false;
@@ -7528,7 +7774,7 @@ function app() {
     async approveCutout(e) {
       this.cutoutLib.busy = true;
       try {
-        await fetch(`${FAPI}/characters/${this.cutoutLib.charId}/panel_library/${e.slot_id}/approve`,
+        await fetch(`${FAPI}/characters/${e.char_id || this.cutoutLib.charId}/panel_library/${e.slot_id}/approve`,
                     { method: 'POST' });
         this.cutoutLib.detail = null;
         await this.loadCutoutLib();
@@ -7540,7 +7786,7 @@ function app() {
       if (!confirm(`${e.slot_id} を削除します（実体ファイルも消えます）。よろしいですか？`)) return;
       this.cutoutLib.busy = true;
       try {
-        await fetch(`${FAPI}/characters/${this.cutoutLib.charId}/panel_library/${e.slot_id}`,
+        await fetch(`${FAPI}/characters/${e.char_id || this.cutoutLib.charId}/panel_library/${e.slot_id}`,
                     { method: 'DELETE' });
         this.cutoutLib.detail = null;
         await this.loadCutoutLib();
