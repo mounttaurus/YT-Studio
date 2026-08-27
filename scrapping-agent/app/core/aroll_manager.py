@@ -1433,6 +1433,9 @@ def set_cutout_selection(project_id: str, episode: int, line_id: str, slot_id: s
     panel["cutout_slot_id"] = slot_id
     panel["cutout_char_id"] = char_id if slot_id else None
     panel["cutout_source"] = "user" if slot_id else None
+    # 合成済みPSDより後に差し替えたかを判定するための時刻。これが無いと
+    # 「絵を替えたのに古い合成サムネが出たまま」に気付けない
+    panel["cutout_assigned_at"] = _now() if slot_id else None
     save_manifest(project_id, episode, manifest)
     return {"line_id": line_id, "cutout_slot_id": slot_id, "previous": prev, "changed": True}
 

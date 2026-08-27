@@ -2401,6 +2401,8 @@
                           x-text="`○ 問題なし ${qaCounts.clean}`"></span>
                     <span style="font-size:12px;color:#93c5fd" x-show="qaCounts.unbuilt"
                           x-text="`🔧 未合成 ${qaCounts.unbuilt}`"></span>
+                    <span style="font-size:12px;color:#d8b4fe" x-show="qaCounts.restale"
+                          x-text="`♻️ 要・組み直し ${qaCounts.restale}`"></span>
                     <span style="font-size:12px;color:#a1a1aa" x-show="qaCounts.ungenerated"
                           x-text="`○ 未生成 ${qaCounts.ungenerated}`"></span>
                     <span style="font-size:11px;color:#4b5563;margin-left:auto" x-show="qa"
@@ -2418,6 +2420,9 @@
                     <button class="btn btn-sm" x-show="qaCounts.advisory"
                             :style="qaFilter === 'advisory' ? 'background:#78350f;color:#fde68a' : ''"
                             @click="qaFilter = 'advisory'" x-text="`助言のみ ${qaCounts.advisory}`"></button>
+                    <button class="btn btn-sm" x-show="qaCounts.restale"
+                            :style="qaFilter === 'restale' ? 'background:#581c87;color:#e9d5ff' : ''"
+                            @click="qaFilter = 'restale'" x-text="`要・組み直し ${qaCounts.restale}`"></button>
                     <button class="btn btn-sm" x-show="qaCounts.unbuilt"
                             :style="qaFilter === 'unbuilt' ? 'background:#1e3a8a;color:#bfdbfe' : ''"
                             @click="qaFilter = 'unbuilt'" x-text="`未合成 ${qaCounts.unbuilt}`"></button>
@@ -2437,6 +2442,8 @@
                     「全コマ一覧＋指摘の色付け」として使ってください。
                     <b>クリックすると拡大＋指摘の赤枠に加えて、その行の再生成・在庫からの選択・
                     表情/ショット/アングル/ポーズ・プロンプト編集ができます。</b>
+                    絵を差し替えた行は<b>♻️要・組み直し</b>になり、古い合成サムネは出しません
+                    （直したつもりが直っていない、を防ぐため）。Photoshopで組み直して再検査すると戻ります。
                   </div>
 
                   <!-- サムネイル一覧 -->
@@ -4196,9 +4203,20 @@
               <div style="font-size:9px;color:#4b5563;margin-top:2px" x-text="it.code"></div>
             </div>
           </template>
-          <div x-show="!(qaDetail.issues || []).length"
+          <div x-show="qaDetail.restale"
+               style="padding:8px;background:#2e1065;border-radius:6px;font-size:11px;color:#e9d5ff;line-height:1.7">
+            ♻️ <b>この行は検査より後に絵を差し替えました。</b>
+            合成済みのPSDは古いままなので、<b>Photoshopで組み直して再検査</b>してください
+            （上のサムネは差し替え後の素材で、合成結果ではありません）。
+          </div>
+          <div x-show="!(qaDetail.issues || []).length && !qaDetail.restale && !qaDetail.unbuilt"
                style="padding:8px;background:#0d2014;border-radius:6px;font-size:11px;color:#86efac">
             ✔ 機械検査では問題なし（光源の違和感・手の乱れなどは目視で確認してください）
+          </div>
+          <div x-show="qaDetail.unbuilt"
+               style="padding:8px;background:#0f172a;border-radius:6px;font-size:11px;color:#93c5fd;line-height:1.7">
+            まだ合成していない行です。絵を決めたら<b>Photoshopで組んでから再検査</b>すると、
+            ここに指摘が出るようになります。
           </div>
         </div>
 
@@ -7489,6 +7507,7 @@ function app() {
       return {
         total: m.length, blocking: by('blocking'), advisory: by('advisory'),
         clean: by('clean'), unbuilt: by('unbuilt'), ungenerated: by('ungenerated'),
+        restale: by('restale'),
       };
     },
     get qaCheckedAt() {
@@ -7518,10 +7537,24 @@ function app() {
     // 「まだ組んでいない行」が画面から消える＝進捗が分からない。
     get qaMerged() {
       const built = new Map((this.qa?.panels || []).map(p => [p.line_id, p]));
-      return this.arollPanels.map(a => built.get(a.line_id) || {
-        line_id: a.line_id, order: a.order, speaker: a.speaker_name, text: a.text,
-        severity: a.status === 'done' || a.cutout_slot_id ? 'unbuilt' : 'ungenerated',
-        issues: [], unbuilt: true,
+      const checked = this.qa?.checked_at ? Date.parse(this.qa.checked_at) : 0;
+      return this.arollPanels.map(a => {
+        const q = built.get(a.line_id);
+        if (!q) {
+          return {
+            line_id: a.line_id, order: a.order, speaker: a.speaker_name, text: a.text,
+            severity: a.status === 'done' || a.cutout_slot_id ? 'unbuilt' : 'ungenerated',
+            issues: [], unbuilt: true,
+          };
+        }
+        // 検査より後に絵を差し替えた行は、古いPSDのサムネを見せてはいけない
+        // （直したつもりが直っていない/直したのに古い指摘が残る、どちらも起きる）
+        const src = Math.max(Date.parse(a.generated_at || 0) || 0,
+                             Date.parse(a.cutout_assigned_at || 0) || 0);
+        if (checked && src > checked) {
+          return { ...q, severity: 'restale', issues: [], thumb: null, view: null, restale: true };
+        }
+        return q;
       });
     },
     get qaFiltered() {
@@ -7560,18 +7593,19 @@ function app() {
     // unbuilt=絵はあるがPhotoshopで組んでいない / ungenerated=絵がまだ無い
     qaSevColor(sev) {
       return { blocking: '#ef4444', advisory: '#f59e0b', clean: '#334155',
-               unbuilt: '#1e3a8a', ungenerated: '#3f3f46' }[sev] || '#334155';
+               unbuilt: '#1e3a8a', ungenerated: '#3f3f46', restale: '#a855f7' }[sev] || '#334155';
     },
     qaSevBg(sev) {
       return { blocking: '#7f1d1d', advisory: '#78350f', clean: '#14532d',
-               unbuilt: '#1e3a8a', ungenerated: '#3f3f46' }[sev] || '#1e293b';
+               unbuilt: '#1e3a8a', ungenerated: '#3f3f46', restale: '#581c87' }[sev] || '#1e293b';
     },
     qaSevMark(sev) {
-      return { blocking: '🔴', advisory: '🟡', clean: '✓', unbuilt: '🔧', ungenerated: '○' }[sev] || '';
+      return { blocking: '🔴', advisory: '🟡', clean: '✓', unbuilt: '🔧',
+               ungenerated: '○', restale: '♻️' }[sev] || '';
     },
     qaSevLabel(sev) {
       return { blocking: '要対応', advisory: '助言', clean: '問題なし',
-               unbuilt: '未合成', ungenerated: '未生成' }[sev] || sev;
+               unbuilt: '未合成', ungenerated: '未生成', restale: '要・組み直し' }[sev] || sev;
     },
     qaCodeLabel(code) {
       return {
@@ -7981,6 +8015,20 @@ function app() {
       } catch (e) { this.arollMsg = `行の保存に失敗: ${e.message}`; }
     },
     async arollGenerateLine(p) {
+      // 既存の絵を上書きし、ライブラリに命中しなければ課金される。取り消せないので必ず確認する
+      // （🎲新規には確認があるのに、より使われるこちらに無いのは危ない）
+      if (p.image && !confirm(
+            `${p.line_id} の絵を作り直します。
+
+`
+            + `・今の絵は上書きされます（元に戻せません）
+`
+            + `・ライブラリに一致が無ければ課金されます（≈$0.04）
+`
+            + `・合成済みの場合、Photoshopで組み直しが必要になります
+
+`
+            + `よろしいですか？`)) return;
       this.arollLineBusy = p.line_id;
       this.arollMsg = '';
       try {
