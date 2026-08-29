@@ -13,6 +13,22 @@ from pathlib import Path
 SHARED_DIR = Path(os.getenv("SHARED_DIR", "/shared"))
 PRESETS_FILE = SHARED_DIR / "imagegen" / "panel_presets.json"
 
+# 背景モードのプロンプト断片。ここが本籍（panel_library_manager から参照される）。
+#
+# ⚠️ flat の色相指定には根拠がある。71枚で「背景色とキャラ色の衝突量」を測ると、
+# 肌に近い色相（赤〜橙）の背景は緑〜シアンの **8.5倍** 衝突した
+# （中央値 0.0051 vs 0.0006）。桃色背景×金髪で顔が欠けた実例はここに集中している。
+# 対策は彩度を上げること（グリーンバック）ではない ── きつい色はフチへの色移りが増える。
+# **パステルのまま色相だけ肌から離す**のが正解。cutout_engine は背景色を実測で
+# 推定するので、特定のカラーコードを守らせる必要は無く、肌と衝突しないことだけが要件。
+BACKGROUND_MODES = {
+    "scene": "in a simple anime-style background scene",
+    "flat": ("plain solid pastel background, flat single color, no scenery, "
+             "in a cool pastel hue such as mint, sky blue, or lavender; "
+             "never peach, pink, cream, beige or any skin-like tone"),
+    "transparent": "isolated subject on a plain white background",
+}
+
 DEFAULT_PRESETS = {
     "emotion": [
         {"id": "neutral",   "label_ja": "通常",   "prompt": "neutral expression"},
@@ -116,11 +132,7 @@ def build_panel_prompt(
     background_mode="flat", extra_prompt="",
 ) -> str:
     """構造化入力を1本の英語プロンプトに組み立てる。順序は画角→ポーズ→表情→構図→背景。"""
-    bg = {
-        "scene": "in a simple anime-style background scene",
-        "flat": "plain solid pastel background, flat single color, no scenery",
-        "transparent": "isolated subject on a plain white background",
-    }.get(background_mode, "")
+    bg = BACKGROUND_MODES.get(background_mode, "")
     parts = [
         style_prefix.strip().rstrip(","),
         appearance_prompt.strip(),

@@ -171,36 +171,55 @@ def derive_slot_from_prompt(prompt_text: str) -> dict:
     }
 
 
-def _slot_valid(slot: Optional[dict], vocab: dict[str, list[str]]) -> bool:
-    """slot_keyの3軸(emotion/shot/angle)が全て語彙内にあるか（poseは任意）。"""
-    if not slot:
-        return False
-    for axis in ("emotion", "shot", "angle"):
-        v = slot.get(axis)
-        if not v or v not in vocab.get(axis, []):
-            return False
-    return True
+# slot_key を構成する3軸。欠けさせない。
+# ⚠️ 語彙提示用の SLOT_AXES（24行目・pose を含む4軸）とは**別物**。同じ名前にすると
+# 後勝ちで上書きされ、pose の語彙が LLM に提示されなくなる（実際に一度やった）。
+KEY_AXES = ("emotion", "shot", "angle")
 
 
 def resolve_slot(
     raw_slot: Optional[dict], prompt_text: str, vocab: dict[str, list[str]],
 ) -> tuple[Optional[dict], str]:
-    """LLM由来のslotを検証し、ダメなら本文から正規表現で推定する（3段構え）。
+    """LLM由来のslotを**軸ごとに**検証し、欠けた軸だけ本文から正規表現で補う。
 
-    Returns: (slot, slot_source) — slot_source は "llm" | "derived" | "none"
+    Returns: (slot, slot_source) — "llm" | "mixed" | "derived" | "none"
+
+    ⚠️ 以前は3軸が揃っていなければ **slot を丸ごと捨てて** 正規表現で引き直していた。
+    ところがプロンプト側は LLM に「判定できない軸はキー自体を省略してよい」と
+    指示しているので、**正直に一部だけ答えた出力が毎回捨てられていた**。
+
+    実測（ep01 / 196行）:
+      slot_source = llm 11 (6%) / derived 163 / none 22
+      さらに正規表現の経路は pose を常に None にするため、
+      **エピソード全体の pose 10件は、生き残った11行だけから来ていた**
+      （＝「アクションの項目が無い」の正体は、受け取り側の取りこぼし）。
+
+    軸ごとに採れば、LLM が答えた軸（特に正規表現では絶対に取れない pose）が残る。
+    3軸のどれかがどちらの手段でも埋まらない時だけ None を返す（従来どおりの安全弁。
+    slot_key に欠けた軸を混ぜない）。
     """
-    if _slot_valid(raw_slot, vocab):
-        pose = raw_slot.get("pose")
-        pose = pose if pose in vocab.get("pose", []) else None
-        return (
-            {"emotion": raw_slot["emotion"], "pose": pose,
-             "shot": raw_slot["shot"], "angle": raw_slot["angle"]},
-            "llm",
-        )
+    raw = raw_slot if isinstance(raw_slot, dict) else {}
     derived = derive_slot_from_prompt(prompt_text)
-    if derived["emotion"] and derived["shot"] and derived["angle"]:
-        return derived, "derived"
-    return None, "none"
+    slot: dict[str, Optional[str]] = {}
+    sources: set[str] = set()
+    for axis in KEY_AXES:
+        v = raw.get(axis)
+        if v in vocab.get(axis, []):
+            slot[axis], src = v, "llm"
+        elif derived.get(axis):
+            slot[axis], src = derived[axis], "derived"
+        else:
+            return None, "none"
+        sources.add(src)
+
+    pose = raw.get("pose")   # 正規表現は pose を出せないので LLM だけが供給源
+    out = {"emotion": slot["emotion"], "pose": pose if pose in vocab.get("pose", []) else None,
+           "shot": slot["shot"], "angle": slot["angle"]}
+    if sources == {"llm"}:
+        return out, "llm"
+    if sources == {"derived"}:
+        return out, "derived"
+    return out, "mixed"
 
 
 def _model_available(model: str) -> bool:

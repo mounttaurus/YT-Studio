@@ -10,10 +10,16 @@ Aロールの aroll_manager.py と対の存在だが、背景は台本行に紐�
     images/{bg_id}.png    ← 実体
     ref/{spot_id}.png     ← 定点ごとの承認済みキーフレーム（is_keyframe:true のコピー先）
 """
+import io
 import json
+import math
 import os
+import re
 from datetime import datetime, timezone
 from pathlib import Path
+
+import numpy as np
+from PIL import Image
 
 from app.core import background_presets, nanobanana_client, style_manager
 
@@ -23,7 +29,10 @@ INDEX_FILE = BG_DIR / "backgrounds.json"
 IMAGES_DIR = BG_DIR / "images"
 REF_DIR = BG_DIR / "ref"
 
-SCHEMA_VERSION = "1.0.0"
+SCHEMA_VERSION = "1.2.0"  # 1.2.0: 持ち込み登録（provider="upload"）。original_filename /
+#                           width / height / edited_at を追加（追加のみ・後方互換）
+#                           1.1.0: source_url / license / light_dx / light_mean /
+#                           coverage / overlay を追加（外部調達素材）
 
 # location カテゴリで camera が意味を持つ framing（それ以外は null。background_presets と揃える）
 CAMERA_FRAMINGS = background_presets.CAMERA_FRAMINGS
@@ -132,6 +141,221 @@ def _next_bg_id(category: str, key_parts: list[str]) -> str:
         if bg_id not in existing:
             return bg_id
         n += 1
+
+
+# ─── ユーザーが持ち込んだ画像の登録 ────────────────────────────────
+#
+# 生成しない背景（自分で撮った・描いた・Vecteezy等で調達した）を1枚ずつ登録する口。
+# ホスト側の psassist/scripts/register_backgrounds.py が PSD からまとめてやっていることを、
+# UIから1枚ずつできるようにしたもの。索引のスキーマは向こうと揃える
+# （Docs/BACKGROUND_ARCHIVE.md §2「外部調達素材の追加フロー」・§5 スキーマ）。
+
+UPLOAD_CATEGORIES = ("location", "psych", "comic", "effect", "backdrop")
+
+# 自動割当（suggest_background）が実際に読む軸。ここを自由入力にすると framing/mood が
+# 一致しなくなり、割当が**黙って劣化する**（画面からは原因が見えない）ので語彙で固定する。
+VOCAB_AXES = ("light", "camera", "framing")
+# 人が付ける分類ラベル。bg_id とキーワードチップに出るだけで機械の判定には使わないので、
+# 語彙に無い言葉（自分で撮った場所など）も受け付ける。
+KEYWORD_AXES = ("spot", "motif", "era", "form", "effect")
+
+_SLUG_RE = re.compile(r"[^a-z0-9-]+")
+
+
+def slug_keyword(v: str) -> str:
+    """キーワードを bg_id に使える形へ。日本語だけなら空になる（bg_idからは落ちる）。
+
+    落ちても困らない ── bg_id は識別子であって表示ラベルではなく、入力した言葉は
+    entry の spot/motif/... 側にそのまま残る。
+    """
+    return _SLUG_RE.sub("-", (v or "").strip().lower().replace("_", "-")).strip("-")
+
+
+def aspect_of(w: int, h: int) -> str:
+    """近い定番比があればそれを、無ければ既約分数で返す。"""
+    for label, ratio in (("16:9", 16 / 9), ("4:3", 4 / 3), ("1:1", 1.0),
+                         ("9:16", 9 / 16), ("3:4", 3 / 4)):
+        if h and abs(w / h - ratio) < 0.02:
+            return label
+    g = math.gcd(w, h) or 1
+    return f"{w // g}:{h // g}"
+
+
+def light_metrics(rgba: Image.Image) -> tuple[float | None, float | None, float]:
+    """左右の輝度差（正=右が明るい）・平均輝度・不透明率。
+
+    ⚠️ psassist/scripts/register_backgrounds.py の同名関数と**同じ式**。ホスト側の
+    スクリプトはコンテナのコードをimportできない（HTTPでも繋がない方針）ので、
+    ここだけは二重に持つ。片方を変えたらもう片方も変えること。
+    用途は Docs/BACKGROUND_ARCHIVE.md §5「光源メタ（light_dx）の用途」。
+    """
+    a = np.asarray(rgba.convert("RGBA")).astype(float)
+    alpha = a[:, :, 3] > 128
+    coverage = float(alpha.mean())
+    if coverage < 0.05:
+        return None, None, round(coverage, 3)
+    lum = 0.299 * a[:, :, 0] + 0.587 * a[:, :, 1] + 0.114 * a[:, :, 2]
+    t = max(1, lum.shape[1] // 3)
+
+    def band(sl) -> float | None:
+        m = alpha[:, sl]
+        return float(lum[:, sl][m].mean()) if m.sum() > 50 else None
+
+    left, right = band(slice(0, t)), band(slice(-t, None))
+    if left is None or right is None:
+        return None, round(float(lum[alpha].mean()), 1), round(coverage, 3)
+    denom = max(1.0, (left + right) / 2)
+    return (round(float((right - left) / denom), 3),
+            round(float(lum[alpha].mean()), 1),
+            round(coverage, 3))
+
+
+def validate_axes(values: dict) -> None:
+    """category / VOCAB_AXES / mood を語彙で検証する。空文字とNoneは無視。"""
+    presets = background_presets.load_presets()
+    cat = values.get("category")
+    if cat and cat not in UPLOAD_CATEGORIES:
+        allowed = " / ".join(UPLOAD_CATEGORIES)
+        raise ValueError(f"系統が不正です: {cat}（{allowed} のいずれか）")
+    for axis in VOCAB_AXES:
+        v = values.get(axis)
+        if v and v not in {p.get("id") for p in presets.get(axis, [])}:
+            raise ValueError(f"{axis} に無い値です: {v}"
+                             "（自動割当が読む軸なので語彙から選んでください）")
+    known = {p.get("id") for p in presets.get("mood", [])}
+    for m in values.get("mood") or []:
+        if m not in known:
+            raise ValueError(f"mood に無い値です: {m}（自動割当が読む軸です）")
+
+
+def _keyword_parts(category: str, spot: str, motif: str, era: str,
+                   form: str, effect: str, light: str, framing: str) -> list[str]:
+    """bg_id の中間部（§4 命名規則）。生成側 generate_and_register と同じ組み立て。"""
+    if category == "location":
+        return [slug_keyword(spot or motif or era), light, framing]
+    if category in ("psych", "backdrop"):
+        return [slug_keyword(form)]
+    return [slug_keyword(effect)]                      # comic | effect
+
+
+def register_upload(
+    data: bytes, *, category: str, spot: str = "", motif: str = "", era: str = "",
+    light: str = "", camera: str = "", framing: str = "", form: str = "", effect: str = "",
+    mood: list[str] | None = None, is_keyframe: bool = False, note: str = "",
+    source_url: str = "", license: str = "", style: str = "", filename: str = "",
+) -> dict:
+    """持ち込み画像を1件アーカイブへ登録する（**生成しない**）。
+
+    ⚠️ **透過を捨てない。** effect 系は「重ねて使う」素材で、アルファを捨てると背景を
+    覆ってしまう（Docs/BACKGROUND_ARCHIVE.md §2）。元がRGBの画像だけRGBで保存する。
+    """
+    mood = [m for m in (mood or []) if m]
+    if not category:
+        raise ValueError("系統（category）は必須です")
+    validate_axes({"category": category, "light": light, "camera": camera,
+                   "framing": framing, "mood": mood})
+    try:
+        img = Image.open(io.BytesIO(data))
+        img.load()
+    except Exception as e:                             # noqa: BLE001 — 画像でない入力
+        raise ValueError(f"画像として読めませんでした: {type(e).__name__}") from e
+
+    rgba = img.convert("RGBA")
+    has_alpha = rgba.getchannel("A").getextrema()[0] < 255
+    dx, mean, coverage = light_metrics(rgba)
+
+    parts = [p for p in _keyword_parts(category, spot, motif, era, form, effect,
+                                       light, framing) if p]
+    bg_id = _next_bg_id(category, parts or ["user"])
+
+    buf = io.BytesIO()
+    (rgba if has_alpha else rgba.convert("RGB")).save(buf, "PNG")
+    png = buf.getvalue()
+    IMAGES_DIR.mkdir(parents=True, exist_ok=True)
+    (IMAGES_DIR / f"{bg_id}.png").write_bytes(png)
+
+    entry = {
+        "bg_id": bg_id, "category": category,
+        "spot": spot or None, "motif": motif or None, "era": era or None,
+        "light": light or None,
+        "camera": camera if (category == "location" and framing in CAMERA_FRAMINGS) else None,
+        "framing": framing or None,
+        "form": form or None, "effect": effect or None,
+        "mood": mood,
+        "aspect": aspect_of(rgba.width, rgba.height),
+        "image": f"images/{bg_id}.png",
+        "style": style or None,
+        "model": None,
+        "prompt": None,
+        "provider": "upload",
+        "source_url": source_url or None,
+        "license": license or None,
+        "is_keyframe": bool(is_keyframe),
+        "source_ref": None,
+        "created_at": _now(),
+        "note": note,
+        "times_used": 0,
+        # 光源メタ（§5）。キャラの陰影と向きが逆だと違和感が出るので候補の並べ替えに使う
+        "light_dx": dx, "light_mean": mean, "coverage": coverage,
+        "overlay": category == "effect",
+        "original_filename": filename or None,
+        "width": rgba.width, "height": rgba.height,
+    }
+    register(entry)
+
+    if is_keyframe and (spot or motif):
+        REF_DIR.mkdir(parents=True, exist_ok=True)
+        (REF_DIR / f"{slug_keyword(spot or motif) or bg_id}.png").write_bytes(png)
+    return entry
+
+
+# メタデータを人が直せる項目。bg_id・image・実測値（light_dx等）はここに入れない
+EDITABLE_FIELDS = ("category", "spot", "motif", "era", "light", "camera", "framing",
+                   "form", "effect", "style", "note", "source_url", "license")
+
+
+def update_background(bg_id: str, *, mood: list[str] | None = None,
+                      is_keyframe: bool | None = None, **fields) -> dict | None:
+    """メタデータを人が直す（画像は差し替えない）。None を渡した項目は触らない。
+
+    ⚠️ **bg_id は書き換えない。** bg_id は実体ファイル名（images/{bg_id}.png）であり、
+    aroll.json の panels[].background_id が指す先でもある。ラベルを直すたびに改名すると
+    割当済みの行の参照が全部切れる。bg_id は「登録した時の分類が残った識別子」であって
+    現在のラベルではない（キャラ所有ライブラリの slot_id と同じ扱い）。
+    """
+    fields = {k: v for k, v in fields.items() if k in EDITABLE_FIELDS}
+    validate_axes({**fields, "mood": mood})
+    data = load_index()
+    for b in data.get("backgrounds", []):
+        if b.get("bg_id") != bg_id:
+            continue
+        changed = []
+        for k, v in fields.items():
+            if v is None:
+                continue
+            new = v if k == "note" else (v or None)
+            if b.get(k) != new:
+                b[k] = new
+                changed.append(k)
+        if mood is not None:
+            new_mood = [m for m in mood if m]
+            if b.get("mood") != new_mood:
+                b["mood"] = new_mood
+                changed.append("mood")
+        if is_keyframe is not None and bool(b.get("is_keyframe")) != bool(is_keyframe):
+            b["is_keyframe"] = bool(is_keyframe)
+            changed.append("is_keyframe")
+        if "category" in changed:
+            # effect は「重ねて使う」素材。系統を直したら合成側の扱いも追随させる（§2）
+            b["overlay"] = b.get("category") == "effect"
+            changed.append("overlay")
+        if "framing" in changed and b.get("framing") not in CAMERA_FRAMINGS:
+            b["camera"] = None                     # camera は wide/full_body でしか意味を持たない
+        if changed:
+            b["edited_at"] = _now()
+            save_index(data)
+        return {**b, "changed": changed}
+    return None
 
 
 def register(entry: dict) -> dict:

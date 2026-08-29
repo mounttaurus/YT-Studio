@@ -6,3 +6,7 @@ python-dotenv>=1.0.0
 pydantic>=2.8.0
 litellm>=1.44.1
 pillow>=10.3.0
+# 背景除去（cutout_engine）。scipy=連結成分と距離変換、rembg=平らでない背景のフォールバック。
+# rembg のモデルは REMBG_HOME（バインドマウント）に初回だけDLされる。
+scipy>=1.13.0
+rembg[cpu]>=2.0.66

@@ -34,7 +34,7 @@ import httpx
 
 from app.core import (
     aroll_prompt_generator, background_manager, character_manager, cutout_selector,
-    nanobanana_client, panel_library_manager, project_manager, style_manager,
+    nanobanana_client, panel_library_manager, panel_presets, project_manager, style_manager,
 )
 
 SCHEMA_VERSION = "1.2.0"  # 1.2.0: panels[].background_id を追加（行単位の背景自動割当・§19）
@@ -48,7 +48,8 @@ PROMPT_SUFFIX = "No text, no letters, no speech bubbles, no watermark in the ima
 
 # 背景はLLMに書かせず常にこれで統一する（時間帯/シチュエーションのブレを防ぐ）。
 # ユーザーが後から背景だけ別途生成して合成する運用が前提（2026-07-25方針）。
-BACKGROUND_FRAGMENT = "plain solid pastel background, flat single color, no scenery"
+# 本籍は panel_presets.BACKGROUND_MODES（切り抜きの前提なので3か所で同じ文字列だった）。
+BACKGROUND_FRAGMENT = panel_presets.BACKGROUND_MODES["flat"]
 
 _RETRYABLE_MARKERS = ("429", "RESOURCE_EXHAUSTED", "500", "502", "503", "504",
                       "timeout", "Timeout", "timed out")
@@ -402,6 +403,7 @@ def set_library_image(
         "image_source": "library",
         "library_slot_id": entry.get("slot_id"),
     })
+    clear_image_approval(project_id, episode, panel, demote=False)
     save_manifest(project_id, episode, manifest)
     panel_library_manager.record_usage(char_id, slot_id)
     return panel
@@ -612,6 +614,104 @@ def annotate_manifest(project_id: str, episode: int, manifest: dict) -> dict:
     return out
 
 
+def _image_hash(path: Path) -> str:
+    return hashlib.sha256(path.read_bytes()).hexdigest()[:16] if path.exists() else ""
+
+
+def clear_image_approval(project_id: str, episode: int, panel: dict,
+                         *, demote: bool) -> list[str]:
+    """絵が変わったら承認を外す（台本/TTSの「上流が動けば下流は未承認」と同じ）。
+
+    demote=True は**作り直した時だけ**。作り直す動機の大半は「絵が気に入らない」なので、
+    その絵から取り込んだ在庫を ``pending`` へ落として自動配布を止める。
+    在庫からの差し替えや台本テキストの変更では落とさない ── 前の絵は資産としては無傷。
+    """
+    panel.pop("image_approved_at", None)
+    panel.pop("image_approved_hash", None)
+    if not demote:
+        return []
+    return panel_library_manager.demote_from_line(
+        panel.get("characters") or [], project_id, episode, panel.get("line_id") or "")
+
+
+def approve_images(project_id: str, episode: int, line_ids: list[str] | None = None,
+                   *, register: bool = True) -> dict:
+    """画像を承認し、**その時点で**キャラ所有ライブラリへ取り込む。
+
+    「いつ在庫に積むか」の答え。生成の瞬間ではなく**人が承認した瞬間**に積む。
+    生成時に積むと、作り直して捨てた絵まで在庫に入ってしまう（``a_roll/`` の実体は
+    上書きされて最後の1枚しか残らないのに、在庫には作り直した回数ぶん並ぶ）。
+
+    取り込みは ``register_from_image``（背景除去→指紋）。人が今その絵を見て
+    承認したので ``review_status="approved"`` で入れる（切り抜きタブで二度承認させない）。
+
+    ⚠️ **承認と在庫化は別物**。積めない行は ``skipped`` に理由を載せて承認だけ通す
+    （絵はそのまま使える・課金ゼロ）。積まない条件は
+    「キャラが1人に確定していない」「slotが揃っていない」「切り抜きに失敗した」に加えて
+    **``can_generate_images`` が False**（参照画像が無い等）── ここが同じキャラの
+    並行在庫ができる唯一の入口なので硬く拒否する（ユーザー判断 2026-08-29）。
+    """
+    manifest = load_manifest(project_id, episode)
+    if manifest is None:
+        raise ValueError("aroll.json not found")
+    out_dir = aroll_dir(project_id, episode)
+    # ⚠️ 空リストは「1行も選んでいない」。falsy判定にすると全行が対象になってしまう
+    #（省略＝None が「全行」で、[] とは別物）
+    wanted = None if line_ids is None else set(line_ids)
+    approved, registered, skipped = [], [], []
+
+    for p in manifest.get("panels", []):
+        lid = p.get("line_id")
+        if wanted is not None and lid not in wanted:
+            continue
+        img = p.get("image")
+        if p.get("status") != "done" or not img or not (out_dir / img).exists():
+            skipped.append({"line_id": lid, "reason": "画像が無い"})
+            continue
+        data = (out_dir / img).read_bytes()
+        p["image_approved_at"] = _now()
+        p["image_approved_hash"] = hashlib.sha256(data).hexdigest()[:16]
+        approved.append(lid)
+        if not register:
+            continue
+        chars = [c for c in (p.get("characters") or []) if c]
+        slot = p.get("slot") or {}
+        if len(chars) != 1:
+            skipped.append({"line_id": lid, "reason": "キャラが1人に確定していない（2人写り等）"})
+            continue
+        if not (slot.get("emotion") and slot.get("shot") and slot.get("angle")):
+            skipped.append({"line_id": lid, "reason": "slot が揃っていない（分類できていない行）"})
+            continue
+        # ⚠️ **二重在庫の入口はここ**。参照画像が無いキャラの絵を在庫に積むと、
+        # 「ルカっぽい別人」が同じキャラの在庫として次の話数へ配られる
+        #（外見だけ複製したVoiceバリアントキャラで実際に起きうる。§15-0）。
+        # 生成は止めない代わりにここを塞ぐ、が2026-08-29のユーザー判断。
+        # 承認自体は済ませる（絵はそのまま使える）＝積まないだけ。
+        can_stock, why = character_manager.can_generate_images(chars[0])
+        if not can_stock:
+            skipped.append({"line_id": lid, "reason": f"在庫に積めません: {why}"})
+            continue
+        try:
+            r = panel_library_manager.register_from_image(
+                chars[0], data,
+                emotion=slot["emotion"], shot=slot["shot"], angle=slot["angle"],
+                pose=slot.get("pose") or "", prompt=p.get("prompt") or "",
+                style_name=manifest.get("style", "kamishibai"),
+                model=p.get("model") or "", provider=p.get("provider") or "nanobanana",
+                source={"project_id": project_id, "episode": episode, "line_id": lid},
+            )
+        except Exception as e:  # noqa: BLE001 — 1行の失敗で承認全体を落とさない
+            skipped.append({"line_id": lid, "reason": f"取り込み失敗: {type(e).__name__}: {e}"})
+            continue
+        (registered if r.get("registered") else skipped).append(
+            {"line_id": lid, "char_id": chars[0], **r} if r.get("registered")
+            else {"line_id": lid, "reason": r.get("reason")})
+
+    save_manifest(project_id, episode, manifest)
+    return {"approved": len(approved), "registered": len(registered),
+            "line_ids": approved, "entries": registered, "skipped": skipped}
+
+
 def accept_current_text(
     project_id: str, episode: int, line_ids: list[str] | None = None,
 ) -> dict:
@@ -626,7 +726,9 @@ def accept_current_text(
 
     lines_by_id = _script_lines_by_id(project_id, episode)
     out_dir = aroll_dir(project_id, episode)
-    wanted = set(line_ids) if line_ids else None
+    # ⚠️ 空リストは「1行も選んでいない」。falsy判定にすると全行が対象になってしまう
+    #（省略＝None が「全行」で、[] とは別物）
+    wanted = None if line_ids is None else set(line_ids)
     accepted, skipped = [], []
 
     for p in manifest.get("panels", []):
@@ -816,11 +918,18 @@ def _compose_prompt(panel: dict, style_name: str) -> str:
     ).strip()
 
 
-def _resolve_refs(characters: list[str]) -> list[tuple[bytes, str, str]]:
+def _resolve_refs(characters: list[str], log: list[str] | None = None) -> list[tuple[bytes, str, str]]:
     """キャラごとの参照画像を解決する（1人=最大2枚、2人=各1枚、合計3枚以内）。
 
     ラベルにはキャラ名を入れてNanoBananaに役割を伝える。参照が無いキャラはスキップ
     （appearance_promptのみで生成）。
+
+    ⚠️ **参照が無くても生成は止めない**（その行に絵は必要で、台本の途中で止まると
+    その話数のAロールが完走しない）。代わりに log へ警告を出す。参照が無いと
+    ``nanobanana_client._with_ref_instruction()`` が一貫性の指示ごと落とすので、
+    生成のたびに別人が出る ── 気づかずに進めるのが一番まずい。
+    二重在庫の入口は「承認による在庫への取り込み」の側なので、そちらは
+    ``approve_images`` が硬く拒否する（ユーザー判断 2026-08-29）。
     """
     chars = [c for c in characters if c][:2]
     per_char = 2 if len(chars) <= 1 else 1
@@ -828,13 +937,16 @@ def _resolve_refs(characters: list[str]) -> list[tuple[bytes, str, str]]:
     for cid in chars:
         c = character_manager.read_character(cid)
         name = (c or {}).get("name") or cid
-        ref_dir = character_manager.char_dir(cid) / "reference"
-        if not ref_dir.exists():
-            continue
         files = sorted(
-            (p for p in ref_dir.glob("*") if p.is_file()),
+            (character_manager.char_dir(cid) / "reference" / fn
+             for fn in character_manager.reference_files(cid)),
             key=lambda p: p.stat().st_mtime, reverse=True,
         )[:per_char]
+        if not files:
+            if log is not None:
+                log.append(f"⚠️ {name}（{cid}）は参照画像が無いため一貫性が担保されません"
+                           "（生成のたびに別人になります）")
+            continue
         for p in files:
             label = f"{name}: keep this character consistent (same face, hairstyle, outfit)"
             refs.append((p.read_bytes(), nanobanana_client.mime_for(p.name), label))
@@ -925,6 +1037,7 @@ async def generate_line_image(
                 "image_source": "library",
                 "library_slot_id": lib_hit.get("slot_id"),
             })
+            clear_image_approval(project_id, episode, panel, demote=False)
             save_manifest(project_id, episode, manifest)
             panel_library_manager.record_usage(lib_hit["char_id"], lib_hit["slot_id"])
             if log is not None:
@@ -937,7 +1050,7 @@ async def generate_line_image(
             )
 
     full_prompt = _compose_prompt(panel, manifest.get("style", "kamishibai"))
-    refs = _resolve_refs(panel.get("characters", []))
+    refs = _resolve_refs(panel.get("characters", []), log)
 
     try:
         data = await _generate_with_retry(
@@ -958,6 +1071,11 @@ async def generate_line_image(
             # 実際に画像生成したことを刻む（コピーで済ませた行 image_source="copied" と区別する）
             "image_source": "generated",
         })
+        # 作り直した＝この絵は人の承認を経ていない。承認を外し、前の絵から取り込んだ
+        # 在庫は自動配布を止める（気に入らなくて描き直した絵が後の話数で出るのを防ぐ）
+        demoted = clear_image_approval(project_id, episode, panel, demote=True)
+        if demoted and log is not None:
+            log.append(f"⬇️ {line_id} 作り直しに伴い在庫を未承認へ降格: {', '.join(demoted)}")
     except Exception as e:
         panel.update({"status": "failed", "error": str(e)[:300]})
         raise
@@ -1003,7 +1121,9 @@ def select_targets(
     台本から消えた行（orphan）は明示指定を含め常に除外する（消えたセリフの絵に課金しない）。
     """
     panels = [p for p in manifest.get("panels", []) if not p.get("orphan")]
-    if line_ids:
+    # ⚠️ 空リストは「1行も選んでいない」＝対象ゼロ（省略＝None が「全行」）。
+    # falsy判定にすると、行を1つも選んでいないのに全行へ課金生成が走る。
+    if line_ids is not None:
         wanted = set(line_ids)
         panels = [p for p in panels if p.get("line_id") in wanted]
     if only_missing:
@@ -1310,7 +1430,7 @@ def cutout_plan(project_id: str, episode: int) -> dict:
     seq = []
     for p in panels:
         chars = p.get("characters") or []
-        seq.append((chars[0] if len(chars) == 1 else None, (p.get("slot") or {}).get("emotion")))
+        seq.append((chars[0] if len(chars) == 1 else None, p.get("slot")))
 
     plan = cutout_selector.plan_episode(seq)
     lines, from_stock = [], 0
@@ -1436,6 +1556,7 @@ def set_cutout_selection(project_id: str, episode: int, line_id: str, slot_id: s
     # 合成済みPSDより後に差し替えたかを判定するための時刻。これが無いと
     # 「絵を替えたのに古い合成サムネが出たまま」に気付けない
     panel["cutout_assigned_at"] = _now() if slot_id else None
+    clear_image_approval(project_id, episode, panel, demote=False)
     save_manifest(project_id, episode, manifest)
     return {"line_id": line_id, "cutout_slot_id": slot_id, "previous": prev, "changed": True}
 

@@ -57,6 +57,9 @@ imagegen-agent/models/**/*.pth
 imagegen-agent/models/**/*.bin
 imagegen-agent/output/
 
+# 背景除去(rembg)のONNXモデル（初回起動で自動DL・バインドマウントで可視化）
+scrapping-agent/rembg-models/
+
 # 大容量バイナリ素材（ローカル保持・公開リポジトリには入れない／bind運用）
 /Images/
 /Voices/

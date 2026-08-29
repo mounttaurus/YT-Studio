@@ -22,16 +22,23 @@ git checkoutで中身が同じでも変わってしまい、実質無変更な�
 「古い」判定されるおそれがあるため、内容ハッシュの方が安定する。
 """
 import hashlib
+import io
 import json
 import os
 from datetime import datetime, timezone
 from pathlib import Path
 
-from app.core import character_manager, nanobanana_client, panel_presets, style_manager
+from PIL import Image
 
-SCHEMA_VERSION = "1.1.0"  # 1.1.0: kind="cutout" / cutout / measured / fingerprint を追加（追加のみ・後方互換）
+from app.core import (
+    character_manager, cutout_engine, fingerprint, nanobanana_client, panel_presets,
+    style_manager,
+)
 
-BACKGROUND_FRAGMENT = "plain solid pastel background, flat single color, no scenery"
+SCHEMA_VERSION = "1.2.0"  # 1.2.0: rebless_log / diversity を追加（追加のみ・後方互換）
+#                          1.1.0: kind="cutout" / cutout / measured / fingerprint を追加
+
+BACKGROUND_FRAGMENT = panel_presets.BACKGROUND_MODES["flat"]  # 本籍は panel_presets
 PROMPT_SUFFIX = "No text, no letters, no speech bubbles, no watermark in the image."
 
 
@@ -87,13 +94,128 @@ def save_index(char_id: str, data: dict) -> None:
     index_file(char_id).write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
 
 
+def rebless(char_id: str, *, dry_run: bool = True, note: str = "") -> dict:
+    """世代違い(is_stale)の entry を現世代へ付け替える。
+
+    ⚠️ これは「**見た目は変わっていない**」という人の宣言を記録する操作であって、
+    機械が判定した結果ではない。``appearance_version`` は appearance_prompt と
+    ``reference/`` の全ファイルのバイト列のハッシュなので、**参照画像を1枚足しただけでも
+    値が変わり、そのキャラの在庫が一斉に無効化される**（実測 2026-08-27: ルカの
+    切り抜き92枚が全滅し、1話あたりの新規生成が 24枚 → 106枚に増えていた）。
+    参照画像の追加は生成精度を上げるための日常的で非破壊的な操作なのに、
+    資産を全部捨てる副作用がある ── その落差を人の宣言で埋めるための口。
+
+    ⚠️ **デザインを実際に変えた後に実行してはいけない。** 古い外見の絵が現世代の在庫と
+    して配られるようになる。判断できるのは人だけなので、UIは必ず確認を挟むこと。
+
+    付け替えの前に索引をバックアップし、``rebless_log`` に事実を残す（誰がいつ何件を
+    どの世代から付け替えたかが後から追えるように）。
+    """
+    cur = appearance_version(char_id)
+    idx = load_index(char_id)
+    stale = [e for e in idx.get("entries", []) if e.get("appearance_version") != cur]
+    by_kind: dict[str, int] = {}
+    by_from: dict[str, int] = {}
+    for e in stale:
+        by_kind[e.get("kind", "panel")] = by_kind.get(e.get("kind", "panel"), 0) + 1
+        k = str(e.get("appearance_version"))
+        by_from[k] = by_from.get(k, 0) + 1
+    result = {"char_id": char_id, "to": cur, "count": len(stale),
+              "by_kind": by_kind, "from": by_from, "dry_run": dry_run, "backup": None}
+    if dry_run or not stale:
+        return result
+
+    src = index_file(char_id)
+    if src.exists():
+        stamp = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
+        backup = src.with_name(f"{src.name}.bak_{stamp}_rebless前")
+        backup.write_text(src.read_text(encoding="utf-8"), encoding="utf-8")
+        result["backup"] = backup.name
+    for e in stale:
+        e["appearance_version"] = cur
+    idx.setdefault("rebless_log", []).append({
+        "at": _now(), "to": cur, "from": by_from, "count": len(stale),
+        "by_kind": by_kind, "note": note,
+    })
+    save_index(char_id, idx)
+    return result
+
+
+def _same_source(src: dict | None, project_id: str, episode: int, line_id: str) -> bool:
+    """取り込み元の行が一致するか。
+
+    ⚠️ **3つ揃えて照合する。** `line_id` は話数ごとに 001 から振り直されるので、
+    `line_id` だけで突き合わせると**別プロジェクトの同じ行番号と衝突する**
+    （CHARACTER_CUTOUT_PLAN.md §11-6 で一度踏んだ穴と同じ）。
+    """
+    if not isinstance(src, dict):
+        return False
+    return (src.get("project_id") == project_id
+            and int(src.get("episode") or 0) == int(episode)
+            and src.get("line_id") == line_id)
+
+
+def demote_from_line(char_ids: list[str], project_id: str, episode: int,
+                     line_id: str) -> list[str]:
+    """その行から取り込んだ在庫を ``pending`` へ降格する（**削除はしない**）。
+
+    行を作り直す動機の大半は「絵が気に入らない」なので、その絵を在庫に残したままだと
+    **後の話数で自動的に配布される**。降格すれば自動消費（``find_current`` /
+    ``cutout_selector.candidates``）から外れる。
+
+    ⚠️ 消さないのは、アーカイブが**話数を越えた共有資産**だから。台本が変わったから
+    作り直した場合、前の絵は資産としては無傷。良い絵なら切り抜きタブで承認し直せば戻る。
+    機械は「自動配布を止める」ところまでにして、可否の判断は人に残す。
+    """
+    touched = []
+    for char_id in [c for c in char_ids if c]:
+        idx = load_index(char_id)
+        hit = [e for e in idx.get("entries", [])
+               if _same_source(e.get("source"), project_id, episode, line_id)
+               and e.get("review_status", "approved") == "approved"]
+        if not hit:
+            continue
+        for e in hit:
+            e["review_status"] = "pending"
+            e["note"] = (e.get("note") or "") + \
+                f"[{_now()}] {line_id} を作り直したため自動降格"
+            touched.append(f"{char_id}/{e['slot_id']}")
+        save_index(char_id, idx)
+    return touched
+
+
+def usable_as(entry: dict) -> dict:
+    """その entry が**何に使えるか**。⚠️ `kind` ではなく実際に持っているもので判定する。
+
+    `kind` は「何であるか」ではなく「**どこから来たか**」の記録でしかない
+    （psassist が取り込んだ194枚は `kind="cutout"`、コンテナが作るものは既定の `"panel"`）。
+    2026-08-27 に背景除去が入って以降の entry は**1枚の絵から `image` と `cutout` を両方持つ**ので、
+    `kind` では用途を答えられなくなった ── panel と cutout は「別の在庫」ではなく、
+    同じ絵の「背景付きの姿」と「切り抜いた姿」。詳細は
+    `psassist/Docs/CHARACTER_CUTOUT_PLAN.md` §14-0。
+
+    ここが「使えるか」の唯一の定義。`find_current`（完成コマを配る）と
+    `cutout_selector.candidates`（合成素材を配る）の両方がこれを使う＝二重定義で食い違わせない。
+    """
+    return {
+        # 背景付きの完成コマ。そのまま1コマとして配れる
+        "panel": bool(entry.get("image")),
+        # 背景を抜いた合成素材。指紋が無いと「近すぎないか」を測れず選べないので両方を条件にする
+        "cutout": bool(entry.get("cutout") and (entry.get("fingerprint") or {}).get("dhash")),
+    }
+
+
 def list_entries(char_id: str, *, emotion: str = "", shot: str = "", angle: str = "",
                  kind: str = "panel") -> list[dict]:
-    """索引一覧を返す。各entryに is_stale（世代違いか）と review_status（欠落は"approved"扱い）を正規化して付与する。
+    """索引一覧を返す。各entryに is_stale / review_status / **usable** を正規化して付与する。
 
     kind: 既定は "panel"＝そのまま1コマになる画像だけ。"cutout"（背景を抜いた合成素材・
     2026-08-25に196枚を取り込み）は `image` を持たないため、既定の一覧に混ぜると
     UIのサムネイルが全滅する。空文字を渡すと全種別を返す。
+
+    ⚠️ **UIは `kind` ではなく `usable` を見ること**（`usable_as` 参照）。`kind` は出自の記録で、
+    2026-08-27以降の entry は `image` と `cutout` を両方持つ＝どちらの用途にも使える。
+    統合在庫タブは `kind=""` で全種別を取り、`usable` で見せ分ける。
     """
     current = appearance_version(char_id)
     out = []
@@ -110,6 +232,7 @@ def list_entries(char_id: str, *, emotion: str = "", shot: str = "", angle: str 
             **e,
             "is_stale": e.get("appearance_version") != current,
             "review_status": e.get("review_status", "approved"),
+            "usable": usable_as(e),
         })
     return out
 
@@ -133,9 +256,12 @@ def find_current(char_id: str, emotion: str, shot: str, angle: str) -> dict | No
     current = appearance_version(char_id)
     candidates = [
         e for e in load_index(char_id).get("entries", [])
-        # ⚠️ kind="cutout" は背景を抜いた合成素材。そのまま配ると背景の無いコマになる。
-        #    切り抜きの選択は指紋ベースの別系統で行う（CHARACTER_CUTOUT_PLAN.md §10）。
-        if e.get("kind", "panel") == "panel"
+        # ⚠️ 背景を抜いただけの合成素材（image を持たない）は配らない。そのまま渡すと
+        #    背景の無いコマになる。切り抜きの選択は指紋ベースの別系統で行う
+        #    （CHARACTER_CUTOUT_PLAN.md §10）。
+        #    判定は kind ではなく **image を持つか**（kind は出自の記録であって用途ではない。
+        #    2026-08-27以降の entry は image と cutout を両方持つ。usable_as 参照）
+        if usable_as(e)["panel"]
         and e.get("emotion") == emotion and e.get("shot") == shot and e.get("angle") == angle
         and e.get("appearance_version") == current
         and e.get("review_status", "approved") == "approved"
@@ -209,6 +335,64 @@ def approve_entry(char_id: str, slot_id: str) -> dict | None:
     return None
 
 
+def update_entry(char_id: str, slot_id: str, *,
+                 emotion: str | None = None, shot: str | None = None,
+                 angle: str | None = None, pose: str | None = None,
+                 note: str | None = None) -> dict | None:
+    """entryのラベル（演技スロット）を人が直す。Noneを渡した軸は触らない。
+
+    LLMが付けたラベルは実測で emotion 51%（似た感情の群で見れば76%）しか当たらない。
+    分類器は作らないと決めた以上、個別の誤りは人がここで直すしかない
+    （memory: emotion-label-accuracy-measured）。
+
+    ⚠️ **slot_idは書き換えない。** slot_idは実体ファイル名（images/・cutouts/）であり、
+    aroll.jsonの cutout_slot_id / library_slot_id が指す先でもある。ラベルを直すたびに
+    改名すると話数をまたいだ参照が全部切れる。slot_idは「作られた時の分類が残った
+    識別子」であって現在のラベルではない ── UIでもそう見せること。
+
+    直した軸があれば ``label_source="user"`` を刻む。以後その1枚は「機械のラベルが
+    どれだけ当たるか」を測る母集団から外せる（人が答えを入れた以上、必ず一致するので
+    混ぜると精度を水増しする）。
+
+    空文字は「未設定に戻す」＝許可する。emotionが空の在庫は find_current に引かれない
+    （感情未指定の行は自動割当を拒否する、という安全弁と同じ側に倒れるだけ）。
+    """
+    vocab = panel_presets.load_presets()
+    axes = {"emotion": emotion, "shot": shot, "angle": angle, "pose": pose}
+    for axis, val in axes.items():
+        if not val:
+            continue
+        if val not in {i.get("id") for i in vocab.get(axis, [])}:
+            raise ValueError(f"{axis} に無い値です: {val}（panel_presets の語彙から選んでください）")
+
+    data = load_index(char_id)
+    for e in data.get("entries", []):
+        if e.get("slot_id") != slot_id:
+            continue
+        changed = []
+        for axis, val in axes.items():
+            if val is None:
+                continue
+            # poseだけ「未設定=None」で持つ（register_from_imageの pose or None と同じ表現）
+            new = (val or None) if axis == "pose" else val
+            if e.get(axis) != new:
+                e[axis] = new
+                changed.append(axis)
+        if note is not None and e.get("note") != note:
+            e["note"] = note
+            changed.append("note")
+        if changed:
+            if [c for c in changed if c != "note"]:
+                e["label_source"] = "user"
+            e["edited_at"] = _now()
+            save_index(char_id, data)
+        return {**e,
+                "is_stale": e.get("appearance_version") != appearance_version(char_id),
+                "review_status": e.get("review_status", "approved"),
+                "changed": changed}
+    return None
+
+
 def _next_slot_id(emotion: str, shot: str, angle: str, existing: set[str]) -> str:
     base = f"{emotion}_{shot}_{angle}"
     n = 1
@@ -219,8 +403,22 @@ def _next_slot_id(emotion: str, shot: str, angle: str, existing: set[str]) -> st
         n += 1
 
 
+def trash_dir(char_id: str) -> Path:
+    return library_dir(char_id) / "trash"
+
+
 def delete_entry(char_id: str, slot_id: str) -> bool:
-    """索引から除去し、実体ファイルも削除する。存在しなければFalse。"""
+    """索引から除去し、実体ファイルを **trash/ へ退避**する。存在しなければFalse。
+
+    ⚠️ **2026-08-29: 完全削除をやめて、取り消せる形にした。** 多様性検査を撤去して
+    「近すぎる絵は人が見て削除する」運用に寄せた以上、削除が日常操作になる。
+    日常操作が取り消せないのは危ない（`rebless` には索引のバックアップがあるのに、
+    削除だけ無かった＝非対称だった）。
+
+    trash/ は機械が読まない（`load_index` は索引しか見ないので、退避した絵が
+    自動配布に復活することはない）。戻したい時は人がファイルを戻して再取り込みする。
+    容量が気になったら trash/ を手で空にすればよい。
+    """
     data = load_index(char_id)
     entries = data.get("entries", [])
     target = next((e for e in entries if e.get("slot_id") == slot_id), None)
@@ -228,6 +426,13 @@ def delete_entry(char_id: str, slot_id: str) -> bool:
         return False
     data["entries"] = [e for e in entries if e.get("slot_id") != slot_id]
     save_index(char_id, data)
+
+    stamp = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
+    dest = trash_dir(char_id)
+    # 索引の断片も一緒に残す（どのラベル・どの由来の絵だったかが分からないと戻せない）
+    dest.mkdir(parents=True, exist_ok=True)
+    (dest / f"{stamp}_{slot_id}.json").write_text(
+        json.dumps(target, ensure_ascii=False, indent=2), encoding="utf-8")
     # kind="cutout" は image を持たず cutout だけを持つ。Noneをパス結合に渡すと落ちるので両方見る。
     for key, root in (("image", images_dir(char_id)), ("cutout", library_dir(char_id) / "cutouts")):
         rel = target.get(key)
@@ -236,7 +441,7 @@ def delete_entry(char_id: str, slot_id: str) -> bool:
         f = (library_dir(char_id) / rel).resolve()
         if f.is_relative_to(root.resolve()) and f.is_file():
             try:
-                f.unlink()
+                f.replace(dest / f"{stamp}_{key}_{f.name}")
             except OSError:
                 pass
     return True
@@ -260,12 +465,58 @@ def _resolve_refs(char_id: str) -> list[tuple[bytes, str, str]]:
     return refs
 
 
+MAX_ATTEMPTS = 3   # 初回＋再試行2回。落ちるたびに課金されるので上限を持つ
+
+
+async def _generate_and_measure(
+    char_id: str, prompt: str, refs: list, model: str,
+) -> tuple[bytes, bytes | None, dict | None, str]:
+    """生成 → 背景除去 → 指紋。**弾かない・作り直さない。**
+
+    ⚠️ **2026-08-29: 受け入れ検査（既存と近すぎたら作り直す）を撤去した。**
+    在庫は「似ているが少し違う絵」に価値がある（CHARACTER_CUTOUT_PLAN.md §6）のに、
+    検査はそれを捨てていた。実測（本番194枚を1枚ずつ検査に通す再現）:
+
+    - **29枚（15%）が却下**される
+    - うち **26枚（90%）は別スロット**に対する却下 ── 指紋は意図的に寸法を捨てる
+      （`cutout_selector.distance` 参照）ので、バストアップが顔アップと「似ている」と
+      判定される。合成素材としては別物なのに落ちる
+    - うち **25枚は実際に本編で使われている**
+
+    つまり検査を通していたら、現に使っている絵の15%が存在しなかった。今の在庫が
+    成立しているのは `import_cutouts.py` が検査を通さず一括投入したからでしかない。
+
+    指紋距離は**選択**（隣の行と似ていないか＝`cutout_selector.candidates`）には効くが、
+    **保存**の可否には使えない。物差しの目的が違う。近すぎる絵は人が見て削除すればよい
+    （`nearest_in_stock` で「似ている在庫」を提示する）。
+
+    背景除去と指紋は**常に行う**（撤去前は check=False が「切り抜きも作らない」を
+    兼ねていて、バリアント一括生成が切り抜きを持てなかった。ここを分離した）。
+    """
+    data = await nanobanana_client.generate_one(
+        prompt, refs, aspect="16:9", allow_fallback=False, model=(model.strip() or None),
+    )
+    rgba, info = cutout_engine.cut_out(Image.open(io.BytesIO(data)))
+    fp = fingerprint.for_entry(rgba)
+    if not fp.get("dhash"):
+        # アルファが空＝切り抜きに失敗。絵自体は課金済みなので捨てない（パネルとしては使える）
+        return data, None, None, "背景を抜くとアルファが空だった（切り抜き方式=%s）" % info.get("effective")
+    buf = io.BytesIO()
+    rgba.save(buf, "PNG")
+    return data, buf.getvalue(), fp, ""
+
+
 async def generate_and_register(
     char_id: str, *, emotion: str, shot: str, angle: str, pose: str = "",
     style_name: str = "kamishibai", model: str = "", replace_stale: bool = True,
     review_status: str = "approved",
 ) -> dict:
     """1スロット生成し、panel_library/images/へ保存・索引登録して返す。
+
+    背景を抜いて指紋を計算し、透過PNGを cutouts/ に保存する＝**その場で切り抜きの在庫にもなる**。
+    ⚠️ 2026-08-29に受け入れ検査（既存と近すぎたら作り直す）を撤去した。理由は
+    ``_generate_and_measure`` の docstring（実測で本番在庫の15%を捨てていた）。
+    生成した絵は**必ず登録する**。近すぎる絵は人が見て削除する運用に変えた。
 
     replace_stale=True（既定）: 同じ(emotion,shot,angle)を持つ旧世代（appearance_version不一致）
     のentryがあれば実体ごと削除してから追加する（世代混在を索引に残さない）。
@@ -276,9 +527,24 @@ async def generate_and_register(
     find_current（Aロール消費）の対象になる（同一キャラなのに瞳の色が違う等の個体差が
     無審査で本番に流れるのを防ぐ。Docs/AROLL_ASSET_PLAN.md §14参照）。
     """
+    # ⚠️ 空だと fragment() が黙って断片を落とし、_next_slot_id が "__001" のような
+    # 壊れたslot_idを作る。emotion/shot/angleはfind_currentの照合キーそのものなので、
+    # 1つでも空だとその在庫はfind_currentから永久に選ばれない（無言で課金が捨てられる）。
+    # generate_variants() もこの関数を1呼び出しにつき1回呼ぶので、ここ1箇所で両方を守る。
+    if not (emotion and shot and angle):
+        raise ValueError("emotion・shot・angle は全て必須です"
+                         "（空だと在庫が自動割当から見えなくなり、課金だけ発生します）")
+
+    # 画像生成の可否は character_manager.can_generate_images が本籍
+    # （uses_images ・ appearance_prompt ・ reference の3段。判定順で理由が変わる）。
+    # ⚠️ ここで自前の判定を書かないこと ── 以前は旧の紙芝居経路とここで別々に書いていて、
+    # 片方だけ直した結果「外見があれば通す」判定が残り、外見だけ複製した Voice バリアント
+    # キャラを通してしまっていた（同じキャラの並行在庫ができる穴）。
+    # generate_variants() もこの関数を1バリアントにつき1回呼ぶので、ここ一箇所で両方を守る。
+    ok, why = character_manager.can_generate_images(char_id)
+    if not ok:
+        raise ValueError(why)
     c = character_manager.read_character(char_id)
-    if not c:
-        raise ValueError(f"character not found: {char_id}")
     appearance = (c.get("appearance_prompt") or "").strip()
     style = style_manager.get_style(style_name) or {}
     prefix = (style.get("prefix") or "").strip()
@@ -290,9 +556,7 @@ async def generate_and_register(
     prompt = f"{body}, {BACKGROUND_FRAGMENT}. {PROMPT_SUFFIX}"
     refs = _resolve_refs(char_id)
 
-    data = await nanobanana_client.generate_one(
-        prompt, refs, aspect="16:9", allow_fallback=False, model=(model.strip() or None),
-    )
+    data, cut_png, fp, cut_note = await _generate_and_measure(char_id, prompt, refs, model)
 
     ver = appearance_version(char_id)
     idx = load_index(char_id)
@@ -317,6 +581,9 @@ async def generate_and_register(
     slot_id = _next_slot_id(emotion, shot, angle, existing_ids)
     images_dir(char_id).mkdir(parents=True, exist_ok=True)
     (images_dir(char_id) / f"{slot_id}.png").write_bytes(data)
+    if cut_png:
+        (library_dir(char_id) / "cutouts").mkdir(parents=True, exist_ok=True)
+        (library_dir(char_id) / "cutouts" / f"{slot_id}.png").write_bytes(cut_png)
 
     entry = {
         "slot_id": slot_id,
@@ -329,13 +596,74 @@ async def generate_and_register(
         "prompt": prompt,
         "provider": "nanobanana",
         "created_at": _now(),
-        "note": "",
+        # 切り抜きに失敗した場合だけ理由を残す（絵はパネルとして使えるので登録は続ける）
+        "note": cut_note,
         "review_status": review_status,
         "times_used": 0,
     }
+    if cut_png:
+        entry |= {"cutout": f"cutouts/{slot_id}.png", "fingerprint": fp}
     idx["entries"].append(entry)
     save_index(char_id, idx)
     return entry
+
+
+def register_from_image(
+    char_id: str, data: bytes, *, emotion: str, shot: str, angle: str,
+    pose: str = "", prompt: str = "", style_name: str = "kamishibai",
+    model: str = "", provider: str = "nanobanana", source: dict | None = None,
+    review_status: str = "approved",
+) -> dict:
+    """**既にある画像**を切り抜いて在庫へ登録する（生成はしない）。
+
+    Aロールで作った絵を、人が承認した時点で資産化するための入口。
+    ``generate_and_register`` との違いは「新しく描かない」ことだけで、
+    背景除去 → 指紋 → 登録の流れは同じ。
+
+    ⚠️ **2026-08-29に多様性検査を撤去した。** 撤去前はここで「既存と近すぎる」と判定された絵が
+    ``registered: False`` で**黙ってアーカイブから外れていた** ── 人が目視して承認した直後の絵なのに。
+    実測では本番在庫の15%（うち25枚は実際に本編で使用中）がこれで消える計算だった。
+    理由の詳細は ``_generate_and_measure`` の docstring。
+
+    ⚠️ **冪等**。同じ行の同じ画像は二度登録しない（``source.image_hash`` で照合）。
+    承認 → 別の編集 → 再承認、が日常的に起きるため、ここが冪等でないと在庫が重複で膨らむ。
+    """
+    img_hash = hashlib.sha256(data).hexdigest()[:16]
+    src = dict(source or {}, image_hash=img_hash)
+    idx = load_index(char_id)
+    for e in idx.get("entries", []):
+        if (e.get("source") or {}).get("image_hash") == img_hash:
+            return {"registered": False, "reason": "同じ画像が既に在庫にある",
+                    "slot_id": e.get("slot_id")}
+
+    rgba, info = cutout_engine.cut_out(Image.open(io.BytesIO(data)))
+    fp = fingerprint.for_entry(rgba)
+    if not fp.get("dhash"):
+        # 切り抜きに失敗した絵だけは積まない（cutout も指紋も無い entry は用途が無い）
+        return {"registered": False,
+                "reason": "背景を抜くとアルファが空だった（方式=%s）" % info.get("effective")}
+
+    ver = appearance_version(char_id)
+    slot_id = _next_slot_id(emotion, shot, angle, {e["slot_id"] for e in idx["entries"]})
+    images_dir(char_id).mkdir(parents=True, exist_ok=True)
+    (images_dir(char_id) / f"{slot_id}.png").write_bytes(data)
+    (library_dir(char_id) / "cutouts").mkdir(parents=True, exist_ok=True)
+    buf = io.BytesIO()
+    rgba.save(buf, "PNG")
+    (library_dir(char_id) / "cutouts" / f"{slot_id}.png").write_bytes(buf.getvalue())
+
+    entry = {
+        "slot_id": slot_id, "emotion": emotion, "shot": shot, "angle": angle,
+        "pose": pose or None, "appearance_version": ver, "aspect": "16:9",
+        "image": f"images/{slot_id}.png", "cutout": f"cutouts/{slot_id}.png",
+        "fingerprint": fp, "cutout_method": info.get("effective"),
+        "style": style_name, "model": model or None, "prompt": prompt,
+        "provider": provider, "source": src, "created_at": _now(), "note": "",
+        "review_status": review_status, "times_used": 0,
+    }
+    idx["entries"].append(entry)
+    save_index(char_id, idx)
+    return {"registered": True, "reason": "", "slot_id": slot_id, "entry": entry}
 
 
 async def generate_variants(
@@ -350,6 +678,12 @@ async def generate_variants(
 
     生成物は全てreview_status="pending"で登録される。承認するまでfind_current（Aロール消費）
     からは見えない＝人が目視確認してapprove_entry()を呼ぶまで本番に流れない設計。
+    ⚠️ これは**個体差（同一キャラなのに瞳の色が違う等）に対する人のレビュー**であって、
+    撤去した多様性検査とは別物。こちらは残す。
+
+    2026-08-29: 多様性検査の撤去に伴い、この経路も**切り抜きと指紋を持つようになった**
+    （撤去前は check_diversity=False が「背景除去もしない」を兼ねていたため、バリアントは
+    ✂️切り抜きの在庫にならなかった）。承認すれば合成素材としても使える。
     """
     entries = []
     for pose in poses:

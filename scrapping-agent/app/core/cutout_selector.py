@@ -98,9 +98,24 @@ def _ref(char_id: str, slot_id: str) -> str:
 # --------------------------------------------------------------------- 選択
 
 
+def _pose_conflicts(want: str | None, have: str | None) -> bool:
+    """アクション（pose）が**両側に値がある時だけ**制約になる。
+
+    ⚠️ 「要求された pose と一致すること」を課してはいけない。実測（2026-08-27）:
+    要求側は現行モデルで 54/54 行が pose を答えるのに対し、**在庫側は194件中185件が
+    None**（pose を取りこぼしていた頃に作られた資産のため）。一致を要求すると
+    在庫がほぼ全滅し、再利用そのものが止まる。
+
+    そこで「分からないものは制約にしない・分かっていて食い違う時だけ弾く」に倒す。
+    今日は何も弾かないが、pose を持つ在庫が増えるにつれて自然に効き始める。
+    """
+    return bool(want and have and want != have)
+
+
 def candidates(char_id: str, emotion: str | None, ov: dict | None = None,
                extra_uses: dict[str, int] | None = None,
-               allow_unknown_emotion: bool = False) -> list[dict]:
+               allow_unknown_emotion: bool = False,
+               pose: str | None = None) -> list[dict]:
     """適格な在庫を返す（適格性＝キャラ・世代・承認・感情・banned・使用回数上限）。
 
     extra_uses: `char_id/slot_id` → 試算中に消費した回数。**上限判定に必ず含める**。
@@ -120,7 +135,13 @@ def candidates(char_id: str, emotion: str | None, ov: dict | None = None,
     current = panel_library_manager.appearance_version(char_id)
     out = []
     for e in panel_library_manager.load_index(char_id).get("entries", []):
-        if e.get("kind") != "cutout" or not e.get("cutout"):
+        # 適格の条件は「透過PNGと指紋を持つこと」であって kind ではない。
+        # psassist が取り込んだ194枚は kind="cutout"（image を持たない）だが、
+        # 生成時に背景を抜くようになってからの entry は kind="panel" のまま
+        # cutout と fingerprint を併せ持つ（同じ絵なので entry を分けない）。
+        # ⚠️ 条件の本籍は panel_library_manager.usable_as（find_current と同じ定義を使う＝
+        #    二重に書いて片方だけ直す事故を防ぐ）。
+        if not panel_library_manager.usable_as(e)["cutout"]:
             continue
         if e.get("appearance_version") != current:
             continue  # 世代違い＝外見が変わっている。混ぜると衣装が途中で変わる
@@ -134,6 +155,8 @@ def candidates(char_id: str, emotion: str | None, ov: dict | None = None,
             continue  # ラベルが実際の表情とずれている分の人手補正
         elif not allowed and emotion and e.get("emotion") != emotion:
             continue
+        if _pose_conflicts(pose, e.get("pose")):
+            continue  # 分かっていて食い違う時だけ弾く（詳細は _pose_conflicts）
         cap = o.get("max_uses", th["max_uses"])
         uses = e.get("times_used", 0) + extra_uses.get(_ref(char_id, e["slot_id"]), 0)
         if cap is not None and uses >= cap:
@@ -160,10 +183,12 @@ def select(char_id: str, emotion: str | None, recent: list[dict],
     return _select_from(cands, recent, thresholds())
 
 
-def plan_episode(char_of_line: list[tuple[str, str | None]]) -> list[dict]:
+def plan_episode(char_of_line: list[tuple[str | None, dict | None]]) -> list[dict]:
     """話数まるごとの割当を試算する（ドライラン。times_used は増やさない）。
 
-    char_of_line: 台本の並び順に [(char_id, emotion), ...]。2人写り等は (None, _) を渡す。
+    char_of_line: 台本の並び順に [(char_id, slot), ...]。2人写り等は (None, _) を渡す。
+      slot は行が要求する演技（`aroll.json` の `panels[].slot`）。emotion が適格性の主軸で、
+      pose は「在庫側にも値があって食い違う時だけ」制約になる（_pose_conflicts）。
 
     返り値の `entry` が None の行が**新規生成すべき行**。予算のつまみは
     「この行数のうち何枚を実際に生成するか」であって、モードの選択ではない（§7-4）。
@@ -173,7 +198,9 @@ def plan_episode(char_of_line: list[tuple[str, str | None]]) -> list[dict]:
     used: dict[str, int] = {}
     assigned: list[dict] = []
     plan = []
-    for char_id, emotion in char_of_line:
+    for char_id, slot in char_of_line:
+        slot = slot or {}
+        emotion, pose = slot.get("emotion"), slot.get("pose")
         if not char_id:
             plan.append({"entry": None, "reason": "キャラ未確定（2人写り等）"})
             assigned.append({})
@@ -185,10 +212,12 @@ def plan_episode(char_of_line: list[tuple[str, str | None]]) -> list[dict]:
             continue
         recent = [a for a in assigned[-th["recent_window"]:] if a]
         # 試算中の消費を上限判定ごと反映する（含めないと同じ絵を無限に使えてしまう）
-        entry, why = _select_from(candidates(char_id, emotion, ov, used), recent, th)
+        entry, why = _select_from(
+            candidates(char_id, emotion, ov, used, pose=pose), recent, th)
         if entry:
             used[_ref(char_id, entry["slot_id"])] = used.get(_ref(char_id, entry["slot_id"]), 0) + 1
-        plan.append({"entry": entry, "reason": why, "char_id": char_id, "emotion": emotion})
+        plan.append({"entry": entry, "reason": why, "char_id": char_id,
+                     "emotion": emotion, "pose": pose})
         assigned.append(entry or {})
     return plan
 
@@ -217,22 +246,40 @@ def _select_from(cands: list[dict], recent: list[dict], th: dict) -> tuple[dict 
     return best, "距離 %.3f・使用 %d回" % (near, best.get("times_used", 0))
 
 
-def accept_new(char_id: str, fingerprint: dict, ov: dict | None = None) -> tuple[bool, str]:
-    """**生成物の受け入れ検査。** 既存在庫と近すぎる新規画像は採用しない。
+def nearest_in_stock(char_id: str, fingerprint: dict, *, limit: int = 5,
+                     exclude_slot_id: str = "") -> list[dict]:
+    """在庫の中で**指紋が近い順**に並べて返す（近い＝見た目が似ている）。
 
-    実測: 全196行を新規生成した回でも、既存と指紋が近い絵が出ていた
-    （§10-4）。**新規生成は多様性を保証しない**ので、作ってから測って落とす。
-    画像モデルに指紋を渡す方法が無い以上、これが唯一の効く手当て。指紋計算はタダ。
+    ⚠️ **2026-08-29まで、これは受け入れ検査 `accept_new` だった**（近すぎる新規画像を
+    アーカイブから弾く）。撤去した理由は `panel_library_manager._generate_and_measure`
+    の docstring にある ── 指紋は意図的に寸法を捨てるので、バストアップと顔アップが
+    「似ている」と判定され、実測で本番在庫の15%（うち25枚は使用中）を落としていた。
+
+    **弾くのをやめて、人に見せる道具に変えた。** 「あまりに似ている絵」は人が並べて見て
+    削除すればよい。閾値 `repetitive_below` は**選択**（`candidates` の使い回し判定）では
+    今も現役だが、ここでは**並べ替えにしか使わない**（`too_close` は目安の色付け用）。
+
+    ⚠️ 比較相手は `candidates()` と同じく**現世代（appearance_version 一致）だけ**。
+    世代違いはもう配られない在庫なので、似ていても意味がない。
     """
     th = thresholds()
-    worst = 1.0
-    hit = None
+    current = panel_library_manager.appearance_version(char_id)
+    out = []
     for e in panel_library_manager.load_index(char_id).get("entries", []):
-        if e.get("kind") != "cutout":
+        if not (e.get("fingerprint") or {}).get("dhash"):
+            continue  # 指紋の無い entry（背景込みのパネルだけ）は比較対象にならない
+        if e.get("appearance_version") != current:
+            continue
+        if exclude_slot_id and e.get("slot_id") == exclude_slot_id:
             continue
         d = distance(fingerprint, e.get("fingerprint"))
-        if d < worst:
-            worst, hit = d, e.get("slot_id")
-    if worst < th["repetitive_below"]:
-        return False, "既存 %s と近すぎる（距離 %.3f < %.3f）" % (hit, worst, th["repetitive_below"])
-    return True, "既存で最も近いものとの距離 %.3f" % worst
+        out.append({
+            "slot_id": e.get("slot_id"), "distance": round(d, 4),
+            "emotion": e.get("emotion"), "shot": e.get("shot"), "angle": e.get("angle"),
+            "times_used": e.get("times_used", 0),
+            "review_status": e.get("review_status", "approved"),
+            # 目安の色付け用。**弾くための判定ではない**（選択側の閾値を流用しているだけ）
+            "too_close": d < th["repetitive_below"],
+        })
+    out.sort(key=lambda x: x["distance"])
+    return out[:limit]

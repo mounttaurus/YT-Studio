@@ -262,6 +262,88 @@ async def generate_background(req: BackgroundGenerateRequest):
     return {"backgrounds": created}
 
 
+MAX_UPLOAD_BYTES = 25 * 1024 * 1024
+
+
+@router.post("/backgrounds/upload")
+async def upload_background(
+    file: UploadFile = File(...),
+    category: str = Form(...),            # location | psych | comic | effect | backdrop
+    spot: str = Form(""), motif: str = Form(""), era: str = Form(""),
+    light: str = Form(""), camera: str = Form(""), framing: str = Form(""),
+    form: str = Form(""), effect: str = Form(""),
+    mood: str = Form(""),                 # カンマ区切り（フォームから配列を送らせない）
+    is_keyframe: bool = Form(False),
+    note: str = Form(""), source_url: str = Form(""), license: str = Form(""),
+    style: str = Form(""),
+):
+    """ユーザーが持ち込んだ背景画像を1枚アーカイブへ登録する（**生成しない**）。
+
+    自分で撮った/描いた画像、Vecteezy等で調達した素材が対象。ホスト側の
+    psassist/scripts/register_backgrounds.py と同じスキーマで索引に載せるので、
+    以後は生成した背景と区別なく検索・自動割当の対象になる。
+
+    ⚠️ 自動割当が読む軸（framing / light / camera / mood）は**語彙で固定**する。
+    自由入力を許すと割当が黙って劣化する。キーワード（spot/motif/era/form/effect）は
+    人の分類ラベルなので自由入力を許す。
+    """
+    data = await file.read()
+    if not data:
+        raise HTTPException(status_code=400, detail="ファイルが空です")
+    if len(data) > MAX_UPLOAD_BYTES:
+        raise HTTPException(
+            status_code=413,
+            detail=f"画像が大きすぎます（{len(data) // 1024 // 1024}MB / 上限 25MB）")
+    try:
+        return background_manager.register_upload(
+            data, category=category, spot=spot, motif=motif, era=era,
+            light=light, camera=camera, framing=framing, form=form, effect=effect,
+            mood=[m.strip() for m in mood.split(",") if m.strip()],
+            is_keyframe=is_keyframe, note=note, source_url=source_url,
+            license=license, style=style, filename=file.filename or "",
+        )
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+class BackgroundUpdateRequest(BaseModel):
+    """送らなかった項目（None）は触らない。空文字は「未設定に戻す」。"""
+    category: str | None = None
+    spot: str | None = None
+    motif: str | None = None
+    era: str | None = None
+    light: str | None = None
+    camera: str | None = None
+    framing: str | None = None
+    form: str | None = None
+    effect: str | None = None
+    mood: list[str] | None = None
+    is_keyframe: bool | None = None
+    style: str | None = None
+    note: str | None = None
+    source_url: str | None = None
+    license: str | None = None
+
+
+@router.patch("/backgrounds/{bg_id}")
+async def update_background(bg_id: str, req: BackgroundUpdateRequest):
+    """背景のメタデータを人が直す（画像は差し替えない）。
+
+    ⚠️ **bg_id は変わらない。** 実体ファイル名かつ aroll.json の background_id の参照先なので、
+    ラベルを直すたびに改名すると割当済みの行の参照が切れる。bg_id は識別子であって
+    現在のラベルではない（キャラ所有ライブラリの slot_id と同じ扱い）。
+    """
+    try:
+        entry = background_manager.update_background(
+            bg_id, mood=req.mood, is_keyframe=req.is_keyframe,
+            **req.model_dump(exclude={"mood", "is_keyframe"}))
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    if entry is None:
+        raise HTTPException(status_code=404, detail=f"background not found: {bg_id}")
+    return entry
+
+
 @router.delete("/backgrounds/{bg_id}")
 async def delete_background(bg_id: str):
     """索引から除去し実体ファイルも削除する。"""
@@ -309,7 +391,13 @@ class PanelLibraryGenerateRequest(BaseModel):
 
 @router.post("/characters/{char_id}/panel_library/generate")
 async def generate_panel_library_entry(char_id: str, req: PanelLibraryGenerateRequest):
-    """1スロット生成し、panel_library/images/へ保存・索引登録する。"""
+    """1スロット生成し、panel_library/images/へ保存・索引登録する。
+
+    背景除去まで済ませ、``entry["cutout"]`` と ``entry["fingerprint"]`` を持って返る
+    ＝その場で切り抜きの在庫にもなる。
+    ⚠️ 2026-08-29に受け入れ検査（既存と近すぎたら作り直す）を撤去した。生成した絵は必ず登録する
+    （理由は ``panel_library_manager._generate_and_measure``）。
+    """
     if character_manager.read_character(char_id) is None:
         raise HTTPException(status_code=404, detail=f"character not found: {char_id}")
     if not nanobanana_client.is_configured():
@@ -320,7 +408,10 @@ async def generate_panel_library_entry(char_id: str, req: PanelLibraryGenerateRe
             style_name=req.style, model=req.model, replace_stale=req.replace_stale,
         )
     except ValueError as e:
-        raise HTTPException(status_code=404, detail=str(e))
+        # ⚠️ ここに来る時点で character_manager.read_character は通過済み（キャラは実在する）。
+        # 残るValueErrorは emotion/shot/angle必須 と can_generate_images の3段
+        #（uses_images・appearance_prompt・reference）の入力検証なので400が正しい
+        raise HTTPException(status_code=400, detail=str(e))
     except Exception as e:
         raise HTTPException(status_code=502, detail=f"panel library generation failed: {e}")
     return entry
@@ -346,6 +437,11 @@ async def generate_panel_library_variants(char_id: str, req: PanelLibraryVariant
         raise HTTPException(status_code=404, detail=f"character not found: {char_id}")
     if not nanobanana_client.is_configured():
         raise HTTPException(status_code=400, detail="NanoBanana (GEMINI/OPENROUTER key) is not configured")
+    # 内部の generate_and_register も同じ判定で守られているが、N枚まとめて頼まれる経路なので
+    # 1枚目を試す前に返す（本籍は character_manager.can_generate_images の1箇所）
+    ok, why = character_manager.can_generate_images(char_id)
+    if not ok:
+        raise HTTPException(status_code=400, detail=why)
     if not req.poses:
         raise HTTPException(status_code=400, detail="poses must not be empty")
     try:
@@ -354,10 +450,29 @@ async def generate_panel_library_variants(char_id: str, req: PanelLibraryVariant
             style_name=req.style, model=req.model,
         )
     except ValueError as e:
-        raise HTTPException(status_code=404, detail=str(e))
+        # 同上（generate_and_register を内部で呼ぶので同じ検証が効く）
+        raise HTTPException(status_code=400, detail=str(e))
     except Exception as e:
         raise HTTPException(status_code=502, detail=f"panel library variant generation failed: {e}")
     return {"entries": entries}
+
+
+class PanelLibraryReblessRequest(BaseModel):
+    dry_run: bool = True        # 既定は試算。実行は明示的に false を送らせる
+    note: str = ""              # 「参照画像を足しただけ」等、後から理由を追えるように
+
+
+@router.post("/characters/{char_id}/panel_library/rebless")
+async def rebless_panel_library(char_id: str, req: PanelLibraryReblessRequest):
+    """世代違いの entry を現世代へ付け替える（「見た目は変わっていない」という人の宣言）。
+
+    ⚠️ **UIは必ず確認を挟むこと。** デザインを実際に変えた後に実行すると、古い外見の絵が
+    現世代の在庫として配られる。機械には区別できないので人が判断する操作。
+    既定は dry_run=true（件数の試算だけ）。
+    """
+    if character_manager.read_character(char_id) is None:
+        raise HTTPException(status_code=404, detail=f"character not found: {char_id}")
+    return panel_library_manager.rebless(char_id, dry_run=req.dry_run, note=req.note)
 
 
 @router.post("/characters/{char_id}/panel_library/{slot_id}/approve")
@@ -367,6 +482,58 @@ async def approve_panel_library_entry(char_id: str, slot_id: str):
     if entry is None:
         raise HTTPException(status_code=404, detail=f"panel library entry not found: {slot_id}")
     return entry
+
+
+class PanelLibraryEntryUpdateRequest(BaseModel):
+    """送らなかった軸（None）は触らない。空文字は「未設定に戻す」。"""
+    emotion: str | None = None
+    shot: str | None = None
+    angle: str | None = None
+    pose: str | None = None
+    note: str | None = None
+
+
+@router.patch("/characters/{char_id}/panel_library/{slot_id}")
+async def update_panel_library_entry(char_id: str, slot_id: str,
+                                     req: PanelLibraryEntryUpdateRequest):
+    """entryのラベル（emotion/shot/angle/pose）を人が直す。LLMの誤ラベルの受け皿。
+
+    ⚠️ **slot_idは変わらない。** 実体ファイル名かつ aroll.json の参照先なので、
+    ラベルを直すたびに改名すると話数をまたいだ参照が切れる。slot_idは識別子であって
+    現在のラベルではない（UIでもそう見せること）。
+    """
+    try:
+        entry = panel_library_manager.update_entry(
+            char_id, slot_id, emotion=req.emotion, shot=req.shot,
+            angle=req.angle, pose=req.pose, note=req.note)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    if entry is None:
+        raise HTTPException(status_code=404, detail=f"panel library entry not found: {slot_id}")
+    return entry
+
+
+@router.get("/characters/{char_id}/panel_library/{slot_id}/similar")
+async def similar_panel_library_entries(char_id: str, slot_id: str, limit: int = 5):
+    """その絵と**指紋が近い順**に在庫を返す（近い＝見た目が似ている）。
+
+    多様性検査を撤去した代わりの道具（2026-08-29）。機械が弾くのをやめたので、
+    「あまりに似ている絵」は人がここで並べて見て、要らない方を削除する。
+    ⚠️ `too_close` は目安の色付け用であって、**弾くための判定ではない**
+    （選択側の閾値 `repetitive_below` を流用しているだけ）。
+    """
+    entry = panel_library_manager.get_entry(char_id, slot_id)
+    if entry is None:
+        raise HTTPException(status_code=404, detail=f"panel library entry not found: {slot_id}")
+    fp = entry.get("fingerprint") or {}
+    if not fp.get("dhash"):
+        # 指紋の無い entry（背景込みのパネルだけ）は比較できない。空で返す（エラーにしない）
+        return {"slot_id": slot_id, "similar": [], "reason": "この絵には指紋がありません（切り抜き未生成）"}
+    return {
+        "slot_id": slot_id,
+        "similar": cutout_selector.nearest_in_stock(
+            char_id, fp, limit=max(1, min(limit, 20)), exclude_slot_id=slot_id),
+    }
 
 
 @router.delete("/characters/{char_id}/panel_library/{slot_id}")
@@ -1164,6 +1331,8 @@ class CharacterCreateRequest(BaseModel):
     description: str = ""
     caption: str = ""             # 字幕表示名（空ならnameを使う）
     voice: Optional[dict] = None  # {engine, voice_id} 声の本籍
+    # 画像を使うキャラか。未指定なら appearance_prompt の有無から推定（normalize_character）
+    uses_images: Optional[bool] = None
 
 
 class CharacterPatchRequest(BaseModel):
@@ -1174,6 +1343,7 @@ class CharacterPatchRequest(BaseModel):
     caption: Optional[str] = None
     voice: Optional[dict] = None   # {engine, voice_id} 指定時は丸ごと置換
     styles: Optional[dict] = None  # {style: {seed, loras, extra_prompt}} 部分更新
+    uses_images: Optional[bool] = None  # 画像を使うキャラか（Falseで画像生成の全経路から外れる）
 
 
 class CharacterGenerateRequest(BaseModel):
@@ -1210,7 +1380,7 @@ async def create_character(req: CharacterCreateRequest):
         raise HTTPException(status_code=409, detail=f"character already exists: {req.char_id}")
     return character_manager.create_character(
         req.char_id, req.name, req.appearance_prompt, req.description,
-        caption=req.caption, voice=req.voice,
+        caption=req.caption, voice=req.voice, uses_images=req.uses_images,
     )
 
 
@@ -1227,7 +1397,7 @@ async def patch_character(char_id: str, req: CharacterPatchRequest):
     char = character_manager.read_character(char_id)
     if char is None:
         raise HTTPException(status_code=404, detail=f"character not found: {char_id}")
-    for field in ("name", "description", "appearance_prompt", "provider", "caption"):
+    for field in ("name", "description", "appearance_prompt", "provider", "caption", "uses_images"):
         v = getattr(req, field)
         if v is not None:
             char[field] = v
@@ -1440,6 +1610,13 @@ async def generate_character_images(char_id: str, req: CharacterGenerateRequest)
     char = character_manager.read_character(char_id)
     if char is None:
         raise HTTPException(status_code=404, detail=f"character not found: {char_id}")
+    # ⚠️ この経路だけ require_reference=False。**リファレンス画像を作るための経路**
+    # だから（生成→⭐昇格で最初の1枚を得る）。ここを reference 必須にすると鶏と卵になる。
+    # 在庫には積まない経路なので「同じキャラの並行在庫」も生じない
+    #（ユーザー判断 2026-08-29。判定そのものは can_generate_images に集約したまま）。
+    ok, why = character_manager.can_generate_images(char_id, require_reference=False)
+    if not ok:
+        raise HTTPException(status_code=400, detail=why)
     base_style = style_manager.get_style(req.style)
     if base_style is None:
         raise HTTPException(status_code=400, detail=f"unknown style: {req.style}")
@@ -1554,13 +1731,13 @@ async def generate_panel(char_id: str, req: PanelGenerateRequest):
     char = character_manager.read_character(char_id)
     if char is None:
         raise HTTPException(status_code=404, detail=f"character not found: {char_id}")
-    # per-capability ゲート: 外見プロンプトが無いキャラは紙芝居を生成できない
-    #（声だけのキャラ等。各能力フィールドは独立に任意＝NULLキャラを作らない設計）。
-    if not (char.get("appearance_prompt") or "").strip():
-        raise HTTPException(
-            status_code=400,
-            detail="このキャラは外見(appearance_prompt)が未設定のため紙芝居を生成できません。🎭キャラタブで外見を設定してください",
-        )
+    # per-capability ゲート。判定の本籍は character_manager.can_generate_images
+    #（uses_images・appearance_prompt・reference の3段）。
+    # ⚠️ 以前はここに「外見の有無」だけの独自ガードが書かれており、
+    # panel_library 側と判定軸がズレていた。自前で書き直さないこと。
+    ok, why = character_manager.can_generate_images(char_id)
+    if not ok:
+        raise HTTPException(status_code=400, detail=why)
     if not nanobanana_client.is_configured():
         raise HTTPException(status_code=400, detail="NanoBanana (GEMINI/OPENROUTER key) is not configured")
     base_style = style_manager.get_style(req.style)
@@ -1844,6 +2021,30 @@ async def aroll_sync_accept(project_id: str, episode_number: int, req: ArollSync
     line_ids 省略時は unknown（生成時テキスト未記録の既存資産）だけを現在のテキストで確定する。
     """
     return aroll_manager.accept_current_text(project_id, episode_number, req.line_ids)
+
+
+class ArollApproveImagesRequest(BaseModel):
+    line_ids: list[str] | None = None   # 省略で全行。行ごとの再承認にも同じ口を使う
+    register: bool = True               # false にすると承認だけして在庫に積まない
+
+
+@router.post("/projects/{project_id}/episodes/{episode_number}/aroll/approve-images")
+async def aroll_approve_images(project_id: str, episode_number: int,
+                               req: ArollApproveImagesRequest):
+    """画像を承認し、**その時点で**キャラ所有ライブラリへ取り込む（台本/TTSの承認と同じ位置づけ）。
+
+    生成の瞬間ではなく承認の瞬間に積むのは、作り直して捨てた絵を在庫に入れないため。
+    取り込みは背景除去→指紋→多様性検査を通る。既存在庫と近すぎる絵は**積まないだけ**で、
+    その行の絵はそのまま使われる（作り直しも課金も発生しない）。
+
+    承認後に作り直す・在庫から差し替える・切り抜きを選び直すと承認は自動的に外れる。
+    作り直しの場合だけ、その行から取り込んだ在庫が `pending` へ降格する。
+    """
+    try:
+        return aroll_manager.approve_images(
+            project_id, episode_number, req.line_ids, register=req.register)
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e))
 
 
 @router.post("/projects/{project_id}/episodes/{episode_number}/aroll/normalize-filenames")

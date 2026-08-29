@@ -99,6 +99,9 @@ services:
     environment:
       - SHARED_DIR=/shared
       - MODELS_DIR=/imagegen_models
+      # 背景除去のフォールバックに使う rembg のモデル置き場（初回のみ自動DL・約176MB）
+      - REMBG_HOME=/rembg_models
+      - CUTOUT_AI_MODEL=isnet-anime
       - COMFY_URL=http://imagegen-agent:8188
       - COMFY_PUBLIC_URL=http://localhost:8188
       - SCRAP_PUBLIC_URL=http://localhost:8003
@@ -117,6 +120,8 @@ services:
       - ./shared:/shared
       # SD/LoRA/VAE はホストの imagegen-agent/models をユーザーが直接管理（UIのURL投入でここに保存）
       - ./imagegen-agent/models:/imagegen_models
+      # 背景除去のONNXモデル。名前付きvolumeを使わない鉄則に従いバインドで持つ
+      - ./scrapping-agent/rembg-models:/rembg_models
     networks:
       - youtube-auto-net
     restart: unless-stopped

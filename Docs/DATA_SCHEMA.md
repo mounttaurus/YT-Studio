@@ -317,11 +317,12 @@ director-agent UIの「全行に適用」操作で、script.json各行の`speed`
 
 ```json
 {
-  "schema_version": "1.2.0",
+  "schema_version": "1.3.0",
   "char_id": "001",
   "name": "AOI",
   "caption": "",
   "appearance_prompt": "...",
+  "uses_images": true,
   "description": "",
   "voice": {
     "engine": "irodori",
@@ -338,14 +339,21 @@ director-agent UIの「全行に適用」操作で、script.json各行の`speed`
 | フィールド | 意味 |
 |---|---|
 | `caption` | 字幕表示名。空なら `name` を使う |
-| `appearance_prompt` | 画像生成用の外見プロンプト（紙芝居/キャラ生成が参照） |
+| `appearance_prompt` | 画像生成用の外見プロンプト（キャラ生成・キャラ在庫が参照） |
+| `uses_images` | **画像を使うキャラか**（2026-08-29追加）。`false` なら画像生成の全経路が拒否する ── 声だけのナレーターや、既存キャラに声だけ変えて当てたバリアント向け。**「何を描くか」(`appearance_prompt`) とは別軸**で、外見が書いてあっても `false` なら弾く（同じキャラの並行在庫を作らないため）。可否の判定は `character_manager.can_generate_images` が唯一の本籍（`uses_images` → `appearance_prompt` → `reference/`の枚数 の順に見る） |
 | `voice.engine` | 声カタログのエンジン名前空間。空なら `config.tts.engine` を採用 |
 | `voice.voice_id` | 声カタログ内の項目 → `shared/voices/{engine}/{voice_id}.{ext}`（フラット運用＝stemがvoice_id。例 `KUJO-OK`→`KUJO-OK.mp3`）。字幕名・性格は character.json が本籍のため声側はファイル名のみ。※構造化dir(profile.json)は将来拡張余地として未使用 |
 | `reference_meta` | `reference/` 内画像の役割ラベル overlay（`{filename: {label}}`）。NanoBanana生成時に `Image N: <label>` としてプロンプトへ反映（人物/制服/ポーズ等の役割分担）。ファイル実体（glob）が存在の正、これはラベルの上乗せのみ |
 
 - **多言語/多エンジン**は将来 `voice` を配列 `voices: [{engine, lang, voice_id}]` に拡張可能（現状は単一）。
-- **schema_version**: character.json は **1.2.0**（`reference_meta` 追加＝後方互換のMINOR）。
+- **schema_version**: character.json は **1.3.0**（`uses_images` 追加＝後方互換のMINOR）。
   旧キャラ（voice/reference_meta 無し）は未割当・ラベル空として扱う。
+- ⚠️ **`uses_images` の既定値は推定**。旧データには無いので `appearance_prompt` が非空かどうかから
+  補完する（ナレーター等の空キャラは自動的に `false`）。**推定は既定値の決定にのみ使い、
+  以後の判定に `appearance_prompt` を代用しない** ── 明示値は推定に勝つ
+  （「外見は書いてあるが画像は使わない」を表現できなくなるため）。
+  一度保存すれば明示値として永続化される。設計の経緯は
+  `psassist/Docs/CHARACTER_CUTOUT_PLAN.md` §15。
 
 ### キャラエクスポート/インポート（zipバンドル、2026-06-23追加）
 

@@ -9,6 +9,7 @@ shared/characters/{char_id}/
 character.json 構造:
   char_id, name, description
   appearance_prompt: 外見の固定プロンプト（キャラシート。髪・服装・体型等）
+  uses_images: 画像を使うキャラか（Falseなら画像生成の全経路で弾く。声だけのナレーター等）
   styles: { "comic"|"realistic"|"deformed": {"seed": int|null, "loras": [...], "extra_prompt": ""} }
   provider: "comfy"（Phase 3で"nanobanana"追加予定）
   generations: 生成履歴 [{filename, style, expression, seed, prompt, created_at}]
@@ -26,7 +27,8 @@ CHARACTERS_DIR = SHARED_DIR / "characters"
 CHARACTER_STYLES = ["comic", "realistic", "deformed"]
 
 # character.json の現行スキーマ版。書き込み時に必ずこの値へスタンプし直す（旧ラベルのドリフトを断つ）。
-SCHEMA_VERSION = "1.2.0"
+# 1.3.0: uses_images を追加（画像を使わない＝声だけのキャラの明示。追加のみ・後方互換）
+SCHEMA_VERSION = "1.3.0"
 
 _ID_RE = re.compile(r"^[a-z0-9][a-z0-9_-]{0,63}$")
 
@@ -70,6 +72,15 @@ def normalize_character(char: dict) -> dict:
     char.setdefault("caption", "")
     char.setdefault("description", "")
     char.setdefault("appearance_prompt", "")
+    # ⚠️ setdefault(True) にしない。旧データにこのフィールドは無いので、既定値は
+    # appearance_prompt の有無から**推定**する（ナレーター等の空キャラは自動的にFalse）。
+    # この推定は**既定値の決定にのみ**使う。以後の判定に appearance_prompt を代用しないこと
+    #（「何を描くか」と「画像を使う意思」は別物。混ぜたのが §15-1 の間違い）。
+    # 一度 write_character を通れば明示値として永続化される。
+    if "uses_images" not in char:
+        char["uses_images"] = bool((char.get("appearance_prompt") or "").strip())
+    else:
+        char["uses_images"] = bool(char["uses_images"])
     char.setdefault("voice", {"engine": "", "voice_id": ""})
     char.setdefault("provider", "comfy")
     char.setdefault("styles", {s: {"seed": None, "loras": [], "extra_prompt": ""} for s in CHARACTER_STYLES})
@@ -99,7 +110,7 @@ def list_characters() -> list[dict]:
         c = read_character(d.name)
         if c is None:
             continue
-        refs = sorted(p.name for p in (d / "reference").glob("*") if p.is_file())
+        refs = reference_files(d.name)
         meta = c.get("reference_meta", {})
         out.append({
             "char_id": c["char_id"],
@@ -108,6 +119,12 @@ def list_characters() -> list[dict]:
             "description": c.get("description", ""),
             "voice": c.get("voice", {"engine": "", "voice_id": ""}),
             "generation_count": len(c.get("generations", [])),
+            # per-capability 任意化（WORK_LOG 2026-07-05）: 外見が無いキャラ（声だけのナレーター等）は
+            # 画像生成不可。一覧をN+1で取得させず、ここで真偽値だけ乗せる（全文は返さない）
+            "has_appearance": bool((c.get("appearance_prompt") or "").strip()),
+            # 画像を使う意思（キャラ設定の憲法）。False なら画像生成の全経路で弾く。
+            # has_appearance と両方返すのは、UIが「なぜ生成できないか」を出し分けるため
+            "uses_images": bool(c.get("uses_images")),
             "references": refs,
             # 参照画像のラベル overlay（存在するファイル分のみ）。フロントは charaRefLabel(fn) で引く。
             "reference_meta": {fn: meta.get(fn, {}) for fn in refs},
@@ -118,7 +135,7 @@ def list_characters() -> list[dict]:
 
 def create_character(
     char_id: str, name: str, appearance_prompt: str, description: str = "",
-    caption: str = "", voice: dict | None = None,
+    caption: str = "", voice: dict | None = None, uses_images: bool | None = None,
 ) -> dict:
     char = {
         "schema_version": SCHEMA_VERSION,
@@ -127,6 +144,8 @@ def create_character(
         "caption": caption,                       # 字幕表示名（空ならnameを使う）
         "description": description,
         "appearance_prompt": appearance_prompt,
+        # None なら normalize_character が appearance_prompt から推定する
+        **({} if uses_images is None else {"uses_images": bool(uses_images)}),
         "voice": voice or {"engine": "", "voice_id": ""},  # 声の本籍（shared/voices/{engine}/参照）
         "provider": "comfy",
         "styles": {s: {"seed": None, "loras": [], "extra_prompt": ""} for s in CHARACTER_STYLES},
@@ -206,3 +225,52 @@ def set_reference_label(char_id: str, filename: str, label: str) -> bool:
         meta.pop(filename, None)
     write_character(char)
     return True
+
+
+def reference_files(char_id: str) -> list[str]:
+    """reference/ 内の実ファイル名（新しい順ではなく名前順）。存在が正、character.json は上乗せのみ。"""
+    d = char_dir(char_id) / "reference"
+    if not d.exists():
+        return []
+    return sorted(p.name for p in d.glob("*") if p.is_file())
+
+
+def can_generate_images(char_id: str, *, require_reference: bool = True) -> tuple[bool, str]:
+    """画像生成を許すか。許さないなら理由も返す（UIにそのまま出せる日本語）。
+
+    **画像生成の可否はここ1箇所で決める**。以前は紙芝居 ``POST /panel`` と
+    ``panel_library/generate`` に別々のガードが書かれていて、片方だけ直した結果
+    判定軸がズレた（`appearance_prompt` の有無だけを見ており、外見だけ複製した
+    Voiceバリアントキャラを通してしまっていた）。同じ間違いを繰り返さないため、
+    生成経路は全てこの関数を呼ぶこと。
+
+    判定順（この順で理由が変わる）:
+      1. キャラが存在しない
+      2. uses_images が False        → 「画像を使わない設定」（人が宣言した意思）
+      3. appearance_prompt が空      → 「何を描くか」が無い
+      4. reference/ が0枚            → 「同じ人物である担保」が無い
+
+    ⚠️ 2 と 4 は別物。reference だけ見ると「まだ参照を登録していないだけ」と
+    「そもそも画像不要」を区別できず、案内すべき次の一手が変わってしまう。
+
+    require_reference=False は**リファレンス画像そのものを作る経路**のためにある
+    （🎭キャラタブの POST /characters/{id}/generate。生成→⭐昇格で最初の1枚を得る）。
+    ここまで reference 必須にすると最初の1枚が永久に作れない（鶏と卵）。
+    ⚠️ 在庫に積む経路では絶対に False にしないこと ── 参照無しで積むと
+    「同じキャラの並行在庫」ができる。切るのは4だけで、1〜3の判定と順序は共有する。
+    """
+    c = read_character(char_id)
+    if c is None:
+        return False, f"キャラが見つかりません: {char_id}"
+    label = c.get("name") or char_id
+    if not c.get("uses_images"):
+        return False, (f"「{label}」は画像を使わない設定です（声のみのキャラ）。"
+                       "画像を使うなら🎭キャラタブで設定を変更してください")
+    if not (c.get("appearance_prompt") or "").strip():
+        return False, (f"「{label}」は外見(appearance_prompt)が未設定のため生成できません。"
+                       "🎭キャラタブで外見を設定してください")
+    if require_reference and not reference_files(char_id):
+        return False, (f"「{label}」はリファレンス画像がありません"
+                       "（同じ人物である担保が取れず、生成するたびに別人になります）。"
+                       "🎭キャラタブで参照画像を登録してください")
+    return True, ""

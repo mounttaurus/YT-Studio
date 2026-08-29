@@ -513,10 +513,8 @@
       <button class="tab-btn" :class="{ active: tab === 'footage' }" @click="setTab('footage')">📦 素材</button>
       <button class="tab-btn" :class="{ active: tab === 'aroll' }" @click="setTab('aroll')">🖼️ Aロール</button>
       <button class="tab-btn" :class="{ active: tab === 'chara' }" @click="setTab('chara')">🎭 キャラ</button>
-      <button class="tab-btn" :class="{ active: tab === 'studio' }" @click="setTab('studio')">🎬 紙芝居</button>
       <button class="tab-btn" :class="{ active: tab === 'bg' }" @click="setTab('bg')">🏞️ 背景</button>
-      <button class="tab-btn" :class="{ active: tab === 'panelLib' }" @click="setTab('panelLib')">📚 キャラ画像</button>
-      <button class="tab-btn" :class="{ active: tab === 'cutout' }" @click="setTab('cutout')">✂️ 切り抜き</button>
+      <button class="tab-btn" :class="{ active: tab === 'charLib' }" @click="setTab('charLib')">📚 キャラ在庫</button>
       <button class="tab-btn" :class="{ active: tab === 'free' }" @click="setTab('free')">🎨 自由生成</button>
       <button class="tab-btn" :class="{ active: tab === 'editing' }" @click="setTab('editing')">🎞️ 編集情報</button>
     </div>
@@ -2274,6 +2272,45 @@
               </div>
             </div>
 
+            <!-- 画像の承認（②で作った絵のうち、採用と決めたものだけを在庫へ積む） -->
+            <div class="card" x-show="arollManifest"
+                 :style="arollApprovalCounts.pending ? 'border-color:#a16207' : ''">
+              <h2>✓ 画像の承認
+                <span style="font-weight:400;text-transform:none;color:#4b5563;font-size:11px"
+                      x-text="`承認済み ${arollApprovalCounts.approved} / 未承認 ${arollApprovalCounts.pending}（生成済み ${arollApprovalCounts.done}コマ）`"></span>
+              </h2>
+              <div style="font-size:11px;color:#94a3b8;margin-top:6px;line-height:1.7">
+                目視して<b>採用と決めた絵だけ</b>をキャラ所有ライブラリへ積みます（<b>無料</b>・画像生成なし）。
+                生成した瞬間に積まないのは、<b>作り直して捨てた絵まで在庫に入れないため</b>です。
+                積んだ絵は次の話数から在庫として自動で配られます。
+              </div>
+              <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-top:10px">
+                <button class="btn btn-primary"
+                        :disabled="arollApproveBusy || arollRunning || !arollApprovalCounts.pending"
+                        @click="arollApproveImages(null)">
+                  <template x-if="arollApproveBusy"><span class="spinner"></span></template>
+                  <span x-text="arollApproveBusy ? '承認中...' : `✓ 未承認 ${arollApprovalCounts.pending} 件を承認して在庫へ`"></span>
+                </button>
+                <span x-show="!arollApprovalCounts.pending && arollApprovalCounts.done"
+                      style="font-size:11px;color:#4ade80">✔ 生成済みの絵はすべて承認済みです</span>
+              </div>
+              <div x-show="arollApproveResult" style="font-size:11px;color:#94a3b8;margin-top:8px;line-height:1.7">
+                <div x-text="`✔ ${arollApproveResult?.approved ?? 0}件を承認 — うち ${arollApproveResult?.registered ?? 0}件を在庫へ取り込みました`"></div>
+                <div x-show="arollApproveSkipReasons.length" style="margin-top:4px">
+                  <div style="color:#64748b">在庫に積まなかった内訳（その行の絵はそのまま使われます・課金ゼロ）:</div>
+                  <template x-for="[why, n] in arollApproveSkipReasons" :key="why">
+                    <div><span style="color:#fbbf24" x-text="n + '件'"></span> <span x-text="why"></span></div>
+                  </template>
+                </div>
+              </div>
+              <div style="font-size:10px;color:#4b5563;margin-top:8px;line-height:1.7;border-top:1px solid #2d3748;padding-top:8px">
+                ⚠️ <b>絵を作り直すと承認は外れます。</b>さらに、その行から取り込んだ在庫は「未承認」へ降格し、
+                以後は自動で配られなくなります（気に入らなくて描き直した絵が、後の話数で出てくるのを防ぐため）。
+                削除ではないので、良い絵なら<b>✂️切り抜きタブで承認し直せば戻ります</b>。
+                在庫から差し替えた場合・台本テキストが変わった場合は降格しません。
+              </div>
+            </div>
+
             <!-- 台本との同期状態（差分検知） -->
             <div class="card" x-show="arollSync?.has_manifest"
                  :style="arollDriftCount ? 'border-color:#a16207' : ''">
@@ -2286,7 +2323,7 @@
               </h2>
               <div x-show="arollDriftCount" style="font-size:11px;color:#94a3b8;margin-top:6px;line-height:1.7">
                 台本を後から追加・削除・推敲すると、生成済みのAロールとズレます。
-                <b>絵が古い</b>＝セリフが変わったのに絵が生成時のまま（下の一覧で「↻ この行を作り直す」）。
+                <b>絵が古い</b>＝セリフが変わったのに絵が生成時のまま（下の一覧で「↻ 生成し直す」）。
                 <b>画像なし</b>＝台本に追加された行（パネルが無い行は「① プロンプト一括生成」を実行してから生成）。
                 <b>行が消えた</b>＝台本から削除された行のPNGがディスクに残っている（編集には使われません）。
               </div>
@@ -2405,6 +2442,9 @@
                           x-text="`♻️ 要・組み直し ${qaCounts.restale}`"></span>
                     <span style="font-size:12px;color:#a1a1aa" x-show="qaCounts.ungenerated"
                           x-text="`○ 未生成 ${qaCounts.ungenerated}`"></span>
+                    <span style="font-size:12px;color:#fde68a" x-show="arollApprovalCounts.pending"
+                          title="絵はあるがまだ承認していない＝在庫に積まれていない行"
+                          x-text="`✓ 未承認 ${arollApprovalCounts.pending}`"></span>
                     <span style="font-size:11px;color:#4b5563;margin-left:auto" x-show="qa"
                           x-text="`最終検査 ${qaCheckedAt}　/　検査元 ${qa?.source || '—'}`"></span>
                     <button class="btn btn-sm" @click="loadPsassistQa()" :disabled="qaBusy">🔄 再読込</button>
@@ -2429,6 +2469,10 @@
                     <button class="btn btn-sm" x-show="qaCounts.ungenerated"
                             :style="qaFilter === 'ungenerated' ? 'background:#3f3f46;color:#e4e4e7' : ''"
                             @click="qaFilter = 'ungenerated'" x-text="`未生成 ${qaCounts.ungenerated}`"></button>
+                    <button class="btn btn-sm" x-show="arollApprovalCounts.pending"
+                            :style="qaFilter === 'unapproved' ? 'background:#78350f;color:#fde68a' : ''"
+                            @click="qaFilter = 'unapproved'"
+                            x-text="`未承認 ${arollApprovalCounts.pending}`"></button>
                     <template x-for="[code, n] in Object.entries(qa?.summary?.by_code || {})" :key="code">
                       <button class="btn btn-sm" :style="qaFilter === 'code:' + code ? 'background:#1e3a8a;color:#bfdbfe' : ''"
                               @click="qaFilter = 'code:' + code"
@@ -2510,6 +2554,10 @@
                               x-text="p.status === 'done' ? '✔ 生成済' : (p.status === 'failed' ? '✘ 失敗' : '未生成')"></span>
                         <span class="status-badge" x-show="p.sync && p.sync !== 'ok' && p.sync !== 'missing'"
                               :style="arollSyncStyle(p.sync)" x-text="arollSyncLabel(p.sync)"></span>
+                        <span class="status-badge" x-show="p.status === 'done' && p.image"
+                              :style="p.image_approved_at ? 'background:#14532d;color:#bbf7d0' : 'background:#78350f;color:#fde68a'"
+                              :title="p.image_approved_at ? '承認済み — 在庫へ取り込み済み' : 'まだ承認していません（在庫には積まれません）'"
+                              x-text="p.image_approved_at ? '✓ 承認済' : '未承認'"></span>
                       </div>
                       <div style="font-size:10px;color:#4b5563;margin-top:2px" x-text="p.section"></div>
                       <div style="font-size:11px;color:#cbd5e1;margin-top:4px;line-height:1.5" x-text="p.text"></div>
@@ -2580,20 +2628,25 @@
                       <button class="btn btn-sm" style="width:160px"
                               @click="arollGenerateLine(p)"
                               :disabled="arollRunning || arollLineBusy || !p.prompt">
-                        <span x-text="arollLineBusy === p.line_id ? '生成中...' : (p.status === 'done' ? '↻ この行を作り直す' : '▶ この行だけ生成')"></span>
+                        <span x-text="arollLineBusy === p.line_id ? '生成中...' : (p.status === 'done' ? '↻ 生成し直す' : '▶ この行だけ生成')"></span>
                       </button>
                       <div style="display:flex;gap:4px;width:160px">
                         <button class="btn btn-ghost btn-sm" style="flex:1;font-size:10px;padding:3px"
                                 @click="arollTogglePicker(p)" :disabled="arollRunning || arollLineBusy || (p.characters||[]).length !== 1"
-                                title="切り抜き在庫から選ぶ（無料）。直近の行から遠い順に並びます">🔀 在庫</button>
+                                title="在庫から選び直す（無料）。直近の行から遠い順に並びます">🔀 選び直す</button>
                         <button class="btn btn-ghost btn-sm" style="flex:1;font-size:10px;padding:3px"
                                 @click="arollGenerateLineFresh(p)" :disabled="arollRunning || arollLineBusy || !p.prompt"
-                                title="ライブラリを使わず必ず新規課金生成する">🎲 新規</button>
+                                title="在庫を使わず必ず新しく課金生成する">🎲 新しく生成</button>
                       </div>
+                      <button class="btn btn-sm" style="width:160px"
+                              x-show="p.status === 'done' && p.image && !p.image_approved_at"
+                              :disabled="arollApproveBusy || arollRunning || arollLineBusy"
+                              @click="arollApproveImages([p.line_id])"
+                              title="この絵を採用と決めて在庫へ積む（無料・画像生成なし）">✓ 承認して在庫へ</button>
                       <!-- キャラ画像ピッカー -->
                       <div x-show="arollPickerFor === p.line_id"
                            style="position:absolute;top:0;right:172px;z-index:20;background:#0f172a;border:1px solid #374151;border-radius:8px;padding:8px;width:280px;max-height:320px;overflow-y:auto">
-                        <div style="font-size:10px;color:#94a3b8;margin-bottom:6px">切り抜き在庫から選ぶ（クリックで即割当・無料）— <b>直近の行から遠い順</b></div>
+                        <div style="font-size:10px;color:#94a3b8;margin-bottom:6px">在庫から選び直す（クリックで即割当・無料）— <b>直近の行から遠い順</b></div>
                         <div x-show="arollPickerBusy" style="font-size:11px;color:#64748b">読み込み中…</div>
                         <div x-show="!arollPickerBusy && arollPickerNote" style="font-size:11px;color:#fbbf24;line-height:1.6" x-text="arollPickerNote"></div>
                         <div style="display:grid;grid-template-columns:repeat(2,1fr);gap:6px">
@@ -2703,8 +2756,24 @@
               <button class="btn" style="float:right;color:#f87171" @click="deleteChara(chara.char_id)">🗑 削除</button>
               <button class="btn" style="float:right;margin-right:6px" @click="exportChara(chara.char_id)">📤 エクスポート</button>
             </h2>
-            <label style="font-size:12px;color:#94a3b8;display:block;margin:10px 0 4px">外見プロンプト（キャラシート＝一貫性の核。全スタイル共通で先頭に入ります）</label>
-            <textarea x-model="chara.appearance_prompt" rows="3" style="width:100%"></textarea>
+            <!-- 画像を使うキャラか。ここがキャラ設定の憲法で、画像生成の全経路がこのフラグを見る
+                 （台本はキャラと結びついているので、キャラを統括するこのタブで宣言する）。
+                 OFFにしても外見プロンプトの文面は消さない＝また使う時にそのまま戻せる。 -->
+            <label style="display:flex;align-items:center;gap:6px;font-size:12px;color:#cbd5e1;margin:10px 0 0;cursor:pointer">
+              <input type="checkbox" :checked="!chara.uses_images"
+                     @change="chara.uses_images = !$event.target.checked">
+              このキャラは画像を使わない（声のみ）
+            </label>
+            <div style="font-size:10px;color:#64748b;margin:2px 0 0">
+              ONにすると画像生成の全経路（🎭生成・📚キャラ在庫・🖼️Aロールの在庫化）から外れます。
+              ナレーターや、既存キャラに声だけ変えて当てたバリアント向け。外見プロンプトは不要になります。
+            </div>
+            <template x-if="chara.uses_images">
+              <div>
+                <label style="font-size:12px;color:#94a3b8;display:block;margin:10px 0 4px">外見プロンプト（キャラシート＝一貫性の核。全スタイル共通で先頭に入ります）</label>
+                <textarea x-model="chara.appearance_prompt" rows="3" style="width:100%"></textarea>
+              </div>
+            </template>
             <div style="display:flex;gap:14px;flex-wrap:wrap;margin-top:10px;align-items:flex-start">
               <div>
                 <label style="font-size:11px;color:#94a3b8;display:block">字幕表示名（空ならキャラ名）</label>
@@ -2767,7 +2836,10 @@
             </div>
             <div style="margin:10px 0 4px"><button class="btn" @click="saveChara()">💾 キャラ情報を保存</button></div>
 
-            <div style="border-top:1px solid #3f3f46;margin-top:12px;padding-top:12px">
+            <div x-show="!chara.uses_images" style="border-top:1px solid #3f3f46;margin-top:12px;padding-top:12px;font-size:11px;color:#fbbf24">
+              このキャラは「画像を使わない」設定のため、生成はできません（バックエンドも拒否します）。
+            </div>
+            <div x-show="chara.uses_images" style="border-top:1px solid #3f3f46;margin-top:12px;padding-top:12px">
               <div style="display:flex;gap:10px;flex-wrap:wrap;align-items:flex-end">
                 <div>
                   <label style="font-size:11px;color:#94a3b8;display:block">エンジン</label>
@@ -2940,167 +3012,6 @@
       </div>
     </template>
 
-    <template x-if="tab === 'studio'">
-      <div>
-        <div class="card">
-          <h2>🎬 紙芝居パネル生成 <span style="font-size:11px;color:#94a3b8;font-weight:normal">構造化入力（表情・ポーズ・ショット・アングル）で1枚ずつ狙って生成します。吹き出しはPhotoshop側で入れる前提です</span></h2>
-          <div style="display:flex;gap:8px;flex-wrap:wrap;margin:12px 0">
-            <template x-for="c in charas" :key="c.char_id">
-              <button class="btn" :style="studioSel.char_id === c.char_id ? 'border-color:#7c3aed;color:#c4b5fd' : ''" @click="openStudioChar(c.char_id)">
-                <span x-text="c.name"></span>
-                <span x-show="c.references && c.references.length" title="リファレンス設定済み">⭐</span>
-              </button>
-            </template>
-            <span x-show="!charas.length" style="font-size:12px;color:#64748b">🎭キャラタブでキャラを作成してください</span>
-          </div>
-          <template x-if="studioChar">
-            <div>
-              <p style="font-size:12px;color:#94a3b8;margin:4px 0" x-text="studioChar.appearance_prompt"></p>
-              <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center">
-                <template x-for="fn in studioRefs()" :key="fn">
-                  <img :src="studioImg('reference', fn)" :title="fn" style="height:70px;border-radius:6px;border:1px solid #eab308">
-                </template>
-                <span x-show="!studioRefs().length" style="font-size:12px;color:#fbbf24">⭐リファレンス未設定（一貫性が出ません。🎭キャラタブで登録を）</span>
-              </div>
-            </div>
-          </template>
-        </div>
-
-        <div class="card" style="margin-top:12px" x-show="studioChar">
-          <h2 style="font-size:14px">構図の指定</h2>
-          <div style="display:flex;gap:10px;flex-wrap:wrap;align-items:flex-end">
-            <div>
-              <label style="font-size:11px;color:#94a3b8;display:block">表情</label>
-              <select x-model="studioSel.emotion_id">
-                <option value="">指定なし</option>
-                <template x-for="o in studioPresets.emotion" :key="o.id"><option :value="o.id" x-text="o.label_ja"></option></template>
-              </select>
-              <label style="font-size:10px;color:#a78bfa;display:flex;align-items:center;gap:3px;margin-top:2px;cursor:pointer"><input type="checkbox" x-model="studioRand.emotion" style="margin:0">🎲ランダム</label>
-            </div>
-            <div>
-              <label style="font-size:11px;color:#94a3b8;display:block">ポーズ/動作</label>
-              <select x-model="studioSel.pose_id">
-                <option value="">指定なし</option>
-                <template x-for="o in studioPresets.pose" :key="o.id"><option :value="o.id" x-text="o.label_ja"></option></template>
-              </select>
-              <label style="font-size:10px;color:#a78bfa;display:flex;align-items:center;gap:3px;margin-top:2px;cursor:pointer"><input type="checkbox" x-model="studioRand.pose" style="margin:0">🎲ランダム</label>
-            </div>
-            <div>
-              <label style="font-size:11px;color:#94a3b8;display:block">ショット</label>
-              <select x-model="studioSel.shot_id">
-                <option value="">指定なし</option>
-                <template x-for="o in studioPresets.shot" :key="o.id"><option :value="o.id" x-text="o.label_ja"></option></template>
-              </select>
-              <label style="font-size:10px;color:#a78bfa;display:flex;align-items:center;gap:3px;margin-top:2px;cursor:pointer"><input type="checkbox" x-model="studioRand.shot" style="margin:0">🎲ランダム</label>
-            </div>
-            <div>
-              <label style="font-size:11px;color:#94a3b8;display:block">アングル</label>
-              <select x-model="studioSel.angle_id">
-                <option value="">指定なし</option>
-                <template x-for="o in studioPresets.angle" :key="o.id"><option :value="o.id" x-text="o.label_ja"></option></template>
-              </select>
-              <label style="font-size:10px;color:#a78bfa;display:flex;align-items:center;gap:3px;margin-top:2px;cursor:pointer"><input type="checkbox" x-model="studioRand.angle" style="margin:0">🎲ランダム</label>
-            </div>
-            <div>
-              <label style="font-size:11px;color:#94a3b8;display:block">シーン</label>
-              <select x-model="studioSel.scene_id">
-                <option value="">指定なし</option>
-                <template x-for="o in studioPresets.scene" :key="o.id"><option :value="o.id" x-text="o.label_ja"></option></template>
-              </select>
-              <label style="font-size:10px;color:#a78bfa;display:flex;align-items:center;gap:3px;margin-top:2px;cursor:pointer"><input type="checkbox" x-model="studioRand.scene" style="margin:0">🎲ランダム</label>
-            </div>
-            <div>
-              <label style="font-size:11px;color:#94a3b8;display:block">背景</label>
-              <select x-model="studioSel.background_mode">
-                <option value="flat">単色背景</option>
-                <option value="scene">簡易シーン背景</option>
-                <option value="transparent">白背景（抜き用）</option>
-              </select>
-            </div>
-            <div>
-              <label style="font-size:11px;color:#94a3b8;display:block">スタイル</label>
-              <select x-model="studioSel.style" x-effect="$nextTick(() => { if (charaStyles.includes(studioSel.style)) $el.value = studioSel.style })">
-                <template x-for="s in charaStyles" :key="s"><option :value="s" x-text="s"></option></template>
-              </select>
-            </div>
-            <div>
-              <label style="font-size:11px;color:#94a3b8;display:block">アスペクト比</label>
-              <select x-model="studioSel.aspect">
-                <option value="16:9">16:9</option><option value="4:3">4:3</option>
-                <option value="3:4">3:4</option><option value="1:1">1:1</option>
-              </select>
-            </div>
-            <div>
-              <label style="font-size:11px;color:#94a3b8;display:block">枚数</label>
-              <select x-model="studioSel.count"><option>1</option><option>2</option><option>3</option><option>4</option></select>
-            </div>
-            <div style="flex:1;min-width:200px">
-              <label style="font-size:11px;color:#94a3b8;display:block">追加指示（任意）</label>
-              <input x-model="studioSel.extra_prompt" placeholder="holding a book, night background..." style="width:100%">
-            </div>
-          </div>
-
-          <div style="margin-top:10px">
-            <label style="font-size:11px;color:#94a3b8;display:block">プロンプトプレビュー</label>
-            <code style="display:block;font-size:11px;color:#cbd5e1;background:#18181b;border:1px solid #3f3f46;border-radius:6px;padding:8px;white-space:pre-wrap" x-text="studioPromptPreview()"></code>
-          </div>
-
-          <div style="margin-top:10px">
-            <button class="btn btn-primary" :disabled="studioBusy || studioBatchBusy" @click="generatePanel()">
-              <span x-text="studioBusy ? '⏳ 生成中...' : '🎬 生成'"></span>
-            </button>
-            <span x-show="studioMsg" x-text="studioMsg" style="font-size:12px;color:#fbbf24;margin-left:10px"></span>
-            <div x-show="studioBusy" class="progress-indeterminate" style="margin-top:8px"></div>
-          </div>
-
-          <div style="margin-top:14px;border-top:1px solid #3f3f46;padding-top:10px">
-            <h3 style="font-size:13px;margin:0 0 6px">🎲 バッチ生成 <span style="font-size:10px;color:#64748b;font-weight:normal">🎲ONの項目をランダムに振って複数枚生成。常に同時1枚ずつ・間隔を空けてレート制限に配慮します</span></h3>
-            <div style="display:flex;gap:10px;flex-wrap:wrap;align-items:flex-end">
-              <div>
-                <label style="font-size:11px;color:#94a3b8;display:block">枚数</label>
-                <select x-model="studioBatch.count"><option>5</option><option>10</option><option>15</option><option>20</option></select>
-              </div>
-              <div>
-                <label style="font-size:11px;color:#94a3b8;display:block">送出間隔</label>
-                <select x-model.number="studioBatch.intervalMs">
-                  <option value="2000">2秒</option><option value="3500">3.5秒</option><option value="5000">5秒</option><option value="8000">8秒</option>
-                </select>
-              </div>
-              <button class="btn btn-primary" :disabled="studioBatchBusy || studioBusy" @click="generateBatch()">
-                <span x-text="studioBatchBusy ? `⏳ 生成中 ${studioBatchProgress.done}/${studioBatchProgress.total}` : '🎲 バッチ生成'"></span>
-              </button>
-              <button class="btn" x-show="studioBatchBusy" @click="stopBatch()" style="color:#f87171">⏹ 中止</button>
-            </div>
-            <div x-show="studioBatchBusy || studioBatchProgress.total" style="margin-top:8px">
-              <div x-show="studioBatchBusy" class="progress-indeterminate"></div>
-              <div style="font-size:11px;color:#94a3b8;margin-top:4px" x-text="`進捗 ${studioBatchProgress.done}/${studioBatchProgress.total}　失敗 ${studioBatchProgress.failed}`"></div>
-            </div>
-          </div>
-        </div>
-
-        <div class="card" style="margin-top:12px" x-show="studioChar">
-          <h3 style="font-size:13px;margin:0 0 6px">生成ギャラリー（新しい順）</h3>
-          <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(190px,1fr));gap:10px">
-            <template x-for="g in (studioChar?.generations || []).slice().reverse()" :key="g.filename">
-              <div style="border:1px solid #3f3f46;border-radius:6px;padding:6px">
-                <a :href="studioImg('generated', g.filename)" target="_blank">
-                  <img :src="studioImg('generated', g.filename)" style="width:100%;border-radius:4px" loading="lazy">
-                </a>
-                <div style="font-size:10px;color:#94a3b8;margin-top:4px" x-text="`${g.style} / ${g.expression}`"></div>
-                <div x-show="g.panel" style="font-size:10px;color:#64748b" x-text="g.panel ? `${g.panel.emotion_id||'-'} / ${g.panel.pose_id||'-'} / ${g.panel.shot_id||'-'} / ${g.panel.angle_id||'-'}` : ''"></div>
-                <div style="display:flex;gap:6px;margin-top:4px">
-                  <a class="btn" style="font-size:11px" :href="studioImg('generated', g.filename)" :download="g.filename">⬇</a>
-                  <button class="btn" style="font-size:11px" @click="promoteStudioRef(g.filename)" title="リファレンスに昇格">⭐</button>
-                  <button class="btn" style="font-size:11px;color:#f87171" @click="deleteStudioGen(g.filename)" title="この画像を削除">🗑</button>
-                </div>
-              </div>
-            </template>
-          </div>
-          <p x-show="!(studioChar?.generations || []).length" style="font-size:12px;color:#64748b">まだ生成していません</p>
-        </div>
-      </div>
-    </template>
-
     <template x-if="tab === 'bg'">
       <div>
         <div class="card">
@@ -3245,57 +3156,90 @@
             <span x-show="bg.msg" style="margin-left:10px;font-size:12px;color:#7dd3fc" x-text="bg.msg"></span>
           </div>
 
-          <!-- 検索・一覧 -->
-          <h3 style="font-size:14px;color:#e2e8f0;margin:18px 0 8px">アーカイブ内検索</h3>
-          <div style="display:grid;grid-template-columns:repeat(4,1fr) auto;gap:10px;align-items:end;margin-bottom:12px">
-            <label style="font-size:12px;color:#cbd5e1">系統
-              <select x-model="bg.filter.category" @change="searchBg()" style="width:100%;margin-top:4px">
-                <option value="">すべて</option>
-                <option value="location">location</option>
-                <option value="psych">psych</option>
-                <option value="comic">comic</option>
-              </select>
-            </label>
-            <label style="font-size:12px;color:#cbd5e1">framing
-              <select x-model="bg.filter.framing" @change="searchBg()" style="width:100%;margin-top:4px">
-                <option value="">すべて</option>
-                <template x-for="p in (bg.presets?.framing || [])" :key="p.id">
-                  <option :value="p.id" x-text="p.label_ja"></option>
-                </template>
-              </select>
-            </label>
-            <label style="font-size:12px;color:#cbd5e1">light
-              <select x-model="bg.filter.light" @change="searchBg()" style="width:100%;margin-top:4px">
-                <option value="">すべて</option>
-                <template x-for="p in (bg.presets?.light || [])" :key="p.id">
-                  <option :value="p.id" x-text="p.label_ja"></option>
-                </template>
-              </select>
-            </label>
-            <label style="font-size:12px;color:#cbd5e1">mood
-              <select x-model="bg.filter.mood" @change="searchBg()" style="width:100%;margin-top:4px">
-                <option value="">すべて</option>
-                <template x-for="p in (bg.presets?.mood || [])" :key="p.id">
-                  <option :value="p.id" x-text="p.label_ja"></option>
-                </template>
-              </select>
-            </label>
-            <button class="btn btn-ghost btn-sm" @click="searchBg()">🔄 再検索</button>
+          <!-- 一覧（✂️切り抜きタブと同じ作り: 集計バー → ボタン式チップ → サムネ → クリックで詳細） -->
+          <div style="display:flex;gap:16px;align-items:center;flex-wrap:wrap;margin-top:18px">
+            <span style="font-size:12px;color:#e2e8f0" x-text="`● 全 ${bgCounts.total}`"></span>
+            <span style="font-size:12px;color:#a5f3fc" x-text="`● 表示中 ${bgCounts.shown}`"></span>
+            <span style="font-size:12px;color:#fde68a" x-show="bgCounts.keyframe"
+                  x-text="`⭐ キーフレーム ${bgCounts.keyframe}`"></span>
+            <span style="font-size:12px;color:#94a3b8" x-show="bgCounts.unused"
+                  x-text="`○ 未使用 ${bgCounts.unused}`"></span>
+            <input type="text" x-model="bg.q" placeholder="🔎 bg_id・キーワード・雰囲気で絞る"
+                   style="margin-left:auto;width:250px;font-size:11px;padding:3px 8px">
+            <button class="btn btn-primary btn-sm" @click="bgOpenNew()"
+                    title="自分で撮った・描いた・調達した画像をアーカイブに登録する（生成しない）">＋ 背景を追加</button>
+            <button class="btn btn-sm" :disabled="bg.busy" @click="loadBgLib()">🔄 再読込</button>
           </div>
 
-          <div x-show="bg.busy" style="font-size:12px;color:#94a3b8">読み込み中…</div>
-          <div x-show="!bg.busy && !bg.items.length" class="empty" style="padding:20px">該当する背景がありません</div>
-          <div x-show="!bg.busy && bg.items.length" style="display:grid;grid-template-columns:repeat(auto-fill,minmax(200px,1fr));gap:12px">
-            <template x-for="item in bg.items" :key="item.bg_id">
-              <div style="background:#0f172a;border-radius:8px;overflow:hidden">
-                <img :src="bgImageUrl(item)" style="width:100%;aspect-ratio:16/9;object-fit:cover;display:block">
-                <div style="padding:8px;font-size:10px;color:#94a3b8">
-                  <div style="color:#e2e8f0;font-size:11px;margin-bottom:2px" x-text="item.bg_id"></div>
-                  <div x-text="(item.mood || []).join(' / ')"></div>
-                  <div style="display:flex;justify-content:space-between;align-items:center;margin-top:4px">
-                    <span x-text="item.model || ''" style="opacity:0.6"></span>
-                    <button class="btn btn-ghost btn-sm" style="padding:2px 6px;font-size:10px" @click="deleteBg(item.bg_id)">🗑</button>
-                  </div>
+          <!-- 系統（データから作る。location/psych/comic 以外の系統も実在するため決め打ちしない） -->
+          <div style="display:flex;gap:6px;flex-wrap:wrap;margin-top:10px;align-items:center">
+            <span style="font-size:10px;color:#64748b;min-width:60px">系統</span>
+            <button class="btn btn-sm" :style="bg.cat === 'all' ? 'background:#4c1d95;color:#ede9fe' : ''"
+                    @click="bgSetFilter('cat', 'all')" x-text="`すべて ${bgCounts.total}`"></button>
+            <template x-for="[id, n] in bgCatFacet" :key="id">
+              <button class="btn btn-sm" :style="bg.cat === id ? 'background:#4c1d95;color:#ede9fe' : ''"
+                      @click="bgSetFilter('cat', id)" x-text="`${id} ${n}`"></button>
+            </template>
+          </div>
+
+          <!-- キーワード（spot/motif/era/form/effect を1軸に畳む。全系統ぶんは40種超あるので系統選択時のみ） -->
+          <div x-show="bg.cat !== 'all'" style="display:flex;gap:6px;flex-wrap:wrap;margin-top:8px;align-items:center">
+            <span style="font-size:10px;color:#64748b;min-width:60px">キーワード</span>
+            <button class="btn btn-sm" :style="bg.key === 'all' ? 'background:#1e3a8a;color:#bfdbfe' : ''"
+                    @click="bgSetFilter('key', 'all')">すべて</button>
+            <template x-for="[k, n] in bgKeyFacet" :key="k">
+              <button class="btn btn-sm" :style="bg.key === k ? 'background:#1e3a8a;color:#bfdbfe' : ''"
+                      @click="bgSetFilter('key', k)" x-text="`${bgKeyLabel(k)} ${n}`"></button>
+            </template>
+          </div>
+          <div x-show="bg.cat === 'all'" style="font-size:10px;color:#4b5563;margin-top:8px">
+            系統を選ぶと、その系統のキーワード（spot / motif / era / form / effect）で絞り込めます。
+          </div>
+
+          <!-- 雰囲気（mood は複数持てるので、entryは複数のチップに数えられる） -->
+          <div style="display:flex;gap:6px;flex-wrap:wrap;margin-top:8px;align-items:center">
+            <span style="font-size:10px;color:#64748b;min-width:60px">雰囲気</span>
+            <button class="btn btn-sm" :style="bg.mood === 'all' ? 'background:#164e63;color:#a5f3fc' : ''"
+                    @click="bgSetFilter('mood', 'all')">すべて</button>
+            <template x-for="[id, n] in bgMoodFacet" :key="id">
+              <button class="btn btn-sm" :style="bg.mood === id ? 'background:#164e63;color:#a5f3fc' : ''"
+                      @click="bgSetFilter('mood', id)" x-text="`${bgLabel('mood', id)} ${n}`"></button>
+            </template>
+          </div>
+
+          <div style="display:flex;gap:6px;flex-wrap:wrap;margin-top:8px;align-items:center">
+            <span style="font-size:10px;color:#64748b;min-width:60px">状態</span>
+            <button class="btn btn-sm" :style="bg.flag === 'all' ? 'background:#4c1d95;color:#ede9fe' : ''"
+                    @click="bgSetFilter('flag', 'all')">すべて</button>
+            <button class="btn btn-sm" x-show="bgCounts.keyframe"
+                    :style="bg.flag === 'keyframe' ? 'background:#78350f;color:#fde68a' : ''"
+                    @click="bgSetFilter('flag', 'keyframe')" x-text="`⭐ キーフレーム ${bgCounts.keyframe}`"></button>
+            <button class="btn btn-sm" x-show="bgCounts.unused"
+                    :style="bg.flag === 'unused' ? 'background:#334155;color:#e2e8f0' : ''"
+                    @click="bgSetFilter('flag', 'unused')" x-text="`未使用 ${bgCounts.unused}`"></button>
+            <button class="btn btn-sm" x-show="bgCounts.upload"
+                    :style="bg.flag === 'upload' ? 'background:#164e63;color:#a5f3fc' : ''"
+                    @click="bgSetFilter('flag', 'upload')" x-text="`📁 持ち込み ${bgCounts.upload}`"></button>
+          </div>
+
+          <div style="font-size:11px;color:#64748b;margin-top:10px;line-height:1.7">
+            <b>新しい順</b>に並びます（生成した絵がすぐ先頭に来ます）。クリックで詳細（生成条件・使用回数・プロンプト）。
+            使用回数は行への自動割当が参照します（<code>times_used</code>が少ないものから配る）。
+          </div>
+
+          <div x-show="bg.busy" style="font-size:12px;color:#94a3b8;margin-top:10px">読み込み中…</div>
+          <div x-show="!bg.busy && !bgFiltered.length" class="empty" style="padding:24px">該当する背景がありません</div>
+          <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(148px,1fr));gap:8px;margin-top:12px">
+            <template x-for="item in bgFiltered" :key="item.bg_id">
+              <div :style="`cursor:zoom-in;border-radius:6px;overflow:hidden;background:#0f172a;border:2px solid ${item.is_keyframe ? '#a16207' : '#1e293b'}`"
+                   @click="bg.detail = item">
+                <img :src="bgImageUrl(item)" loading="lazy"
+                     style="width:100%;display:block;aspect-ratio:16/9;object-fit:cover;background:#334155">
+                <div style="padding:4px 6px;display:flex;align-items:center;gap:5px">
+                  <span style="font-size:11px" x-show="item.is_keyframe">⭐</span>
+                  <span style="font-size:9px;color:#94a3b8;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;flex:1"
+                        x-text="bgKeyLabel(bgKeyOf(item)) || item.category"></span>
+                  <span style="font-size:9px;color:#64748b" x-text="`${item.times_used || 0}回`"></span>
                 </div>
               </div>
             </template>
@@ -3304,277 +3248,342 @@
       </div>
     </template>
 
-    <template x-if="tab === 'panelLib'">
+    <!-- ════════ 📚 キャラ在庫タブ（旧「キャラ画像」＋「切り抜き」を統合。2026-08-28） ════════
+         panel と cutout は「別の在庫」ではなく、同じ絵の「背景付きの姿」と「切り抜いた姿」。
+         kind ではなく usable（panel_library_manager.usable_as）で見せ分ける。
+         psassist/Docs/CHARACTER_CUTOUT_PLAN.md §14 -->
+    <template x-if="tab === 'charLib'">
       <div>
         <div class="card">
-          <h2 style="display:flex;align-items:center;gap:10px">📚 キャラ画像ライブラリ
+          <h2 style="display:flex;align-items:center;gap:10px">📚 キャラ在庫
             <span style="font-size:10px;padding:2px 8px;border-radius:99px;background:#1e293b;color:#94a3b8">台本に縛られない・Phase3</span>
           </h2>
           <p style="font-size:12px;color:#94a3b8;margin:4px 0 14px">
-            キャラ別に演技パターン（表情×ショット×アングル）を作り置きし、Aロール生成時に無料で引けるようにする。
-            設計の正本は <code>Docs/AROLL_ASSET_PLAN.md</code>。
+            キャラ別に演技パターン（表情×ショット×アングル）を作り置きし、Aロール生成時に無料で引ける在庫。
+            背景付きの完成コマ（<b>🖼️パネル</b>）と、背景を抜いた合成素材（<b>✂️切り抜き</b>）を同じ在庫として扱う
+            （同じ絵が両方の姿を持つこともある）。設計の正本は <code>Docs/AROLL_ASSET_PLAN.md</code>。
           </p>
 
-          <label style="font-size:12px;color:#cbd5e1;display:block;margin-bottom:14px">キャラクター
-            <select x-model="panelLib.charId" @change="searchPanelLib()" style="width:280px;margin-top:4px">
-              <template x-for="c in charas" :key="c.char_id">
-                <option :value="c.char_id" x-text="c.name || c.char_id"></option>
-              </template>
-            </select>
-          </label>
-
-          <!-- 1枚だけ生成 -->
-          <div style="background:#0f172a;border-radius:8px;padding:14px;margin-bottom:16px">
-            <h3 style="font-size:13px;color:#e2e8f0;margin:0 0 8px">1枚だけ生成（即承認）</h3>
-            <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:12px">
-              <label style="font-size:12px;color:#cbd5e1">表情
-                <select x-model="panelLib.gen.emotion" style="width:100%;margin-top:4px">
-                  <option value="">（未選択）</option>
-                  <template x-for="p in (studioPresets.emotion||[])" :key="p.id"><option :value="p.id" x-text="p.label_ja"></option></template>
-                </select>
-              </label>
-              <label style="font-size:12px;color:#cbd5e1">ショット
-                <select x-model="panelLib.gen.shot" style="width:100%;margin-top:4px">
-                  <option value="">（未選択）</option>
-                  <template x-for="p in (studioPresets.shot||[])" :key="p.id"><option :value="p.id" x-text="p.label_ja"></option></template>
-                </select>
-              </label>
-              <label style="font-size:12px;color:#cbd5e1">アングル
-                <select x-model="panelLib.gen.angle" style="width:100%;margin-top:4px">
-                  <option value="">（未選択）</option>
-                  <template x-for="p in (studioPresets.angle||[])" :key="p.id"><option :value="p.id" x-text="p.label_ja"></option></template>
-                </select>
-              </label>
-              <label style="font-size:12px;color:#cbd5e1">ポーズ（任意）
-                <select x-model="panelLib.gen.pose" style="width:100%;margin-top:4px">
-                  <option value="">（未選択）</option>
-                  <template x-for="p in (studioPresets.pose||[])" :key="p.id"><option :value="p.id" x-text="p.label_ja"></option></template>
-                </select>
-              </label>
-            </div>
-            <div style="display:flex;gap:12px;align-items:end;margin-top:10px">
-              <label style="font-size:12px;color:#cbd5e1">モデル
-                <select x-model="panelLib.gen.model" style="width:220px;margin-top:4px">
-                  <option value="gemini-3.1-flash-lite-image">Nano Banana 2 Lite（既定・廉価）</option>
-                  <option value="gemini-3.1-flash-image">Nano Banana 2（標準）</option>
-                  <option value="gemini-3-pro-image">Nano Banana Pro（高品質・高額）</option>
-                  <option value="">env既定（NANOBANANA_MODEL）</option>
-                </select>
-              </label>
-              <button class="btn btn-primary" :disabled="panelLib.genBusy" @click="generatePanelLib()">
-                <span x-show="!panelLib.genBusy">🖼️ 生成</span><span x-show="panelLib.genBusy">生成中…</span>
-              </button>
-            </div>
-          </div>
-
-          <!-- バリアント一括生成 -->
-          <div style="background:#0f172a;border-radius:8px;padding:14px;margin-bottom:16px">
-            <h3 style="font-size:13px;color:#e2e8f0;margin:0 0 4px">バリアント一括生成（承認待ちで登録）</h3>
-            <p style="font-size:11px;color:#f59e0b;margin:0 0 10px">
-              ⚠ 同じ表情×ショット×アングルのままposeだけ変えて複数生成する。生成物は承認待ちで登録され、
-              下の「承認待ち」欄で目視確認してから承認するまでAロールからは引かれない（色ブレ等の個体差対策）。
-              角度と競合するpose（見上げる/見下ろす等）は避けること。
-            </p>
-            <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:12px">
-              <label style="font-size:12px;color:#cbd5e1">表情
-                <select x-model="panelLib.variantGen.emotion" style="width:100%;margin-top:4px">
-                  <option value="">（未選択）</option>
-                  <template x-for="p in (studioPresets.emotion||[])" :key="p.id"><option :value="p.id" x-text="p.label_ja"></option></template>
-                </select>
-              </label>
-              <label style="font-size:12px;color:#cbd5e1">ショット
-                <select x-model="panelLib.variantGen.shot" style="width:100%;margin-top:4px">
-                  <option value="">（未選択）</option>
-                  <template x-for="p in (studioPresets.shot||[])" :key="p.id"><option :value="p.id" x-text="p.label_ja"></option></template>
-                </select>
-              </label>
-              <label style="font-size:12px;color:#cbd5e1">アングル
-                <select x-model="panelLib.variantGen.angle" style="width:100%;margin-top:4px">
-                  <option value="">（未選択）</option>
-                  <template x-for="p in (studioPresets.angle||[])" :key="p.id"><option :value="p.id" x-text="p.label_ja"></option></template>
-                </select>
-              </label>
-            </div>
-            <div style="font-size:12px;color:#cbd5e1;margin:10px 0 4px">pose（複数選択・バリアント数=選択数）</div>
-            <div style="display:flex;flex-wrap:wrap;gap:8px;margin-bottom:10px">
-              <template x-for="p in (studioPresets.pose||[])" :key="p.id">
-                <label style="display:flex;align-items:center;gap:4px;cursor:pointer;font-size:11px;background:#1e293b;padding:3px 8px;border-radius:99px">
-                  <input type="checkbox" :checked="panelLib.variantGen.poses.includes(p.id)" @change="togglePanelLibVariantPose(p.id)">
-                  <span x-text="p.label_ja"></span>
-                </label>
-              </template>
-            </div>
-            <div style="display:flex;gap:12px;align-items:end">
-              <label style="font-size:12px;color:#cbd5e1">モデル
-                <select x-model="panelLib.variantGen.model" style="width:220px;margin-top:4px">
-                  <option value="gemini-3.1-flash-lite-image">Nano Banana 2 Lite（既定・廉価）</option>
-                  <option value="gemini-3.1-flash-image">Nano Banana 2（標準）</option>
-                  <option value="gemini-3-pro-image">Nano Banana Pro（高品質・高額）</option>
-                  <option value="">env既定（NANOBANANA_MODEL）</option>
-                </select>
-              </label>
-              <button class="btn btn-primary" :disabled="panelLib.variantBusy" @click="generatePanelLibVariants()">
-                <span x-show="!panelLib.variantBusy">🖼️ バリアント生成</span><span x-show="panelLib.variantBusy">生成中…</span>
-              </button>
-            </div>
-            <span x-show="panelLib.msg" style="margin-left:0;display:block;margin-top:8px;font-size:12px;color:#7dd3fc" x-text="panelLib.msg"></span>
-          </div>
-
-          <!-- 承認待ちキュー -->
-          <template x-if="panelLib.pending.length">
-            <div style="margin-bottom:20px">
-              <h3 style="font-size:14px;color:#fbbf24;margin:0 0 8px">⏳ 承認待ち（<span x-text="panelLib.pending.length"></span>件・Aロールからはまだ引かれません）</h3>
-              <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(180px,1fr));gap:12px">
-                <template x-for="item in panelLib.pending" :key="item.slot_id">
-                  <div style="background:#2d1b00;border:1px solid #92400e;border-radius:8px;overflow:hidden">
-                    <img :src="panelLibImageUrl(item)" style="width:100%;aspect-ratio:16/9;object-fit:cover;display:block">
-                    <div style="padding:8px;font-size:10px;color:#94a3b8">
-                      <div style="color:#e2e8f0;font-size:11px;margin-bottom:2px" x-text="item.slot_id"></div>
-                      <div x-text="'pose: ' + (item.pose || '-')"></div>
-                      <div style="display:flex;gap:6px;margin-top:6px">
-                        <button class="btn btn-success btn-sm" style="flex:1;font-size:10px;padding:3px" @click="approvePanelLib(item.slot_id)">✓ 承認</button>
-                        <button class="btn btn-ghost btn-sm" style="font-size:10px;padding:3px 6px" @click="deletePanelLib(item.slot_id)">🗑 却下</button>
-                      </div>
-                    </div>
-                  </div>
-                </template>
-              </div>
-            </div>
-          </template>
-
-          <!-- 検索・一覧 -->
-          <h3 style="font-size:14px;color:#e2e8f0;margin:18px 0 8px">ライブラリ一覧（承認済み）</h3>
-          <div style="display:grid;grid-template-columns:repeat(3,1fr) auto;gap:10px;align-items:end;margin-bottom:12px">
-            <label style="font-size:12px;color:#cbd5e1">表情
-              <select x-model="panelLib.filter.emotion" @change="searchPanelLib()" style="width:100%;margin-top:4px">
-                <option value="">すべて</option>
-                <template x-for="p in (studioPresets.emotion||[])" :key="p.id"><option :value="p.id" x-text="p.label_ja"></option></template>
-              </select>
-            </label>
-            <label style="font-size:12px;color:#cbd5e1">ショット
-              <select x-model="panelLib.filter.shot" @change="searchPanelLib()" style="width:100%;margin-top:4px">
-                <option value="">すべて</option>
-                <template x-for="p in (studioPresets.shot||[])" :key="p.id"><option :value="p.id" x-text="p.label_ja"></option></template>
-              </select>
-            </label>
-            <label style="font-size:12px;color:#cbd5e1">アングル
-              <select x-model="panelLib.filter.angle" @change="searchPanelLib()" style="width:100%;margin-top:4px">
-                <option value="">すべて</option>
-                <template x-for="p in (studioPresets.angle||[])" :key="p.id"><option :value="p.id" x-text="p.label_ja"></option></template>
-              </select>
-            </label>
-            <button class="btn btn-ghost btn-sm" @click="searchPanelLib()">🔄 再検索</button>
-          </div>
-
-          <div x-show="panelLib.busy" style="font-size:12px;color:#94a3b8">読み込み中…</div>
-          <div x-show="!panelLib.busy && !panelLib.items.length" class="empty" style="padding:20px">該当するスロットがありません</div>
-          <div x-show="!panelLib.busy && panelLib.items.length" style="display:grid;grid-template-columns:repeat(auto-fill,minmax(180px,1fr));gap:12px">
-            <template x-for="item in panelLib.items" :key="item.slot_id">
-              <div style="background:#0f172a;border-radius:8px;overflow:hidden" :style="item.is_stale ? 'outline:2px solid #dc2626' : ''">
-                <img :src="panelLibImageUrl(item)" style="width:100%;aspect-ratio:16/9;object-fit:cover;display:block">
-                <div style="padding:8px;font-size:10px;color:#94a3b8">
-                  <div style="color:#e2e8f0;font-size:11px;margin-bottom:2px" x-text="item.slot_id"></div>
-                  <div x-text="'使用回数: ' + (item.times_used || 0)"></div>
-                  <div x-show="item.is_stale" style="color:#f87171">⚠ 外見が更新済み（古い）</div>
-                  <div style="display:flex;justify-content:space-between;align-items:center;margin-top:4px">
-                    <span x-text="item.model || ''" style="opacity:0.6"></span>
-                    <button class="btn btn-ghost btn-sm" style="padding:2px 6px;font-size:10px" @click="deletePanelLib(item.slot_id)">🗑</button>
-                  </div>
-                </div>
-              </div>
-            </template>
-          </div>
-        </div>
-      </div>
-    </template>
-
-    <!-- ════════ ✂️ 切り抜きタブ（合成素材の在庫。UIは🔍合成チェックと同じ作り） ════════ -->
-    <template x-if="tab === 'cutout'">
-      <div>
-        <div class="card">
-          <h2>✂️ 切り抜き
-            <span style="font-weight:400;text-transform:none;color:#4b5563;font-size:11px">
-              背景を抜いたキャラ素材の在庫 — 台本行に割り当てて背景・吹き出しと合成します
-            </span>
-          </h2>
-
           <!-- キャラ選択（プルダウンでなくボタン。一覧性を優先） -->
-          <div style="display:flex;gap:6px;flex-wrap:wrap;margin-top:10px;align-items:center">
+          <div style="display:flex;gap:6px;flex-wrap:wrap;align-items:center">
             <button class="btn btn-sm"
-                    :style="cutoutLib.charId === '*' ? 'background:#4c1d95;color:#ede9fe' : ''"
-                    @click="cutoutLib.charId = '*'; loadCutoutLib()">すべてのキャラ</button>
+                    :style="charLib.charId === '*' ? 'background:#4c1d95;color:#ede9fe' : ''"
+                    @click="charLib.charId = '*'; loadCharLib()">すべてのキャラ</button>
             <template x-for="c in charas" :key="c.char_id">
               <button class="btn btn-sm"
-                      :style="cutoutLib.charId === c.char_id ? 'background:#4c1d95;color:#ede9fe' : ''"
-                      @click="cutoutLib.charId = c.char_id; loadCutoutLib()"
-                      x-text="c.name || c.char_id"></button>
+                      :style="(charLib.charId === c.char_id ? 'background:#4c1d95;color:#ede9fe;' : '')
+                            + (charImageBlockReason(c) ? 'opacity:0.55;' : '')"
+                      :title="charImageBlockReason(c) ? charImageBlockReason(c) + ' ／ 生成はできません（在庫の閲覧・整理はできます）' : ''"
+                      @click="charLib.charId = c.char_id; loadCharLib()">
+                <span x-text="c.name || c.char_id"></span>
+                <span x-show="c.references && c.references.length" title="リファレンス設定済み">⭐</span>
+                <span x-show="charImageBlockReason(c)" style="color:#f59e0b"
+                      :title="charImageBlockReason(c)">✕</span>
+              </button>
             </template>
-            <button class="btn btn-sm" style="margin-left:auto" @click="loadCutoutLib()"
-                    :disabled="cutoutLib.busy || !cutoutLib.charId">🔄 再読込</button>
+            <button class="btn btn-sm" style="margin-left:auto" @click="loadCharLib()"
+                    :disabled="charLib.busy || !charLib.charId">🔄 再読込</button>
           </div>
 
-          <template x-if="!cutoutLib.charId">
+          <template x-if="!charLib.charId">
             <div class="empty" style="padding:24px">キャラクターを選んでください</div>
           </template>
 
-          <template x-if="cutoutLib.charId">
+          <template x-if="charLib.charId">
             <div>
-              <!-- 集計バー -->
-              <div style="display:flex;gap:16px;align-items:center;flex-wrap:wrap;margin-top:12px">
-                <span style="font-size:12px;color:#86efac" x-text="`● 承認済み ${cutoutCounts.approved}`"></span>
-                <span style="font-size:12px;color:#fde68a" x-text="`● 未承認 ${cutoutCounts.pending}`"></span>
-                <span style="font-size:12px;color:#fecaca" x-show="cutoutCounts.stale"
-                      x-text="`● 世代違い ${cutoutCounts.stale}`"></span>
-                <span style="font-size:11px;color:#4b5563;margin-left:auto"
-                      x-text="`生涯上限 ${cutoutThresholds.max_uses ?? 3}回 / 使い回し判定 距離 ${cutoutThresholds.repetitive_below ?? 0.073} 未満`"></span>
-                <button class="btn btn-primary btn-sm" x-show="cutoutCounts.pending"
-                        :disabled="cutoutLib.busy" @click="approveAllCutouts()"
-                        x-text="`✔ 未承認 ${cutoutCounts.pending} 件をまとめて承認`"></button>
+              <!-- 生成パネル: 特定の1キャラに積む操作なので「すべてのキャラ」では隠す。
+                   画像を使わない設定・外見が無い・参照画像が無いキャラも隠す（バックエンドが
+                   拒否するので、見せても押せば必ず失敗する）。理由は charImageBlockReason -->
+              <template x-if="charLibCanGenerate">
+                <div>
+                  <!-- 1枚だけ生成 -->
+                  <div style="background:#0f172a;border-radius:8px;padding:14px;margin:14px 0">
+                    <h3 style="font-size:13px;color:#e2e8f0;margin:0 0 8px">1枚だけ生成（即承認・背景除去も自動・必ず在庫に入る）</h3>
+                    <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:12px">
+                      <label style="font-size:12px;color:#cbd5e1">表情
+                        <select x-model="charLib.gen.emotion" style="width:100%;margin-top:4px">
+                          <option value="">（未選択）</option>
+                          <template x-for="p in (studioPresets.emotion||[])" :key="p.id"><option :value="p.id" x-text="p.label_ja"></option></template>
+                        </select>
+                      </label>
+                      <label style="font-size:12px;color:#cbd5e1">ショット
+                        <select x-model="charLib.gen.shot" style="width:100%;margin-top:4px">
+                          <option value="">（未選択）</option>
+                          <template x-for="p in (studioPresets.shot||[])" :key="p.id"><option :value="p.id" x-text="p.label_ja"></option></template>
+                        </select>
+                      </label>
+                      <label style="font-size:12px;color:#cbd5e1">アングル
+                        <select x-model="charLib.gen.angle" style="width:100%;margin-top:4px">
+                          <option value="">（未選択）</option>
+                          <template x-for="p in (studioPresets.angle||[])" :key="p.id"><option :value="p.id" x-text="p.label_ja"></option></template>
+                        </select>
+                      </label>
+                      <label style="font-size:12px;color:#cbd5e1">ポーズ（任意）
+                        <select x-model="charLib.gen.pose" style="width:100%;margin-top:4px">
+                          <option value="">（未選択）</option>
+                          <template x-for="p in (studioPresets.pose||[])" :key="p.id"><option :value="p.id" x-text="p.label_ja"></option></template>
+                        </select>
+                      </label>
+                    </div>
+                    <div style="display:flex;gap:12px;align-items:end;margin-top:10px">
+                      <label style="font-size:12px;color:#cbd5e1">モデル
+                        <select x-model="charLib.gen.model" style="width:220px;margin-top:4px">
+                          <option value="gemini-3.1-flash-lite-image">Nano Banana 2 Lite（既定・廉価）</option>
+                          <option value="gemini-3.1-flash-image">Nano Banana 2（標準）</option>
+                          <option value="gemini-3-pro-image">Nano Banana Pro（高品質・高額）</option>
+                          <option value="">env既定（NANOBANANA_MODEL）</option>
+                        </select>
+                      </label>
+                      <button class="btn btn-primary" :disabled="charLib.genBusy" @click="generateCharLib()">
+                        <span x-show="!charLib.genBusy">🖼️ 生成</span><span x-show="charLib.genBusy">生成中…</span>
+                      </button>
+                    </div>
+                  </div>
+
+                  <!-- バリアント一括生成 -->
+                  <div style="background:#0f172a;border-radius:8px;padding:14px;margin-bottom:16px">
+                    <h3 style="font-size:13px;color:#e2e8f0;margin:0 0 4px">バリアント一括生成（承認待ちで登録）</h3>
+                    <p style="font-size:11px;color:#f59e0b;margin:0 0 10px">
+                      ⚠ 同じ表情×ショット×アングルのままposeだけ変えて複数生成する。生成物は承認待ちで登録され、
+                      下の一覧（「未承認」チップ）で目視確認してから承認するまでAロールからは引かれない
+                      （色ブレ等の個体差対策）。角度と競合するpose（見上げる/見下ろす等）は避けること。
+                      承認すれば🖼️パネル・✂️切り抜きの両方として使える（2026-08-29から切り抜きも作る）。
+                    </p>
+                    <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:12px">
+                      <label style="font-size:12px;color:#cbd5e1">表情
+                        <select x-model="charLib.variantGen.emotion" style="width:100%;margin-top:4px">
+                          <option value="">（未選択）</option>
+                          <template x-for="p in (studioPresets.emotion||[])" :key="p.id"><option :value="p.id" x-text="p.label_ja"></option></template>
+                        </select>
+                      </label>
+                      <label style="font-size:12px;color:#cbd5e1">ショット
+                        <select x-model="charLib.variantGen.shot" style="width:100%;margin-top:4px">
+                          <option value="">（未選択）</option>
+                          <template x-for="p in (studioPresets.shot||[])" :key="p.id"><option :value="p.id" x-text="p.label_ja"></option></template>
+                        </select>
+                      </label>
+                      <label style="font-size:12px;color:#cbd5e1">アングル
+                        <select x-model="charLib.variantGen.angle" style="width:100%;margin-top:4px">
+                          <option value="">（未選択）</option>
+                          <template x-for="p in (studioPresets.angle||[])" :key="p.id"><option :value="p.id" x-text="p.label_ja"></option></template>
+                        </select>
+                      </label>
+                    </div>
+                    <div style="font-size:12px;color:#cbd5e1;margin:10px 0 4px">pose（複数選択・バリアント数=選択数）</div>
+                    <div style="display:flex;flex-wrap:wrap;gap:8px;margin-bottom:10px">
+                      <template x-for="p in (studioPresets.pose||[])" :key="p.id">
+                        <label style="display:flex;align-items:center;gap:4px;cursor:pointer;font-size:11px;background:#1e293b;padding:3px 8px;border-radius:99px">
+                          <input type="checkbox" :checked="charLib.variantGen.poses.includes(p.id)" @change="toggleCharLibVariantPose(p.id)">
+                          <span x-text="p.label_ja"></span>
+                        </label>
+                      </template>
+                    </div>
+                    <div style="display:flex;gap:12px;align-items:end">
+                      <label style="font-size:12px;color:#cbd5e1">モデル
+                        <select x-model="charLib.variantGen.model" style="width:220px;margin-top:4px">
+                          <option value="gemini-3.1-flash-lite-image">Nano Banana 2 Lite（既定・廉価）</option>
+                          <option value="gemini-3.1-flash-image">Nano Banana 2（標準）</option>
+                          <option value="gemini-3-pro-image">Nano Banana Pro（高品質・高額）</option>
+                          <option value="">env既定（NANOBANANA_MODEL）</option>
+                        </select>
+                      </label>
+                      <button class="btn btn-primary" :disabled="charLib.variantBusy" @click="generateCharLibVariants()">
+                        <span x-show="!charLib.variantBusy">🖼️ バリアント生成</span><span x-show="charLib.variantBusy">生成中…</span>
+                      </button>
+                    </div>
+                  </div>
+
+                  <!-- バッチ生成（旧🎬紙芝居のノリ。固定する軸と🎲ランダムにする軸を選んで複数枚） -->
+                  <div style="background:#0f172a;border-radius:8px;padding:14px;margin-bottom:16px">
+                    <h3 style="font-size:13px;color:#e2e8f0;margin:0 0 4px">🎲 バッチ生成（先回りで在庫に厚みを持たせる）</h3>
+                    <p style="font-size:11px;color:#94a3b8;margin:0 0 10px">
+                      表情・ショット・アングル・ポーズごとに、<b>固定する値</b>か<b>🎲ランダム</b>かを選んで複数枚まとめて生成する。
+                      1枚ずつ「1枚だけ生成」を呼ぶのと同じ経路 ── <b>受け入れ検査つき・即承認・✂️切り抜きも作る</b>
+                      （バリアント一括生成とは違い、承認待ちにはならない）。同時1枚ずつ・間隔を空けて送るのでレート制限には配慮する。
+                    </p>
+                    <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:12px">
+                      <template x-for="axis in [['emotion','表情'],['shot','ショット'],['angle','アングル'],['pose','ポーズ']]" :key="axis[0]">
+                        <div>
+                          <label style="font-size:12px;color:#cbd5e1" x-text="axis[1]"></label>
+                          <select :disabled="charLib.batchRand[axis[0]]" x-model="charLib.batchGen[axis[0]]"
+                                  style="width:100%;margin-top:4px">
+                            <option value="">（未選択）</option>
+                            <template x-for="p in (studioPresets[axis[0]]||[])" :key="p.id">
+                              <option :value="p.id" x-text="p.label_ja"></option>
+                            </template>
+                          </select>
+                          <label style="font-size:10px;color:#a78bfa;display:flex;align-items:center;gap:3px;margin-top:2px;cursor:pointer">
+                            <input type="checkbox" x-model="charLib.batchRand[axis[0]]" style="margin:0">🎲ランダム
+                          </label>
+                        </div>
+                      </template>
+                    </div>
+                    <div style="font-size:10px;color:#4b5563;margin-top:8px;line-height:1.6">
+                      <b>emotion・shot・angle は必ず「固定値を選ぶ」か「🎲ランダムにする」のどちらか</b>にすること
+                      （どちらも満たさないまま空で生成すると、その絵は自動割当から永久に見えなくなる ── バックエンドも拒否する）。
+                      poseだけは未選択のまま（固定・ランダムどちらもOFF）で構わない。
+                    </div>
+
+                    <div style="display:grid;grid-template-columns:1fr 1fr 2fr;gap:12px;align-items:end;margin-top:12px">
+                      <label style="font-size:12px;color:#cbd5e1">枚数
+                        <select x-model="charLib.batch.count" style="width:100%;margin-top:4px">
+                          <option>5</option><option>10</option><option>15</option><option>20</option>
+                        </select>
+                      </label>
+                      <label style="font-size:12px;color:#cbd5e1">送出間隔
+                        <select x-model.number="charLib.batch.intervalMs" style="width:100%;margin-top:4px">
+                          <option value="2000">2秒</option><option value="3500">3.5秒</option>
+                          <option value="5000">5秒</option><option value="8000">8秒</option>
+                        </select>
+                      </label>
+                      <label style="font-size:12px;color:#cbd5e1">モデル
+                        <select x-model="charLib.batchGen.model" style="width:100%;margin-top:4px">
+                          <option value="gemini-3.1-flash-lite-image">Nano Banana 2 Lite（既定・廉価）</option>
+                          <option value="gemini-3.1-flash-image">Nano Banana 2（標準）</option>
+                          <option value="gemini-3-pro-image">Nano Banana Pro（高品質・高額）</option>
+                          <option value="">env既定（NANOBANANA_MODEL）</option>
+                        </select>
+                      </label>
+                    </div>
+                    <p style="font-size:11px;color:#f59e0b;margin:8px 0 0">
+                      ⚠ 課金は<b>1枚につき1回</b>（作り直しは行いません）。目安
+                      <span x-text="charLib.batch.count"></span>枚 ≈
+                      $<span x-text="(charLib.batch.count * 0.04).toFixed(2)"></span>。
+                      生成した絵は<b>すべて在庫に入ります</b> ── 似ている絵も資産として残し、
+                      要らないものは詳細ビューの「🔎 探す」で見比べてから削除してください。
+                    </p>
+                    <div style="display:flex;gap:8px;align-items:center;margin-top:10px">
+                      <button class="btn btn-primary" :disabled="charLib.batchBusy" @click="generateCharLibBatch()">
+                        <span x-text="charLib.batchBusy ? `⏳ 生成中 ${charLib.batchProgress.done}/${charLib.batchProgress.total}` : '🎲 バッチ生成'"></span>
+                      </button>
+                      <button class="btn" x-show="charLib.batchBusy" style="color:#f87171" @click="stopCharLibBatch()">⏹ 中止</button>
+                    </div>
+                    <div x-show="charLib.batchBusy || charLib.batchProgress.total" style="margin-top:8px">
+                      <div x-show="charLib.batchBusy" class="progress-indeterminate"></div>
+                      <div style="font-size:11px;color:#94a3b8;margin-top:4px"
+                           x-text="`進捗 ${charLib.batchProgress.done}/${charLib.batchProgress.total}　失敗 ${charLib.batchProgress.failed}`"></div>
+                    </div>
+                  </div>
+                </div>
+              </template>
+              <div x-show="charLib.charId === '*'" style="font-size:11px;color:#64748b;margin:10px 0">
+                生成は特定の1キャラを選んだ時だけ行えます（積む先が決まらないため）。全キャラ表示は在庫の閲覧・整理専用です。
+              </div>
+              <div x-show="charLib.charId !== '*' && !charLibCanGenerate" style="font-size:11px;color:#fbbf24;margin:10px 0">
+                このキャラは<b x-text="charLibBlockReason"></b>のため、生成パネルは表示していません
+                （在庫の閲覧・整理はできます）。🎭キャラタブで設定すると生成できるようになります。
               </div>
 
-              <!-- 絞り込みチップ（プルダウンでなくボタン） -->
-              <div style="display:flex;gap:6px;flex-wrap:wrap;margin-top:10px">
-                <button class="btn btn-sm" :style="cutoutLib.filter === 'all' ? 'background:#4c1d95;color:#ede9fe' : ''"
-                        @click="cutoutLib.filter = 'all'" x-text="`すべて ${cutoutCounts.total}`"></button>
-                <button class="btn btn-sm" x-show="cutoutCounts.pending"
-                        :style="cutoutLib.filter === 'pending' ? 'background:#78350f;color:#fde68a' : ''"
-                        @click="cutoutLib.filter = 'pending'" x-text="`未承認 ${cutoutCounts.pending}`"></button>
-                <button class="btn btn-sm" x-show="cutoutCounts.unused"
-                        :style="cutoutLib.filter === 'unused' ? 'background:#164e63;color:#a5f3fc' : ''"
-                        @click="cutoutLib.filter = 'unused'" x-text="`未使用 ${cutoutCounts.unused}`"></button>
-                <button class="btn btn-sm" x-show="cutoutCounts.exhausted"
-                        :style="cutoutLib.filter === 'exhausted' ? 'background:#7f1d1d;color:#fecaca' : ''"
-                        @click="cutoutLib.filter = 'exhausted'" x-text="`上限到達 ${cutoutCounts.exhausted}`"></button>
-                <template x-for="[emo, n] in cutoutByEmotion" :key="emo">
-                  <button class="btn btn-sm" :style="cutoutLib.filter === 'emo:' + emo ? 'background:#1e3a8a;color:#bfdbfe' : ''"
-                          @click="cutoutLib.filter = 'emo:' + emo" x-text="`${emo} ${n}`"></button>
+              <!-- 集計バー -->
+              <div style="display:flex;gap:16px;align-items:center;flex-wrap:wrap;margin-top:14px">
+                <span style="font-size:12px;color:#86efac" x-text="`● 承認済み ${charLibCounts.approved}`"></span>
+                <span style="font-size:12px;color:#fde68a" x-show="charLibCounts.unapproved"
+                      x-text="`● 未承認 ${charLibCounts.unapproved}`"></span>
+                <span style="font-size:12px;color:#fecaca" x-show="charLibCounts.stale"
+                      x-text="`● 世代違い ${charLibCounts.stale}`"></span>
+                <span style="font-size:11px;color:#4b5563;margin-left:auto"
+                      x-text="`✂️生涯上限 ${cutoutThresholds.max_uses ?? 3}回 / 使い回し判定 距離 ${cutoutThresholds.repetitive_below ?? 0.073} 未満`"></span>
+                <button class="btn btn-primary btn-sm" x-show="charLibCounts.unapproved"
+                        :disabled="charLib.busy" @click="approveAllCharLib()"
+                        x-text="`✔ 未承認 ${charLibCounts.unapproved} 件をまとめて承認`"></button>
+                <button class="btn btn-sm" x-show="charLibCounts.stale"
+                        style="background:#7f1d1d;color:#fecaca"
+                        :disabled="charLib.busy" @click="reblessCharLib()"
+                        title="「見た目は変わっていない」と宣言して、世代違いの在庫を現行世代へ付け替える（確認あり・バックアップあり）"
+                        x-text="`🔁 世代違い ${charLibCounts.stale} 件を付け替える`"></button>
+              </div>
+
+              <!-- 用途（背景付きのコマとして使えるか／合成素材として使えるか。両方満たす絵もある） -->
+              <div style="display:flex;gap:6px;flex-wrap:wrap;margin-top:10px;align-items:center">
+                <span style="font-size:10px;color:#64748b;min-width:60px">用途</span>
+                <button class="btn btn-sm" :style="charLib.usable === 'all' ? 'background:#4c1d95;color:#ede9fe' : ''"
+                        @click="charLibSetFilter('usable', 'all')" x-text="`すべて ${charLibCounts.total}`"></button>
+                <button class="btn btn-sm" x-show="charLibCounts.panelUsable"
+                        :style="charLib.usable === 'panel' ? 'background:#1e3a8a;color:#bfdbfe' : ''"
+                        @click="charLibSetFilter('usable', 'panel')" x-text="`🖼️ コマになる ${charLibCounts.panelUsable}`"></button>
+                <button class="btn btn-sm" x-show="charLibCounts.cutoutUsable"
+                        :style="charLib.usable === 'cutout' ? 'background:#164e63;color:#a5f3fc' : ''"
+                        @click="charLibSetFilter('usable', 'cutout')" x-text="`✂️ 切り抜きがある ${charLibCounts.cutoutUsable}`"></button>
+              </div>
+
+              <!-- 状態 -->
+              <div style="display:flex;gap:6px;flex-wrap:wrap;margin-top:8px;align-items:center">
+                <span style="font-size:10px;color:#64748b;min-width:60px">状態</span>
+                <button class="btn btn-sm" :style="charLib.status === 'all' ? 'background:#4c1d95;color:#ede9fe' : ''"
+                        @click="charLibSetFilter('status', 'all')">すべて</button>
+                <button class="btn btn-sm" x-show="charLibCounts.unapproved"
+                        :style="charLib.status === 'unapproved' ? 'background:#78350f;color:#fde68a' : ''"
+                        @click="charLibSetFilter('status', 'unapproved')" x-text="`未承認 ${charLibCounts.unapproved}`"></button>
+                <button class="btn btn-sm" x-show="charLibCounts.unused"
+                        :style="charLib.status === 'unused' ? 'background:#164e63;color:#a5f3fc' : ''"
+                        @click="charLibSetFilter('status', 'unused')" x-text="`未使用 ${charLibCounts.unused}`"></button>
+                <button class="btn btn-sm" x-show="charLibCounts.exhausted"
+                        :style="charLib.status === 'exhausted' ? 'background:#7f1d1d;color:#fecaca' : ''"
+                        @click="charLibSetFilter('status', 'exhausted')" x-text="`✂️上限到達 ${charLibCounts.exhausted}`"></button>
+                <button class="btn btn-sm" x-show="charLibCounts.stale"
+                        :style="charLib.status === 'stale' ? 'background:#7f1d1d;color:#fecaca' : ''"
+                        @click="charLibSetFilter('status', 'stale')" x-text="`世代違い ${charLibCounts.stale}`"></button>
+              </div>
+
+              <!-- 感情 -->
+              <div style="display:flex;gap:6px;flex-wrap:wrap;margin-top:8px;align-items:center">
+                <span style="font-size:10px;color:#64748b;min-width:60px">表情</span>
+                <button class="btn btn-sm" :style="charLib.emotion === 'all' ? 'background:#1e3a8a;color:#bfdbfe' : ''"
+                        @click="charLibSetFilter('emotion', 'all')">すべて</button>
+                <template x-for="[emo, n] in charLibEmotionFacet" :key="emo">
+                  <button class="btn btn-sm" :style="charLib.emotion === emo ? 'background:#1e3a8a;color:#bfdbfe' : ''"
+                          @click="charLibSetFilter('emotion', emo)" x-text="`${emo} ${n}`"></button>
                 </template>
               </div>
-              <div style="font-size:11px;color:#64748b;margin-top:8px;line-height:1.7">
-                <b>未承認のものは台本行に割り当てられません</b>（安全弁）。要らないものだけ消して、
-                残りをまとめて承認する運用です。クリックで詳細（実測値・由来・使用回数）。
+
+              <!-- ショット -->
+              <div style="display:flex;gap:6px;flex-wrap:wrap;margin-top:8px;align-items:center">
+                <span style="font-size:10px;color:#64748b;min-width:60px">ショット</span>
+                <button class="btn btn-sm" :style="charLib.shot === 'all' ? 'background:#164e63;color:#a5f3fc' : ''"
+                        @click="charLibSetFilter('shot', 'all')">すべて</button>
+                <template x-for="[sh, n] in charLibShotFacet" :key="sh">
+                  <button class="btn btn-sm" :style="charLib.shot === sh ? 'background:#164e63;color:#a5f3fc' : ''"
+                          @click="charLibSetFilter('shot', sh)" x-text="`${sh} ${n}`"></button>
+                </template>
+              </div>
+
+              <div style="font-size:11px;color:#64748b;margin-top:10px;line-height:1.7">
+                <b>未承認のものは台本行に割り当てられません</b>（安全弁）。<b>新しい順</b>に並びます。
+                クリックで詳細（背景付き/切り抜きの両方・実測値・由来・ラベル編集）。
+                サムネの地色に注意 ── <b>実背景色＝🖼️パネル</b>／<b>灰色地＝✂️切り抜きのみ</b>
+                （切り抜きは背景を持たないので、そのままでは合成できません）。
+              </div>
+              <div x-show="charLibCounts.stale" style="font-size:11px;color:#fca5a5;margin-top:8px;line-height:1.7">
+                <b>世代違い</b>＝キャラの外見（appearance_prompt か reference画像）が、その在庫を作った時から
+                変わっている、という意味です。<b>参照画像を1枚足しただけでも全件が世代違いになります。</b>
+                外見を実際には変えていないなら「🔁 付け替える」で戻せます
+                ── これは<b>機械の判定ではなく人の宣言</b>なので、確認を挟みます。
               </div>
 
               <!-- サムネイル一覧 -->
+              <div x-show="charLib.busy" style="font-size:12px;color:#94a3b8;margin-top:10px">読み込み中…</div>
+              <div x-show="!charLib.busy && !charLibFiltered.length" class="empty" style="padding:24px">該当する在庫がありません</div>
               <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(148px,1fr));gap:8px;margin-top:12px">
-                <template x-for="e in cutoutFiltered" :key="(e.char_id || '') + '/' + e.slot_id">
-                  <div :style="`cursor:zoom-in;border-radius:6px;overflow:hidden;background:#0f172a;border:2px solid ${cutoutBorder(e)}`"
-                       @click="cutoutLib.detail = e">
-                    <img :src="cutoutUrl(e)" loading="lazy"
-                         style="width:100%;display:block;aspect-ratio:16/9;object-fit:contain;background:#334155">
-                    <div style="padding:4px 6px;display:flex;align-items:center;gap:5px">
+                <template x-for="e in charLibFiltered" :key="(e.char_id || '') + '/' + e.slot_id">
+                  <div :style="`cursor:zoom-in;border-radius:6px;overflow:hidden;border:2px solid ${charLibBorder(e)};`
+                              + (e.usable?.panel ? 'background:#334155' : 'background:#808080')"
+                       @click="charLib.detail = e">
+                    <img :src="charLibThumbUrl(e)" loading="lazy"
+                         style="width:100%;display:block;aspect-ratio:16/9;object-fit:contain">
+                    <div style="padding:4px 6px;display:flex;align-items:center;gap:4px;background:#0f172a">
                       <span style="font-size:11px" x-text="e.review_status === 'pending' ? '⏳' : '✔'"></span>
+                      <span style="font-size:10px" x-show="e.usable?.panel" title="背景付きコマとして使える">🖼️</span>
+                      <span style="font-size:10px" x-show="e.usable?.cutout" title="合成素材として使える">✂️</span>
                       <span style="font-size:9px;color:#94a3b8;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;flex:1"
-                            x-text="(cutoutLib.charId === '*' ? (charaName(e.char_id) + ' / ') : '') + (e.emotion || '感情なし')"></span>
-                      <span style="font-size:9px;color:#64748b" x-text="`${e.times_used || 0}/${cutoutThresholds.max_uses ?? 3}`"></span>
+                            x-text="(charLib.charId === '*' ? (charaName(e.char_id) + ' / ') : '') + (e.emotion || '感情なし')"></span>
+                      <span style="font-size:9px;color:#64748b" x-text="`${e.times_used || 0}回`"></span>
                     </div>
                   </div>
                 </template>
               </div>
-              <div x-show="!cutoutFiltered.length" class="empty" style="padding:24px">該当する切り抜きはありません</div>
             </div>
           </template>
-          <div x-show="cutoutLib.msg" style="font-size:11px;color:#a5b4fc;margin-top:8px" x-text="cutoutLib.msg"></div>
+          <div x-show="charLib.msg" style="font-size:11px;color:#a5b4fc;margin-top:8px" x-text="charLib.msg"></div>
         </div>
       </div>
     </template>
@@ -4064,78 +4073,414 @@
   </div>
 </div>
 
-<!-- ✂️ 切り抜き 詳細ビュー（実測値と由来。合成チェックの詳細と同じ作り） -->
-<div class="modal-overlay" x-show="cutoutLib.detail" x-cloak
-     @keydown.escape.window="cutoutLib.detail = null"
-     @keydown.arrow-left.window="cutoutStep(-1)"
-     @keydown.arrow-right.window="cutoutStep(1)"
-     @click.self="cutoutLib.detail = null">
-  <template x-if="cutoutLib.detail">
+<!-- 📚 キャラ在庫 詳細ビュー（背景付き/切り抜き両方を並べて見せる。旧✂️切り抜き詳細を統合拡張） -->
+<div class="modal-overlay" x-show="charLib.detail" x-cloak
+     @keydown.escape.window="charLib.detail = null"
+     @keydown.arrow-left.window="charLibStep(-1)"
+     @keydown.arrow-right.window="charLibStep(1)"
+     @click.self="charLib.detail = null">
+  <template x-if="charLib.detail">
     <div style="background:#1a1d2e;border:1px solid #4c1d95;border-radius:10px;padding:16px;
-                width:1100px;max-width:96vw;max-height:92vh;overflow-y:auto;
+                width:1150px;max-width:96vw;max-height:92vh;overflow-y:auto;
                 display:flex;gap:16px;flex-wrap:wrap">
-      <!-- 左: 大きいプレビュー（透過が分かるよう市松の代わりに中間グレー） -->
-      <div style="flex:1 1 560px;min-width:320px">
-        <img :src="cutoutUrl(cutoutLib.detail)"
-             style="width:100%;border-radius:6px;display:block;background:#808080">
-        <div style="display:flex;gap:8px;align-items:center;margin-top:10px;flex-wrap:wrap">
-          <button class="btn btn-sm" @click="cutoutStep(-1)">← 前</button>
-          <span style="font-size:11px;color:#64748b" x-text="cutoutPositionLabel"></span>
-          <button class="btn btn-sm" @click="cutoutStep(1)">次 →</button>
-          <span style="font-size:10px;color:#4b5563">（← → キーでも移動）</span>
+      <!-- 左: プレビュー（背景付き/切り抜きを両方あれば並べて表示） -->
+      <div style="flex:1 1 560px;min-width:320px;display:flex;flex-direction:column;gap:10px">
+        <div :style="`display:grid;gap:8px;grid-template-columns:${charLib.detail.usable?.panel && charLib.detail.usable?.cutout ? '1fr 1fr' : '1fr'}`">
+          <div x-show="charLib.detail.usable?.panel">
+            <div style="font-size:10px;color:#64748b;margin-bottom:4px">🖼️ パネル（背景付き）</div>
+            <img :src="charLibImageUrl(charLib.detail)"
+                 style="width:100%;border-radius:6px;display:block;background:#334155">
+          </div>
+          <div x-show="charLib.detail.usable?.cutout">
+            <div style="font-size:10px;color:#64748b;margin-bottom:4px">✂️ 切り抜き（透過・表示用に灰色地）</div>
+            <img :src="charLibCutoutUrl(charLib.detail)"
+                 style="width:100%;border-radius:6px;display:block;background:#808080">
+          </div>
         </div>
-        <div style="font-size:10px;color:#4b5563;margin-top:6px">
-          背景の灰色は表示用です（実体は透過PNG）
+        <div x-show="!charLib.detail.usable?.panel" style="font-size:10px;color:#4b5563">
+          背景付きのコマとしては使えません（切り抜きのみの在庫。合成前提の素材です）。
+        </div>
+        <div x-show="!charLib.detail.usable?.cutout" style="font-size:10px;color:#4b5563">
+          合成素材（切り抜き）は持っていません。単発生成（受け入れ検査あり）でのみ作られます
+          ── バリアント一括生成はこれを作りません。
+        </div>
+        <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
+          <button class="btn btn-sm" @click="charLibStep(-1)">← 前</button>
+          <span style="font-size:11px;color:#64748b" x-text="charLibPositionLabel"></span>
+          <button class="btn btn-sm" @click="charLibStep(1)">次 →</button>
+          <span style="font-size:10px;color:#4b5563">（← → キーでも移動）</span>
         </div>
       </div>
 
       <!-- 右: メタ情報と操作 -->
       <div style="flex:1 1 340px;min-width:280px;display:flex;flex-direction:column;gap:10px">
         <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">
-          <span style="font-size:14px;font-weight:700;color:#c4b5fd" x-text="cutoutLib.detail.slot_id"></span>
+          <span style="font-size:14px;font-weight:700;color:#c4b5fd" x-text="charLib.detail.slot_id"></span>
           <span class="status-badge"
-                :style="cutoutLib.detail.review_status === 'pending' ? 'background:#78350f;color:#fde68a' : 'background:#166534;color:#bbf7d0'"
-                x-text="cutoutLib.detail.review_status === 'pending' ? '未承認' : '承認済み'"></span>
-          <span class="status-badge" x-show="cutoutLib.detail.is_stale"
+                :style="charLib.detail.review_status === 'pending' ? 'background:#78350f;color:#fde68a' : 'background:#166534;color:#bbf7d0'"
+                x-text="charLib.detail.review_status === 'pending' ? '未承認' : '承認済み'"></span>
+          <span class="status-badge" x-show="charLib.detail.is_stale"
                 style="background:#7f1d1d;color:#fecaca">世代違い</span>
-          <button class="btn btn-sm" style="margin-left:auto" @click="cutoutLib.detail = null">✕</button>
+          <button class="btn btn-sm" style="margin-left:auto" @click="charLib.detail = null">✕</button>
         </div>
 
         <div style="font-size:11px;color:#94a3b8;line-height:1.9">
           <div><span style="color:#64748b">使用回数</span>:
-            <span x-text="`${cutoutLib.detail.times_used || 0} / ${cutoutThresholds.max_uses ?? 3}（生涯）`"></span></div>
-          <div><span style="color:#64748b">感情（LLM判定）</span>:
-            <span x-text="cutoutLib.detail.emotion || '—'"></span></div>
-          <div><span style="color:#64748b">ショット</span>:
-            <span x-text="`${cutoutLib.detail.shot || '—'}（ラベル） / ${cutoutLib.detail.measured?.shot || '—'}（実測 ${cutoutLib.detail.measured?.heads ?? '—'}頭身）`"></span></div>
-          <div><span style="color:#64748b">アングル</span>:
-            <span x-text="cutoutLib.detail.angle || '—'"></span></div>
+            <span x-text="`${charLib.detail.times_used || 0}${charLib.detail.usable?.cutout ? ' / ' + (cutoutThresholds.max_uses ?? 3) + '（切り抜きの生涯上限）' : ''}`"></span></div>
+          <div><span style="color:#64748b">slot_id</span>:
+            <span style="font-family:monospace;color:#c4b5fd" x-text="charLib.detail.slot_id"></span></div>
+          <div style="font-size:10px;color:#4b5563;line-height:1.6">
+            slot_idは<b>作られた時の分類が残った識別子</b>で、現在のラベルではありません
+            （実体ファイル名かつ台本行からの参照先なので、ラベルを直しても変わりません）。
+          </div>
         </div>
 
-        <div style="font-size:10px;color:#4b5563;line-height:1.8;border-top:1px solid #2d3748;padding-top:8px">
+        <!-- ラベルの手直し -->
+        <div style="border-top:1px solid #2d3748;padding-top:8px">
+          <div style="font-size:10px;color:#64748b;text-transform:uppercase;letter-spacing:0.06em;margin-bottom:6px">
+            ラベル（その場で直せます）
+            <span x-show="charLib.detail.label_source === 'user'"
+                  style="color:#86efac;text-transform:none;letter-spacing:0">— 手で直し済み</span>
+          </div>
+          <div style="display:grid;grid-template-columns:70px 1fr;gap:6px 8px;align-items:center">
+            <template x-for="axis in [['emotion','表情'],['shot','ショット'],['angle','アングル'],['pose','ポーズ']]" :key="axis[0]">
+              <div style="display:contents">
+                <span style="font-size:10px;color:#64748b" x-text="axis[1]"></span>
+                <select style="font-size:11px;padding:2px;width:100%" :disabled="charLib.busy"
+                        :value="charLib.detail[axis[0]] || ''"
+                        @change="saveCharLibLabel(charLib.detail, axis[0], $event.target.value)">
+                  <option value="">（未設定）</option>
+                  <template x-for="o in (studioPresets[axis[0]] || [])" :key="o.id">
+                    <option :value="o.id" x-text="o.label_ja"></option>
+                  </template>
+                </select>
+              </div>
+            </template>
+          </div>
+          <div x-show="charLib.detail.measured?.shot" style="font-size:10px;color:#4b5563;margin-top:8px;line-height:1.7">
+            実測ショット:
+            <span style="color:#94a3b8"
+                  x-text="`${charLib.detail.measured?.shot || '—'}（${charLib.detail.measured?.heads ?? '—'}頭身）`"></span>
+            <span x-show="charLib.detail.measured?.shot && charLib.detail.shot
+                          && charLib.detail.measured.shot !== charLib.detail.shot"
+                  style="color:#fbbf24">— ラベルと食い違っています</span>
+          </div>
+          <div style="font-size:10px;color:#4b5563;margin-top:4px;line-height:1.7">
+            語彙は固定です（自由入力にすると在庫の分類が崩れるため）。選び直すと即保存されます。
+          </div>
+        </div>
+
+        <div x-show="charLib.detail.measured || charLib.detail.fingerprint"
+             style="font-size:10px;color:#4b5563;line-height:1.8;border-top:1px solid #2d3748;padding-top:8px">
           <div style="color:#64748b;margin-bottom:2px">実測値</div>
-          <div>画面占有: <span x-text="cutoutLib.detail.measured?.coverage ?? '—'"></span></div>
-          <div>光源（左右差）: <span x-text="cutoutLib.detail.measured?.light_dx ?? '—'"></span></div>
-          <div>接している辺: <span x-text="cutoutEdges(cutoutLib.detail)"></span>
+          <div x-show="charLib.detail.measured?.coverage != null">画面占有: <span x-text="charLib.detail.measured?.coverage"></span></div>
+          <div x-show="charLib.detail.measured?.light_dx != null">光源（左右差）: <span x-text="charLib.detail.measured?.light_dx"></span></div>
+          <div x-show="charLib.detail.measured?.edges">接している辺: <span x-text="charLibEdges(charLib.detail)"></span>
             <span style="color:#64748b">（接する辺は生成時に切れている＝縮小すると断面が出る）</span></div>
+          <div x-show="!charLib.detail.measured">指紋: <span x-text="charLib.detail.fingerprint?.version || '—'"></span></div>
         </div>
 
         <div style="font-size:10px;color:#4b5563;line-height:1.8;border-top:1px solid #2d3748;padding-top:8px">
           <div style="color:#64748b;margin-bottom:2px">由来</div>
-          <div x-text="`${cutoutLib.detail.source?.project_id || '—'} / ep${cutoutLib.detail.source?.episode ?? '—'} / ${cutoutLib.detail.source?.line_id || '—'}`"></div>
-          <div>生成: <span x-text="`${cutoutLib.detail.provider || '—'}${cutoutLib.detail.model ? ' / ' + cutoutLib.detail.model : '（モデル未記録）'}`"></span></div>
-          <div>指紋: <span x-text="cutoutLib.detail.fingerprint?.version || '—'"></span></div>
+          <div x-show="charLib.detail.source">
+            <span x-text="`${charLib.detail.source?.project_id || '—'} / ep${charLib.detail.source?.episode ?? '—'} / ${charLib.detail.source?.line_id || '—'}`"></span>
+          </div>
+          <div>生成: <span x-text="`${charLib.detail.provider || '—'}${charLib.detail.model ? ' / ' + charLib.detail.model : '（モデル未記録）'}`"></span></div>
+          <div x-show="charLib.detail.created_at">作成: <span x-text="charLib.detail.created_at"></span></div>
+        </div>
+
+        <!-- 似ている在庫（多様性検査の撤去に伴う道具。機械が弾かない代わりに人が見て消す） -->
+        <div x-show="charLib.detail.usable?.cutout"
+             style="font-size:10px;color:#4b5563;line-height:1.8;border-top:1px solid #2d3748;padding-top:8px">
+          <div style="display:flex;align-items:center;gap:8px;margin-bottom:4px">
+            <span style="color:#64748b">似ている在庫</span>
+            <button class="btn btn-sm" style="font-size:9px;padding:1px 6px"
+                    :disabled="charLib.similarBusy" @click="loadCharLibSimilar(charLib.detail)"
+                    x-text="charLib.similarBusy ? '照合中…' : '🔎 探す'"></button>
+            <span x-show="charLib.similarFor === charLib.detail.slot_id && !charLibSimilar.length"
+                  style="color:#4b5563">似ている絵はありませんでした</span>
+          </div>
+          <div x-show="charLib.similarFor === charLib.detail.slot_id && charLibSimilar.length"
+               style="display:grid;grid-template-columns:repeat(auto-fill,minmax(84px,1fr));gap:6px">
+            <template x-for="s in charLibSimilar" :key="s.slot_id">
+              <div style="cursor:zoom-in" @click="charLibJumpTo(s.slot_id)"
+                   :title="`距離 ${s.distance}（0=同一）／${s.emotion || '感情なし'} ${s.shot || ''}／使用${s.times_used}回`">
+                <img :src="charLibCutoutUrl({ char_id: charLib.detail.char_id, cutout: s.slot_id + '.png' })"
+                     loading="lazy"
+                     :style="`width:100%;aspect-ratio:16/9;object-fit:contain;background:#808080;border-radius:4px;`
+                           + (s.too_close ? 'outline:2px solid #f87171' : '')">
+                <div style="text-align:center;font-size:9px"
+                     :style="s.too_close ? 'color:#f87171' : 'color:#64748b'"
+                     x-text="`距離 ${s.distance}`"></div>
+              </div>
+            </template>
+          </div>
+          <div x-show="charLib.similarFor === charLib.detail.slot_id && charLibSimilar.length"
+               style="margin-top:4px;line-height:1.7">
+            近い順。<b style="color:#f87171">赤枠</b>は「使い回しに見える」の目安（選択側の閾値
+            <span x-text="cutoutThresholds.repetitive_below ?? 0.073"></span> 未満）です。
+            ⚠️ <b>保存を弾く判定ではありません</b> ── 似ていても資産価値はあるので、
+            要らないと判断した時だけ削除してください。クリックでその絵へ移動します。
+          </div>
         </div>
 
         <div style="display:flex;gap:6px;margin-top:auto;padding-top:10px;border-top:1px solid #2d3748">
           <button class="btn btn-primary btn-sm" style="flex:1"
-                  x-show="cutoutLib.detail.review_status === 'pending'"
-                  :disabled="cutoutLib.busy" @click="approveCutout(cutoutLib.detail)">✔ 承認する</button>
+                  x-show="charLib.detail.review_status === 'pending'"
+                  :disabled="charLib.busy" @click="approveCharLibEntry(charLib.detail)">✔ 承認する</button>
           <button class="btn btn-danger btn-sm" style="flex:1"
-                  :disabled="cutoutLib.busy" @click="deleteCutout(cutoutLib.detail)">🗑 削除</button>
+                  :disabled="charLib.busy" @click="deleteCharLibEntry(charLib.detail)">🗑 削除</button>
+        </div>
+        <div style="font-size:10px;color:#4b5563;line-height:1.7">
+          削除した絵は <code>panel_library/trash/</code> へ退避します（索引からは外れ、自動配布もされません）。
+          <b>完全には消えない</b>ので、間違えたら戻せます。容量が気になったら trash/ を手で空にしてください。
+        </div>
+      </div>
+    </div>
+  </template>
+</div>
+
+<!-- 🏞️ 背景の登録／メタデータ編集（詳細ビューと同じ作り。左=画像・右=メタデータ） -->
+<div class="modal-overlay" x-show="bgForm.open" x-cloak
+     @keydown.escape.window="bgFormClose()"
+     @click.self="bgFormClose()">
+  <div style="background:#1a1d2e;border:1px solid #4c1d95;border-radius:10px;padding:16px;
+              width:1100px;max-width:96vw;max-height:92vh;overflow-y:auto;
+              display:flex;gap:16px;flex-wrap:wrap">
+    <!-- 左: 画像 -->
+    <div style="flex:1 1 460px;min-width:300px">
+      <template x-if="bgForm.preview">
+        <img :src="bgForm.preview" style="width:100%;border-radius:6px;display:block;background:#0f172a">
+      </template>
+      <template x-if="!bgForm.preview">
+        <div style="width:100%;aspect-ratio:16/9;border:2px dashed #374151;border-radius:6px;
+                    display:flex;align-items:center;justify-content:center;color:#4b5563;font-size:12px">
+          画像を選ぶとここに出ます
+        </div>
+      </template>
+
+      <div x-show="bgForm.mode === 'new'" style="margin-top:10px">
+        <label class="btn btn-primary btn-sm" style="cursor:pointer;display:inline-block">
+          📁 画像ファイルを選ぶ
+          <input type="file" accept="image/*" style="display:none" @change="bgFormPickFile($event)">
+        </label>
+        <span style="font-size:11px;color:#94a3b8;margin-left:8px" x-text="bgForm.fileName || '未選択'"></span>
+        <div style="font-size:10px;color:#4b5563;margin-top:6px;line-height:1.7">
+          PNG / JPEG / WebP（25MBまで）。<b>透過は保たれます</b> ── effect（集中線など）は
+          キャラの後ろ・背景の前に重ねて使う素材なので、アルファを落とすと背景を覆ってしまいます。
+          縦横比は測って記録します（16:9でなくても構いません）。
+        </div>
+      </div>
+      <div x-show="bgForm.mode === 'edit'" style="font-size:10px;color:#4b5563;margin-top:10px;line-height:1.7">
+        画像の差し替えはできません（メタデータだけを直します）。絵を変えたい時は削除して登録し直してください。
+      </div>
+    </div>
+
+    <!-- 右: メタデータ -->
+    <div style="flex:1 1 380px;min-width:300px;display:flex;flex-direction:column;gap:10px">
+      <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">
+        <span style="font-size:14px;font-weight:700;color:#c4b5fd"
+              x-text="bgForm.mode === 'new' ? '＋ 背景を登録' : 'メタデータを直す'"></span>
+        <span x-show="bgForm.mode === 'edit'" style="font-size:11px;color:#64748b;word-break:break-all"
+              x-text="bgForm.bg_id"></span>
+        <button class="btn btn-sm" style="margin-left:auto" @click="bgFormClose()">✕</button>
+      </div>
+
+      <label style="font-size:11px;color:#cbd5e1">系統
+        <select x-model="bgForm.category" style="width:100%;margin-top:3px"
+                @change="bgForm.keyType = bgKeyAxesFor(bgForm.category)[0][0]; bgForm.keyword = ''">
+          <option value="location">location（隠し部屋などの場所）</option>
+          <option value="psych">psych（心理背景）</option>
+          <option value="comic">comic（コミック背景）</option>
+          <option value="effect">effect（集中線・フォーカス。重ねて使う透過素材）</option>
+          <option value="backdrop">backdrop（ハーフトーン等・場所の代わりに敷く）</option>
+        </select>
+      </label>
+
+      <div style="display:grid;grid-template-columns:1fr 1.4fr;gap:8px">
+        <label style="font-size:11px;color:#cbd5e1">キーワードの種類
+          <select x-model="bgForm.keyType" style="width:100%;margin-top:3px" @change="bgForm.keyword = ''">
+            <template x-for="ax in bgKeyAxesFor(bgForm.category)" :key="ax[0]">
+              <option :value="ax[0]" x-text="ax[1]"></option>
+            </template>
+          </select>
+        </label>
+        <label style="font-size:11px;color:#cbd5e1">キーワード
+          <input type="text" x-model="bgForm.keyword" list="bgKeywordOptions"
+                 placeholder="選ぶ or 自由入力" style="width:100%;margin-top:3px">
+          <datalist id="bgKeywordOptions">
+            <template x-for="p in (bg.presets?.[bgForm.keyType] || [])" :key="p.id">
+              <option :value="p.id" x-text="p.label_ja"></option>
+            </template>
+          </datalist>
+        </label>
+      </div>
+      <div style="font-size:10px;color:#4b5563;line-height:1.6;margin-top:-4px">
+        キーワードは<b>語彙に無い言葉も入れられます</b>（自分で撮った場所など）。人が読む分類ラベルで、
+        機械の判定には使いません。日本語で入れると bg_id からは落ちますが、表示は入れた言葉のままです。
+      </div>
+
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px">
+        <label style="font-size:11px;color:#cbd5e1">framing（合わせるキャラのショット）
+          <select x-model="bgForm.framing" style="width:100%;margin-top:3px">
+            <option value="">（未設定）</option>
+            <template x-for="p in (bg.presets?.framing || [])" :key="p.id">
+              <option :value="p.id" x-text="p.label_ja"></option>
+            </template>
+          </select>
+        </label>
+        <label style="font-size:11px;color:#cbd5e1">light（光条件）
+          <select x-model="bgForm.light" style="width:100%;margin-top:3px">
+            <option value="">（未設定）</option>
+            <template x-for="p in (bg.presets?.light || [])" :key="p.id">
+              <option :value="p.id" x-text="p.label_ja"></option>
+            </template>
+          </select>
+        </label>
+      </div>
+      <label x-show="bgFormCameraApplies" style="font-size:11px;color:#cbd5e1">camera
+        <select x-model="bgForm.camera" style="width:100%;margin-top:3px">
+          <option value="">（未設定）</option>
+          <template x-for="p in (bg.presets?.camera || [])" :key="p.id">
+            <option :value="p.id" x-text="p.label_ja"></option>
+          </template>
+        </select>
+      </label>
+
+      <div>
+        <div style="font-size:11px;color:#cbd5e1;margin-bottom:4px">mood（雰囲気・複数可）</div>
+        <div style="display:flex;flex-wrap:wrap;gap:6px">
+          <template x-for="p in (bg.presets?.mood || [])" :key="p.id">
+            <label style="display:flex;align-items:center;gap:4px;cursor:pointer;font-size:11px;
+                          background:#1e293b;padding:3px 8px;border-radius:99px">
+              <input type="checkbox" :checked="bgForm.mood.includes(p.id)" @change="bgFormToggleMood(p.id)">
+              <span x-text="p.label_ja"></span>
+            </label>
+          </template>
+        </div>
+      </div>
+      <div style="font-size:10px;color:#4b5563;line-height:1.6">
+        <b>framing と mood は行への自動割当が読む軸</b>です（framing一致 → moodが重なるもの →
+        使用回数が少ないもの、の順に選ばれる）。ここだけは語彙が固定で、未設定でも登録はできますが
+        自動では配られにくくなります。
+      </div>
+
+      <label style="display:flex;align-items:center;gap:6px;cursor:pointer;font-size:11px;color:#cbd5e1">
+        <input type="checkbox" x-model="bgForm.is_keyframe">
+        ⭐ キーフレームとして登録する（定点の基準。ref/ にも置いて以後の参照元にする）
+      </label>
+
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px">
+        <label style="font-size:11px;color:#cbd5e1">入手元URL（任意）
+          <input type="text" x-model="bgForm.source_url" placeholder="Vecteezy等" style="width:100%;margin-top:3px">
+        </label>
+        <label style="font-size:11px;color:#cbd5e1">ライセンス（任意）
+          <input type="text" x-model="bgForm.license" placeholder="Free / Pro など" style="width:100%;margin-top:3px">
+        </label>
+      </div>
+      <label style="font-size:11px;color:#cbd5e1">メモ（任意）
+        <input type="text" x-model="bgForm.note" placeholder="どこで使うつもりか等" style="width:100%;margin-top:3px">
+      </label>
+
+      <div x-show="bgForm.msg" style="font-size:11px;color:#f87171" x-text="bgForm.msg"></div>
+      <div style="display:flex;gap:8px;margin-top:auto;padding-top:10px;border-top:1px solid #2d3748">
+        <button class="btn btn-primary" style="flex:1" :disabled="bgForm.busy" @click="bgSubmitForm()">
+          <template x-if="bgForm.busy"><span class="spinner"></span></template>
+          <span x-text="bgForm.busy ? '保存中…' : (bgForm.mode === 'new' ? '＋ 登録する' : '💾 保存する')"></span>
+        </button>
+        <button class="btn btn-ghost" @click="bgFormClose()">キャンセル</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- 🏞️ 背景 詳細ビュー（✂️切り抜きの詳細と同じ作り。生成条件と使用回数を見る） -->
+<div class="modal-overlay" x-show="bg.detail" x-cloak
+     @keydown.escape.window="bg.detail = null"
+     @keydown.arrow-left.window="bgStep(-1)"
+     @keydown.arrow-right.window="bgStep(1)"
+     @click.self="bg.detail = null">
+  <template x-if="bg.detail">
+    <div style="background:#1a1d2e;border:1px solid #4c1d95;border-radius:10px;padding:16px;
+                width:1100px;max-width:96vw;max-height:92vh;overflow-y:auto;
+                display:flex;gap:16px;flex-wrap:wrap">
+      <!-- 左: 大きいプレビュー -->
+      <div style="flex:1 1 560px;min-width:320px">
+        <img :src="bgImageUrl(bg.detail)"
+             style="width:100%;border-radius:6px;display:block;background:#0f172a">
+        <div style="display:flex;gap:8px;align-items:center;margin-top:10px;flex-wrap:wrap">
+          <button class="btn btn-sm" @click="bgStep(-1)">← 前</button>
+          <span style="font-size:11px;color:#64748b" x-text="bgPositionLabel"></span>
+          <button class="btn btn-sm" @click="bgStep(1)">次 →</button>
+          <span style="font-size:10px;color:#4b5563">（← → キーでも移動）</span>
+        </div>
+        <div style="font-size:10px;color:#4b5563;margin-top:6px">
+          Photoshop側で拡大・ぼかしを掛ける前提の素材です（ディテールより加工しやすさ優先）。
+        </div>
+      </div>
+
+      <!-- 右: 生成条件と操作 -->
+      <div style="flex:1 1 340px;min-width:280px;display:flex;flex-direction:column;gap:10px">
+        <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">
+          <span style="font-size:13px;font-weight:700;color:#c4b5fd;word-break:break-all"
+                x-text="bg.detail.bg_id"></span>
+          <span class="status-badge" x-show="bg.detail.is_keyframe"
+                style="background:#78350f;color:#fde68a">⭐ キーフレーム</span>
+          <button class="btn btn-sm" style="margin-left:auto" @click="bg.detail = null">✕</button>
+        </div>
+
+        <div style="font-size:11px;color:#94a3b8;line-height:1.9">
+          <div><span style="color:#64748b">系統</span>: <span x-text="bg.detail.category || '—'"></span></div>
+          <div><span style="color:#64748b">キーワード</span>:
+            <span x-text="bgKeyLabel(bgKeyOf(bg.detail)) || '—'"></span></div>
+          <div><span style="color:#64748b">framing</span>:
+            <span x-text="bgLabel('framing', bg.detail.framing)"></span>
+            <span style="color:#4b5563">（合わせるキャラのショットサイズ）</span></div>
+          <div><span style="color:#64748b">light</span>: <span x-text="bgLabel('light', bg.detail.light)"></span></div>
+          <div x-show="bg.detail.camera"><span style="color:#64748b">camera</span>:
+            <span x-text="bgLabel('camera', bg.detail.camera)"></span></div>
+          <div><span style="color:#64748b">雰囲気</span>:
+            <span x-text="(bg.detail.mood || []).map(m => bgLabel('mood', m)).join(' / ') || '—'"></span></div>
+          <div><span style="color:#64748b">使用回数</span>:
+            <span x-text="`${bg.detail.times_used || 0} 回`"></span>
+            <span style="color:#4b5563">（自動割当は少ないものから配る）</span></div>
+        </div>
+
+        <div style="font-size:10px;color:#4b5563;line-height:1.8;border-top:1px solid #2d3748;padding-top:8px">
+          <div style="color:#64748b;margin-bottom:2px">由来</div>
+          <div x-text="bg.detail.provider === 'upload'
+            ? '持ち込み（アップロード登録・生成していません）'
+            : `生成: ${bg.detail.provider || '—'}${bg.detail.model ? ' / ' + bg.detail.model : '（モデル未記録）'}`"></div>
+          <div>スタイル: <span x-text="bg.detail.style || '—'"></span></div>
+          <div>作成: <span x-text="bg.detail.created_at || '—'"></span></div>
+          <div x-show="bg.detail.source_url">入手元: <span style="user-select:all" x-text="bg.detail.source_url"></span></div>
+          <div x-show="bg.detail.license">ライセンス: <span x-text="bg.detail.license"></span></div>
+          <div x-show="bg.detail.original_filename">元ファイル名: <span x-text="bg.detail.original_filename"></span></div>
+          <div x-show="bg.detail.width">寸法: <span x-text="`${bg.detail.width}×${bg.detail.height}（${bg.detail.aspect || '—'}）`"></span></div>
+          <div x-show="bg.detail.overlay" style="color:#a5f3fc">
+            重ねて使う透過素材（キャラの後ろ・背景の前に置く）
+            <span x-show="bg.detail.coverage != null" x-text="`／不透明率 ${Math.round(bg.detail.coverage * 100)}%`"></span>
+          </div>
+          <div x-show="bg.detail.light_dx != null">
+            光の向き: <span x-text="`${bg.detail.light_dx > 0 ? '右が明るい' : '左が明るい'}（${bg.detail.light_dx}）`"></span>
+          </div>
+          <div x-show="bg.detail.edited_at">最終編集: <span x-text="bg.detail.edited_at"></span></div>
+          <div x-show="bg.detail.note">メモ: <span x-text="bg.detail.note"></span></div>
+        </div>
+
+        <div style="font-size:10px;color:#4b5563;line-height:1.6;border-top:1px solid #2d3748;padding-top:8px">
+          <div style="color:#64748b;margin-bottom:2px">プロンプト</div>
+          <div style="padding:6px 8px;background:#0f172a;border-radius:4px;font-family:monospace;
+                      color:#94a3b8;user-select:all;word-break:break-word;max-height:150px;overflow-y:auto"
+               x-text="bg.detail.prompt || '（未記録）'"></div>
+        </div>
+
+        <div style="display:flex;gap:6px;margin-top:auto;padding-top:10px;border-top:1px solid #2d3748">
+          <button class="btn btn-primary btn-sm" style="flex:1" @click="bgOpenEdit(bg.detail)">✏️ メタデータを直す</button>
+          <button class="btn btn-danger btn-sm" style="flex:1" @click="deleteBg(bg.detail.bg_id)">🗑 削除</button>
         </div>
         <div style="font-size:10px;color:#4b5563">
-          削除は実体ファイルごと消します（元の話数の切り抜きは残ります）。
+          削除は実体ファイルごと消します。<b>割り当て済みの台本行は参照が切れます</b>（行側で選び直しが要ります）。
         </div>
       </div>
     </div>
@@ -4184,6 +4529,11 @@
           <span style="font-size:11px;color:#64748b" x-text="'#' + (qaDetail.order ?? '—')"></span>
           <span class="status-badge" :style="`background:${qaSevBg(qaDetail.severity)};color:#fff`"
                 x-text="qaSevLabel(qaDetail.severity)"></span>
+          <template x-if="arollPanelOf(qaDetail.line_id)?.status === 'done' && arollPanelOf(qaDetail.line_id)?.image">
+            <span class="status-badge"
+                  :style="arollPanelOf(qaDetail.line_id).image_approved_at ? 'background:#14532d;color:#bbf7d0' : 'background:#78350f;color:#fde68a'"
+                  x-text="arollPanelOf(qaDetail.line_id).image_approved_at ? '✓ 承認済' : '未承認'"></span>
+          </template>
           <button class="btn btn-sm" style="margin-left:auto" @click="qaDetail = null">✕</button>
         </div>
         <div style="font-size:11px;color:#94a3b8">
@@ -4223,7 +4573,7 @@
         <!-- ── その行を作り直す（コマ一覧と同じ操作をここに統合） ────────────── -->
         <template x-if="arollPanelOf(qaDetail.line_id)">
           <div style="border-top:1px solid #2d3748;padding-top:10px;display:flex;flex-direction:column;gap:6px">
-            <div style="font-size:10px;color:#64748b;text-transform:uppercase;letter-spacing:0.06em">この行を作り直す</div>
+            <div style="font-size:10px;color:#64748b;text-transform:uppercase;letter-spacing:0.06em">この行の絵を決める</div>
 
             <!-- 表情 / ショット / アングル / ポーズ -->
             <div style="display:flex;gap:4px;flex-wrap:wrap">
@@ -4267,7 +4617,19 @@
               <button class="btn btn-sm" style="flex:1 1 100px"
                       :disabled="arollRunning || arollLineBusy || (arollPanelOf(qaDetail.line_id).characters||[]).length !== 1"
                       @click="arollTogglePicker(arollPanelOf(qaDetail.line_id))"
-                      title="切り抜き在庫から選ぶ（無料）">🔀 在庫</button>
+                      title="在庫から選び直す（無料）">🔀 選び直す</button>
+            </div>
+
+            <!-- 採用と決めた絵だけを在庫へ積む（生成の瞬間ではなく承認の瞬間に積む） -->
+            <div x-show="arollPanelOf(qaDetail.line_id).status === 'done' && arollPanelOf(qaDetail.line_id).image"
+                 style="display:flex;gap:6px;align-items:center;flex-wrap:wrap">
+              <button class="btn btn-primary btn-sm" style="flex:1 1 140px"
+                      x-show="!arollPanelOf(qaDetail.line_id).image_approved_at"
+                      :disabled="arollApproveBusy || arollRunning || arollLineBusy"
+                      @click="arollApproveImages([qaDetail.line_id])"
+                      title="この絵を採用と決めてキャラ所有ライブラリへ積む（無料・画像生成なし）">✓ 承認して在庫へ</button>
+              <span x-show="arollPanelOf(qaDetail.line_id).image_approved_at"
+                    style="font-size:10px;color:#86efac">✓ 承認済み — 在庫へ取り込み済みです</span>
             </div>
 
             <!-- 在庫ピッカー（コマ一覧と同じ供給元・同じ並び） -->
@@ -4338,9 +4700,22 @@
         <div style="font-size:10px;color:#64748b">英小文字・数字・ハイフンのみ。空欄でも作成時に自動で付きます（日本語名でもOK）。後から変えると過去の生成画像と紐付かなくなるので注意。</div>
       </div>
       <div class="form-group">
-        <label>外見プロンプト（キャラシート＝一貫性の核） <span style="color:#f87171">*</span></label>
-        <textarea x-model="newChara.appearance_prompt" rows="3" placeholder="英語推奨。例: 1girl, short silver hair, blue eyes, red jacket, white shirt"></textarea>
+        <label style="display:flex;align-items:center;gap:6px;font-weight:normal;cursor:pointer">
+          <input type="checkbox" :checked="!newChara.uses_images"
+                 @change="newChara.uses_images = !$event.target.checked">
+          このキャラは画像を使わない（声のみ）
+        </label>
+        <div style="font-size:10px;color:#64748b">
+          ナレーターや、既存キャラに声だけ変えて当てたバリアント向け。ONにすると外見プロンプトは不要になり、
+          画像生成の全経路から外れます（あとで🎭キャラタブから変更できます）。
+        </div>
       </div>
+      <template x-if="newChara.uses_images">
+        <div class="form-group">
+          <label>外見プロンプト（キャラシート＝一貫性の核） <span style="color:#f87171">*</span></label>
+          <textarea x-model="newChara.appearance_prompt" rows="3" placeholder="英語推奨。例: 1girl, short silver hair, blue eyes, red jacket, white shirt"></textarea>
+        </div>
+      </template>
       <div class="form-group">
         <label>メモ（任意）</label>
         <input type="text" x-model="newChara.description" placeholder="任意">
@@ -4702,27 +5077,14 @@ function app() {
     showNewCharaModal: false,
     charIdEdited: false,   // char_idをユーザーが手動編集したか（表示名からの自動slugを上書きしないため）
     charaVoices: [],   // 声カタログ（TAPI/voices）。キャラの声バインディング用
-    newChara: { char_id: '', name: '', appearance_prompt: '', description: '', caption: '', voice: { engine: 'irodori', voice_id: '' } },
+    newChara: { char_id: '', name: '', appearance_prompt: '', description: '', caption: '', uses_images: true, voice: { engine: 'irodori', voice_id: '' } },
     charaGen: { style: 'comic', expression: '', prompt_extra: '', count: 2, seed: '', reference: '', references: [], denoise: 0.55, provider: 'comfy', aspect: '1:1' },
     charaRefUploading: false,
     newCharaFiles: [],   // 新規作成モーダルで先出しする参照画像（{file, name, url}）。作成成功後に一括アップロード
     newCharaUploading: false,
-    // 🎬 紙芝居スタジオ
+    // 演技スロットの語彙（表情/ポーズ/ショット/アングル/シーン）。本籍は panel_presets。
+    // ⚠️ 🎬紙芝居タブは撤去したが、この語彙は 🖼️Aロール・✂️切り抜き・📚キャラ画像が使う
     studioPresets: { emotion: [], pose: [], shot: [], angle: [], scene: [] },
-    studioSel: {
-      char_id: '', emotion_id: 'neutral', pose_id: '', shot_id: 'bust', angle_id: 'eye_level',
-      scene_id: 'solo', background_mode: 'flat', style: 'kamishibai', aspect: '16:9',
-      count: 1, extra_prompt: '', reference: '',
-    },
-    studioChar: null,
-    studioBusy: false,
-    studioMsg: '',
-    // 🎲 バッチ生成（🎲ONの項目をランダムに振る／同時1枚ずつ・間隔・バックオフでレート配慮）
-    studioRand: { emotion: false, pose: false, shot: false, angle: false, scene: false },
-    studioBatch: { count: 10, intervalMs: 3500 },
-    studioBatchBusy: false,
-    studioStopFlag: false,
-    studioBatchProgress: { done: 0, total: 0, failed: 0 },
     modelInfo: { checkpoints: [], loras: [], vaes: [] },
     modelDl: { url: '', kind: 'lora', filename: '' },
     modelDownloads: [],
@@ -4754,38 +5116,44 @@ function app() {
     // 🏞️ 背景アーカイブタブ
     bg: {
       presets: null, items: [], busy: false, genBusy: false, msg: '',
-      filter: { category: 'location', spot: '', motif: '', era: '', light: '', framing: '', mood: '' },
+      // 絞り込みは軸ごとに独立させる（実データ84件・系統5種・キーワード40種超あり、
+      // 切り抜きタブの単一文字列フィルタでは足りない）。すべてクライアント側で絞る
+      cat: 'all', key: 'all', mood: 'all', flag: 'all', q: '', detail: null,
       gen: {
         category: 'location', spot: '', motif: '', era: '', light: 'bright-day',
         camera: 'eye-level-wide', framing: 'bust', form: '', effect: '',
         mood: [], model: 'gemini-3.1-flash-lite-image', count: 1, isKeyframe: false,
       },
     },
-    // 📚 キャラ画像ライブラリタブ（Phase 3・Aロール演技スロットの作り置き）
-    panelLib: {
-      charId: '', items: [], pending: [], busy: false, genBusy: false, variantBusy: false, msg: '',
-      filter: { emotion: '', shot: '', angle: '' },
+    // 背景の登録／編集フォーム（新規と編集で同じ1枚を使い回す。形は bgBlankForm() と同じ）
+    bgForm: {
+      open: false, mode: 'new', busy: false, msg: '', bg_id: '',
+      file: null, fileName: '', preview: '',
+      category: 'location', keyType: 'spot', keyword: '',
+      light: '', camera: '', framing: '', mood: [],
+      is_keyframe: false, style: '', source_url: '', license: '', note: '',
+    },
+    freeStyles: ['realistic'],
+    // 📚 キャラ在庫タブ（旧「キャラ画像」＋「切り抜き」を統合。2026-08-28・§14）
+    // 絞り込みは軸ごとに独立させる（🏞️背景タブと同じ方式）。すべてクライアント側で絞る
+    charLib: {
+      charId: '', items: [], busy: false, msg: '', detail: null,
+      usable: 'all', status: 'all', emotion: 'all', shot: 'all',
+      genBusy: false, variantBusy: false,
       gen: { emotion: '', shot: '', angle: '', pose: '', model: 'gemini-3.1-flash-lite-image' },
       variantGen: { emotion: '', shot: '', angle: '', poses: [], model: 'gemini-3.1-flash-lite-image' },
+      // 🎲 バッチ生成（旧🎬紙芝居のノリ。固定 or ランダムを軸ごとに選び panel_library/generate をN回呼ぶ）
+      batchGen: { emotion: '', shot: '', angle: '', pose: '', model: 'gemini-3.1-flash-lite-image' },
+      batchRand: { emotion: false, shot: false, angle: false, pose: false },
+      batch: { count: 10, intervalMs: 3500 },
+      batchBusy: false, batchStopFlag: false,
+      batchProgress: { done: 0, total: 0, failed: 0 },
+      // 「似ている在庫」（多様性検査の撤去に伴う道具。距離の計算はバックエンドが本籍）
+      similarFor: '', similarBusy: false, similar: [],
     },
-    cutoutLib: {
-      charId: '', items: [], busy: false, msg: '', filter: 'all', detail: null,
-    },
-    // 選択の閾値（正本は shared/characters/character_overrides.json。APIから読む）
+    // 選択の閾値（正本は shared/characters/character_overrides.json。APIから読む）。
+    // ✂️切り抜きとしての消費にのみ意味を持つ（🖼️パネルの選択=find_currentに上限は無い）
     cutoutThresholds: { repetitive_below: 0.073, max_uses: 3, recent_window: 5 },
-    freeStyles: ['realistic'],
-    freeStyleLabels: {
-      realistic: 'realistic photo-style', anime: 'anime-style',
-      lineart: 'line-art-style comic', comic: 'comic-style',
-      deformed: 'chibi deformed-style', kamishibai: 'kamishibai-style anime',
-    },
-    freeControlnets: [],
-    // その他
-    styles: [],
-    llmProviders: [],
-    selectedProvider: '',
-    selectedModel: '',
-    currentProject: null,
     selectedStyleId: '',
     expandedStyleId: '',
     styleIsSaved: false,
@@ -4941,6 +5309,8 @@ function app() {
     arollSyncBusy: false,
     arollExportBusy: false,
     arollExportResult: null,      // 直近の /aroll/export レスポンス
+    arollApproveBusy: false,
+    arollApproveResult: null,     // 直近の /aroll/approve-images レスポンス
 
     // 🔍 合成チェック（PS-Assist が書いた qa_report.json を読むだけ）
     qa: null,                     // psassist/qa_report.json
@@ -6270,18 +6640,12 @@ function app() {
       if (t === 'footage') await this.refreshFootageTab();
       if (t === 'aroll') await this.refreshArollTab();
       if (t === 'chara') await this.refreshCharaTab();
-      if (t === 'studio') await this.refreshStudioTab();
-      if (t === 'bg') { await this.loadBgPresets(); await this.searchBg(); }
-      if (t === 'cutout') {
+      if (t === 'bg') { await this.loadBgPresets(); await this.loadBgLib(); }
+      if (t === 'charLib') {
+        await this.loadStudioPresets();   // 生成パネル・ラベル手直しのプルダウン語彙（本籍 panel_presets）
         if (!this.charas.length) await this.refreshCharaTab();
-        if (!this.cutoutLib.charId && this.charas.length) this.cutoutLib.charId = '*';  // 既定は全キャラ
-        await this.loadCutoutLib();
-      }
-      if (t === 'panelLib') {
-        await this.loadStudioPresets();
-        if (!this.charas.length) await this.loadCharas();
-        if (!this.panelLib.charId && this.charas.length) this.panelLib.charId = this.charas[0].char_id;
-        await this.searchPanelLib();
+        if (!this.charLib.charId && this.charas.length) this.charLib.charId = '*';  // 既定は全キャラ
+        await this.loadCharLib();
       }
       if (t === 'free') { await this.loadFreeStyles(); await this.loadFreeControlnets(); await this.loadFreeOutputs(); }
       if (t === 'editing') await this.refreshEditingTab();
@@ -6793,6 +7157,9 @@ function app() {
       if (this.chara) {
         if (!this.chara.voice) this.chara.voice = { engine: 'irodori', voice_id: '' };
         if (this.chara.caption == null) this.chara.caption = '';
+        // uses_images はバックエンドが必ず載せる（normalize_character）。万一欠けていたら
+        // 同じ推定で補う ── undefined のままだとチェックが入って「画像を使わない」に見える
+        if (this.chara.uses_images == null) this.chara.uses_images = !!(this.chara.appearance_prompt || '').trim();
       }
       if (prev !== id) { this.charaGen.reference = ''; this.charaGen.references = []; }  // 別キャラの参照を引きずらない
     },
@@ -6825,15 +7192,22 @@ function app() {
       this.charaMsg = '';
       this.clearNewCharaFiles();
       this.charIdEdited = false;
-      this.newChara = { char_id: '', name: '', appearance_prompt: '', description: '', caption: '', voice: { engine: 'irodori', voice_id: '' } };
+      this.newChara = { char_id: '', name: '', appearance_prompt: '', description: '', caption: '', uses_images: true, voice: { engine: 'irodori', voice_id: '' } };
       this.showNewCharaModal = true;
       this.loadCharaVoices && this.loadCharaVoices();  // 声カタログを用意（未ロードなら）
     },
     async createChara() {
       const b = this.newChara;
-      // 必須は「表示名」と「外見プロンプト」だけ。char_id はブロックせず必ず自動で確定する。
-      if (!b.name || !b.appearance_prompt) {
-        this.charaMsg = '表示名・外見プロンプトは必須です';
+      // 必須は「表示名」と、画像を使うキャラなら「外見プロンプト」。
+      // char_id はブロックせず必ず自動で確定する。
+      // ⚠️ 以前は外見プロンプトが無条件で必須だったため、画像の要らないキャラを空欄で作れず、
+      // ナレーターの外見に文字列 "null" が入る運用が生まれていた（§15-2）。
+      if (!b.name) {
+        this.charaMsg = '表示名は必須です';
+        return;
+      }
+      if (b.uses_images && !b.appearance_prompt) {
+        this.charaMsg = '外見プロンプトは必須です（画像を使わないキャラなら上のチェックをONに）';
         return;
       }
       // char_id を正規化して確定：手入力（大文字/空白/記号も可）→ slug化、空なら表示名から、
@@ -6869,7 +7243,7 @@ function app() {
       this.charaMsg = uploadNote;   // 成功時は空。部分失敗のみモーダル外に表示される
       this.showNewCharaModal = false;
       this.charIdEdited = false;
-      this.newChara = { char_id: '', name: '', appearance_prompt: '', description: '', caption: '', voice: { engine: 'irodori', voice_id: '' } };
+      this.newChara = { char_id: '', name: '', appearance_prompt: '', description: '', caption: '', uses_images: true, voice: { engine: 'irodori', voice_id: '' } };
       await this.loadCharas();
       await this.openChara(id);
     },
@@ -6885,9 +7259,79 @@ function app() {
       const filename = (item.image || '').split('/').pop();
       return `${FAPI}/backgrounds/file/${filename}`;
     },
-    setBgFilterCategory(cat) {
-      this.bg.filter = { category: cat, spot: '', motif: '', era: '', light: '', framing: '', mood: '' };
-      this.searchBg();
+    // 各entryは spot / motif / era / form / effect のうち1つだけを持つ。それを
+    // 「キーワード」という1本の軸に畳む（系統が違えば持つ項目名も違うため、
+    // 項目名ごとにチップの列を作ると系統を跨いだ時に空の列が並ぶ）。
+    bgKeyOf(b) {
+      for (const g of ['spot', 'motif', 'era', 'form', 'effect']) if (b[g]) return `${g}:${b[g]}`;
+      return '';
+    },
+    bgLabel(group, id) {
+      if (!id) return '—';
+      return (this.bg.presets?.[group] || []).find(p => p.id === id)?.label_ja || id;
+    },
+    bgKeyLabel(key) {
+      if (!key) return '';
+      const [g, id] = key.split(':');
+      return this.bgLabel(g, id);
+    },
+    bgHaystack(b) {
+      return [b.bg_id, b.spot, b.motif, b.era, b.form, b.effect, b.light, b.framing,
+              b.camera, ...(b.mood || []), b.note].filter(Boolean).join(' ').toLowerCase();
+    },
+    // exclude で指定した軸だけ無視して絞る。チップの件数を「その軸を選んだら何件になるか」
+    // にするため（0件になるチップを出さない・出た数字が実際の結果と一致する）
+    bgSubset(exclude) {
+      const q = (this.bg.q || '').trim().toLowerCase();
+      return (this.bg.items || []).filter(b => {
+        if (exclude !== 'cat' && this.bg.cat !== 'all' && b.category !== this.bg.cat) return false;
+        if (exclude !== 'key' && this.bg.key !== 'all' && this.bgKeyOf(b) !== this.bg.key) return false;
+        if (exclude !== 'mood' && this.bg.mood !== 'all' && !(b.mood || []).includes(this.bg.mood)) return false;
+        if (exclude !== 'flag' && this.bg.flag === 'keyframe' && !b.is_keyframe) return false;
+        if (exclude !== 'flag' && this.bg.flag === 'unused' && (b.times_used || 0)) return false;
+        if (exclude !== 'flag' && this.bg.flag === 'upload' && b.provider !== 'upload') return false;
+        if (q && !this.bgHaystack(b).includes(q)) return false;
+        return true;
+      });
+    },
+    get bgFiltered() {
+      return this.bgSubset(null).slice().reverse();   // 新しい順（生成直後の絵が先頭）
+    },
+    get bgCounts() {
+      const it = this.bg.items || [];
+      return {
+        total: it.length,
+        shown: this.bgSubset(null).length,
+        keyframe: it.filter(b => b.is_keyframe).length,
+        unused: it.filter(b => !(b.times_used || 0)).length,
+        upload: it.filter(b => b.provider === 'upload').length,
+      };
+    },
+    bgTally(rows, pick) {
+      const m = new Map();
+      for (const b of rows) for (const v of [].concat(pick(b) || [])) if (v) m.set(v, (m.get(v) || 0) + 1);
+      return [...m.entries()].sort((a, b) => b[1] - a[1]);
+    },
+    get bgCatFacet() { return this.bgTally(this.bgSubset('cat'), b => b.category); },
+    get bgKeyFacet() { return this.bgTally(this.bgSubset('key'), b => this.bgKeyOf(b)); },
+    get bgMoodFacet() { return this.bgTally(this.bgSubset('mood'), b => b.mood); },
+    bgSetFilter(axis, value) {
+      // 同じチップをもう一度押したら解除（cutoutタブと違い軸が独立なので戻せる口が要る）
+      this.bg[axis] = (this.bg[axis] === value && value !== 'all') ? 'all' : value;
+      // 系統を変えるとキーワードは意味を失う（location の spot は psych には無い）
+      if (axis === 'cat') this.bg.key = 'all';
+    },
+    get bgPositionLabel() {
+      const list = this.bgFiltered;
+      const i = list.findIndex(b => b.bg_id === this.bg.detail?.bg_id);
+      return i < 0 ? '' : `${i + 1} / ${list.length}`;
+    },
+    bgStep(d) {
+      const list = this.bgFiltered;
+      if (!list.length) return;
+      const i = list.findIndex(b => b.bg_id === this.bg.detail?.bg_id);
+      if (i < 0) return;
+      this.bg.detail = list[(i + d + list.length) % list.length];
     },
     setBgGenCategory(cat) {
       this.bg.gen.category = cat;
@@ -6898,12 +7342,12 @@ function app() {
       const i = this.bg.gen.mood.indexOf(id);
       if (i >= 0) this.bg.gen.mood.splice(i, 1); else this.bg.gen.mood.push(id);
     },
-    async searchBg() {
+    // 全件を1回読んでクライアント側で絞る（84件）。サーバ検索に戻すとチップの件数が
+    // 出せない＝「何がどれだけあるか」が見えなくなる
+    async loadBgLib() {
       this.bg.busy = true;
       try {
-        const params = new URLSearchParams();
-        for (const [k, v] of Object.entries(this.bg.filter)) if (v) params.set(k, v);
-        const d = await (await fetch(`${FAPI}/backgrounds?${params}`)).json();
+        const d = await (await fetch(`${FAPI}/backgrounds`)).json();
         this.bg.items = d.backgrounds || [];
       } catch { this.bg.items = []; }
       this.bg.busy = false;
@@ -6930,94 +7374,256 @@ function app() {
         if (!r.ok) { const e = await r.json().catch(() => ({})); this.bg.msg = `生成失敗: ${e.detail || r.status}`; return; }
         const d = await r.json();
         this.bg.msg = `${(d.backgrounds || []).length}枚生成しました`;
-        await this.searchBg();
+        await this.loadBgLib();
       } catch (e) {
         this.bg.msg = `生成失敗: ${e}`;
       } finally {
         this.bg.genBusy = false;
       }
     },
+    // ─── 背景の登録／メタデータ編集（1つのフォームを新規と編集で使い回す） ─────
+    //
+    // 生成しない背景（自分で撮った・描いた・調達した）を入れる口。索引のスキーマは
+    // ホスト側 psassist/scripts/register_backgrounds.py と揃えてあるので、入れた後は
+    // 生成した背景と区別なく検索・自動割当の対象になる。
+    bgKeyAxesFor(cat) {
+      if (cat === 'location') {
+        return [['spot', '定点（部屋の場所）'], ['motif', '調度品ディテール'], ['era', '現代の携行品']];
+      }
+      if (cat === 'psych' || cat === 'backdrop') return [['form', '形（グラデ・渦・星空など）']];
+      return [['effect', '効果（集中線・ハーフトーンなど）']];
+    },
+    bgBlankForm() {
+      return {
+        open: false, mode: 'new', busy: false, msg: '', bg_id: '',
+        file: null, fileName: '', preview: '',
+        category: 'location', keyType: 'spot', keyword: '',
+        light: '', camera: '', framing: '', mood: [],
+        is_keyframe: false, style: '', source_url: '', license: '', note: '',
+      };
+    },
+    bgOpenNew() {
+      this.bgForm = { ...this.bgBlankForm(), open: true, mode: 'new' };
+    },
+    bgOpenEdit(item) {
+      const keyType = ['spot', 'motif', 'era', 'form', 'effect'].find(a => item[a])
+        || this.bgKeyAxesFor(item.category)[0][0];
+      this.bgForm = {
+        ...this.bgBlankForm(), open: true, mode: 'edit', bg_id: item.bg_id,
+        preview: this.bgImageUrl(item),
+        category: item.category || 'location', keyType, keyword: item[keyType] || '',
+        light: item.light || '', camera: item.camera || '', framing: item.framing || '',
+        mood: [...(item.mood || [])], is_keyframe: !!item.is_keyframe,
+        style: item.style || '', source_url: item.source_url || '',
+        license: item.license || '', note: item.note || '',
+      };
+      this.bg.detail = null;            // 詳細と重ねない（保存後に開き直す）
+    },
+    bgFormPickFile(ev) {
+      const f = ev.target.files?.[0];
+      if (!f) return;
+      if (this.bgForm.preview.startsWith('blob:')) URL.revokeObjectURL(this.bgForm.preview);
+      this.bgForm.file = f;
+      this.bgForm.fileName = f.name;
+      this.bgForm.preview = URL.createObjectURL(f);
+      this.bgForm.msg = '';
+    },
+    bgFormToggleMood(id) {
+      const i = this.bgForm.mood.indexOf(id);
+      if (i >= 0) this.bgForm.mood.splice(i, 1); else this.bgForm.mood.push(id);
+    },
+    bgFormClose() {
+      if (this.bgForm.preview.startsWith('blob:')) URL.revokeObjectURL(this.bgForm.preview);
+      this.bgForm.open = false;
+    },
+    // camera は wide / full_body でしか意味を持たない（背景プリセットと同じ扱い）
+    get bgFormCameraApplies() {
+      return this.bgForm.category === 'location'
+        && ['wide', 'full_body'].includes(this.bgForm.framing);
+    },
+    async bgSubmitForm() {
+      const f = this.bgForm;
+      if (f.mode === 'new' && !f.file) { f.msg = '画像ファイルを選んでください'; return; }
+      f.busy = true; f.msg = '';
+      try {
+        let r;
+        if (f.mode === 'new') {
+          const fd = new FormData();
+          fd.append('file', f.file);
+          fd.append('category', f.category);
+          fd.append(f.keyType, f.keyword);
+          for (const k of ['light', 'framing', 'style', 'source_url', 'license', 'note']) fd.append(k, f[k]);
+          fd.append('camera', this.bgFormCameraApplies ? f.camera : '');
+          fd.append('mood', f.mood.join(','));
+          fd.append('is_keyframe', f.is_keyframe ? 'true' : 'false');
+          // Content-Type は指定しない（境界文字列をブラウザに付けさせる）
+          r = await fetch(`${FAPI}/backgrounds/upload`, { method: 'POST', body: fd });
+        } else {
+          const body = {
+            category: f.category, light: f.light, framing: f.framing,
+            camera: this.bgFormCameraApplies ? f.camera : '',
+            mood: f.mood, is_keyframe: f.is_keyframe, style: f.style,
+            source_url: f.source_url, license: f.license, note: f.note,
+          };
+          // 系統を変えるとキーワードの置き場所も変わる。5軸を空にして選んだ1つだけ入れる
+          for (const ax of ['spot', 'motif', 'era', 'form', 'effect']) body[ax] = '';
+          body[f.keyType] = f.keyword;
+          r = await fetch(`${FAPI}/backgrounds/${f.bg_id}`, {
+            method: 'PATCH', headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(body),
+          });
+        }
+        const d = await r.json();
+        if (!r.ok) throw new Error(d.detail || `${r.status}`);
+        await this.loadBgLib();
+        const saved = this.bg.items.find(b => b.bg_id === (d.bg_id || f.bg_id)) || d;
+        this.bgFormClose();
+        this.bg.detail = saved;         // 入れた/直した絵をそのまま詳細で見せる
+        this.bg.msg = f.mode === 'new'
+          ? `${d.bg_id} を登録しました` : `${f.bg_id} を保存しました`;
+      } catch (e) {
+        f.msg = `${f.mode === 'new' ? '登録' : '保存'}に失敗: ${e.message}`;
+      } finally { f.busy = false; }
+    },
     async deleteBg(bgId) {
-      if (!confirm(`${bgId} を削除しますか？（取り消し不可）`)) return;
+      // 実体ごと消える。既にこの背景を割り当てた行は参照が切れる（行側で選び直しが要る）
+      if (!confirm(`${bgId} を削除しますか？\n実体ファイルごと消えます（取り消し不可）。\n`
+                 + 'この背景を割り当て済みの台本行は、参照が切れて背景なしになります。')) return;
       try {
         await fetch(`${FAPI}/backgrounds/${bgId}`, { method: 'DELETE' });
+        if (this.bg.detail?.bg_id === bgId) this.bg.detail = null;
         this.bg.items = this.bg.items.filter(b => b.bg_id !== bgId);
-      } catch { /* noop */ }
+        this.bg.msg = `${bgId} を削除しました`;
+      } catch (e) { this.bg.msg = `削除に失敗: ${e}`; }
     },
-    // ─── 📚 キャラ画像ライブラリタブ（Phase 3） ───────────────────
-    panelLibImageUrl(item) {
-      const filename = (item.image || '').split('/').pop();
-      return `${FAPI}/characters/${this.panelLib.charId}/panel_library/file/${filename}`;
+    // ─── 📚 キャラ在庫タブ: 生成（旧「キャラ画像」から移設。閲覧・整理系のメソッドは下にまとめてある） ───
+    toggleCharLibVariantPose(id) {
+      const i = this.charLib.variantGen.poses.indexOf(id);
+      if (i >= 0) this.charLib.variantGen.poses.splice(i, 1); else this.charLib.variantGen.poses.push(id);
     },
-    togglePanelLibVariantPose(id) {
-      const i = this.panelLib.variantGen.poses.indexOf(id);
-      if (i >= 0) this.panelLib.variantGen.poses.splice(i, 1); else this.panelLib.variantGen.poses.push(id);
-    },
-    async searchPanelLib() {
-      if (!this.panelLib.charId) { this.panelLib.items = []; this.panelLib.pending = []; return; }
-      this.panelLib.busy = true;
+    async generateCharLib() {
+      if (this.charLib.genBusy || !this.charLib.charId || this.charLib.charId === '*') return;
+      const g = this.charLib.gen;
+      if (!g.emotion || !g.shot || !g.angle) { this.charLib.msg = 'emotion・shot・angleを選んでください'; return; }
+      this.charLib.genBusy = true; this.charLib.msg = '';
       try {
-        const params = new URLSearchParams();
-        for (const [k, v] of Object.entries(this.panelLib.filter)) if (v) params.set(k, v);
-        const d = await (await fetch(`${FAPI}/characters/${this.panelLib.charId}/panel_library?${params}`)).json();
-        const entries = d.entries || [];
-        this.panelLib.pending = entries.filter(e => e.review_status === 'pending');
-        this.panelLib.items = entries.filter(e => e.review_status !== 'pending');
-      } catch { this.panelLib.items = []; this.panelLib.pending = []; }
-      this.panelLib.busy = false;
-    },
-    async generatePanelLib() {
-      if (this.panelLib.genBusy || !this.panelLib.charId) return;
-      const g = this.panelLib.gen;
-      if (!g.emotion || !g.shot || !g.angle) { this.panelLib.msg = 'emotion・shot・angleを選んでください'; return; }
-      this.panelLib.genBusy = true; this.panelLib.msg = '';
-      try {
-        const r = await fetch(`${FAPI}/characters/${this.panelLib.charId}/panel_library/generate`, {
+        const r = await fetch(`${FAPI}/characters/${this.charLib.charId}/panel_library/generate`, {
           method: 'POST', headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ emotion: g.emotion, shot: g.shot, angle: g.angle, pose: g.pose, model: g.model }),
         });
-        if (!r.ok) { const e = await r.json().catch(() => ({})); this.panelLib.msg = `生成失敗: ${e.detail || r.status}`; return; }
-        this.panelLib.msg = '1枚生成しました（承認済み・即座にAロールから引かれます）';
-        await this.searchPanelLib();
+        if (!r.ok) { const e = await r.json().catch(() => ({})); this.charLib.msg = `生成失敗: ${e.detail || r.status}`; return; }
+        this.charLib.msg = '1枚生成しました（承認済み・即座にAロールから引かれます）';
+        await this.loadCharLib();
       } catch (e) {
-        this.panelLib.msg = `生成失敗: ${e}`;
+        this.charLib.msg = `生成失敗: ${e}`;
       } finally {
-        this.panelLib.genBusy = false;
+        this.charLib.genBusy = false;
       }
     },
-    async generatePanelLibVariants() {
-      if (this.panelLib.variantBusy || !this.panelLib.charId) return;
-      const g = this.panelLib.variantGen;
-      if (!g.emotion || !g.shot || !g.angle) { this.panelLib.msg = 'emotion・shot・angleを選んでください'; return; }
-      if (!g.poses.length) { this.panelLib.msg = 'poseを1つ以上選んでください'; return; }
-      this.panelLib.variantBusy = true; this.panelLib.msg = '';
+    async generateCharLibVariants() {
+      if (this.charLib.variantBusy || !this.charLib.charId || this.charLib.charId === '*') return;
+      const g = this.charLib.variantGen;
+      if (!g.emotion || !g.shot || !g.angle) { this.charLib.msg = 'emotion・shot・angleを選んでください'; return; }
+      if (!g.poses.length) { this.charLib.msg = 'poseを1つ以上選んでください'; return; }
+      this.charLib.variantBusy = true; this.charLib.msg = '';
       try {
-        const r = await fetch(`${FAPI}/characters/${this.panelLib.charId}/panel_library/generate_variants`, {
+        const r = await fetch(`${FAPI}/characters/${this.charLib.charId}/panel_library/generate_variants`, {
           method: 'POST', headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ emotion: g.emotion, shot: g.shot, angle: g.angle, poses: g.poses, model: g.model }),
         });
-        if (!r.ok) { const e = await r.json().catch(() => ({})); this.panelLib.msg = `生成失敗: ${e.detail || r.status}`; return; }
+        if (!r.ok) { const e = await r.json().catch(() => ({})); this.charLib.msg = `生成失敗: ${e.detail || r.status}`; return; }
         const d = await r.json();
-        this.panelLib.msg = `${(d.entries || []).length}枚生成しました（承認待ち・下の「承認待ち」欄で確認してください）`;
-        await this.searchPanelLib();
+        this.charLib.msg = `${(d.entries || []).length}枚生成しました（承認待ち・「未承認」チップで確認してください）`;
+        await this.loadCharLib();
       } catch (e) {
-        this.panelLib.msg = `生成失敗: ${e}`;
+        this.charLib.msg = `生成失敗: ${e}`;
       } finally {
-        this.panelLib.variantBusy = false;
+        this.charLib.variantBusy = false;
       }
     },
-    async approvePanelLib(slotId) {
-      try {
-        await fetch(`${FAPI}/characters/${this.panelLib.charId}/panel_library/${slotId}/approve`, { method: 'POST' });
-        await this.searchPanelLib();
-      } catch { /* noop */ }
+    // ─── 🎲 バッチ生成（旧🎬紙芝居のバッチ機能をキャラ在庫へ移植。panel_library/generate をN回呼ぶ） ───
+    sleep(ms) { return new Promise(r => setTimeout(r, ms)); },
+    _charLibRandItem(group) {
+      const arr = this.studioPresets[group] || [];
+      return arr.length ? arr[Math.floor(Math.random() * arr.length)].id : '';
     },
-    async deletePanelLib(slotId) {
-      if (!confirm(`${slotId} を削除しますか？（取り消し不可）`)) return;
-      try {
-        await fetch(`${FAPI}/characters/${this.panelLib.charId}/panel_library/${slotId}`, { method: 'DELETE' });
-        await this.searchPanelLib();
-      } catch { /* noop */ }
+    // 🎲ONの項目をランダム、OFFは現在の固定値。同一組み合わせはバッチ内で極力回避
+    _buildCharLibBatchQueue() {
+      const groups = ['emotion', 'shot', 'angle', 'pose'];
+      const n = parseInt(this.charLib.batch.count) || 0;
+      const seen = new Set();
+      const out = [];
+      for (let i = 0; i < n; i++) {
+        let sel = {}, key = '';
+        for (let tries = 0; tries < 12; tries++) {
+          sel = {};
+          for (const g of groups) {
+            sel[g] = this.charLib.batchRand[g] ? this._charLibRandItem(g) : this.charLib.batchGen[g];
+          }
+          key = groups.map(g => sel[g]).join('|');
+          if (!seen.has(key)) break;   // 重複でなければ採用。枯渇時は最後の候補で妥協
+        }
+        seen.add(key);
+        out.push(sel);
+      }
+      return out;
+    },
+    stopCharLibBatch() {
+      this.charLib.batchStopFlag = true;
+      this.charLib.msg = '⏹ 中止します（現在の1枚完了後に停止）';
+    },
+    async generateCharLibBatch() {
+      if (!this.charLib.charId || this.charLib.charId === '*') { this.charLib.msg = 'キャラを選択してください'; return; }
+      if (this.charLib.batchBusy) return;
+      // emotion・shot・angleは「固定値を選ぶ」か「🎲ランダム」のどちらかを必須にする。
+      // どちらも満たさないまま空で送るとバックエンドが拒否する（in生成 に永久に引っかからない
+      // slot_idを作らないためのガード。panel_library_manager.generate_and_register 参照）。
+      // ここでの事前チェックはユーザーへの即時フィードバック用（バックエンドの検証はそのまま生きる）
+      const labels = { emotion: '表情', shot: 'ショット', angle: 'アングル' };
+      const missing = ['emotion', 'shot', 'angle']
+        .filter(g => !this.charLib.batchRand[g] && !this.charLib.batchGen[g]);
+      if (missing.length) {
+        this.charLib.msg = `${missing.map(g => labels[g]).join('・')}を選ぶか、🎲ランダムをONにしてください`;
+        return;
+      }
+      const queue = this._buildCharLibBatchQueue();
+      if (!queue.length) { this.charLib.msg = '生成キューが空です'; return; }
+      this.charLib.batchBusy = true; this.charLib.batchStopFlag = false; this.charLib.msg = '';
+      this.charLib.batchProgress = { done: 0, total: queue.length, failed: 0 };
+      const url = `${FAPI}/characters/${this.charLib.charId}/panel_library/generate`;
+      const model = this.charLib.batchGen.model;
+      for (let i = 0; i < queue.length; i++) {
+        if (this.charLib.batchStopFlag) break;
+        let ok = false, fatal = false;
+        // レート系/一時失敗のみ最大2回バックオフ（8s, 16s）。それ以外は即中断
+        for (let attempt = 0; attempt <= 2 && !ok && !fatal; attempt++) {
+          if (attempt > 0) await this.sleep(8000 * attempt);
+          try {
+            const r = await fetch(url, {
+              method: 'POST', headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ ...queue[i], model }),
+            });
+            if (r.ok) { ok = true; }
+            else if (![429, 502, 503].includes(r.status)) {
+              fatal = true;
+              this.charLib.msg = `生成失敗: ${(await r.json().catch(() => ({}))).detail || r.status}`;
+            }
+          } catch (e) { /* ネットワーク等はリトライ対象 */ }
+        }
+        if (ok) {
+          this.charLib.batchProgress.done++;
+        } else {
+          this.charLib.batchProgress.failed++;
+          if (fatal) break;   // 設定不備など回復不能なら打ち切り
+        }
+        if (i < queue.length - 1 && !this.charLib.batchStopFlag) await this.sleep(this.charLib.batch.intervalMs);
+      }
+      await this.loadCharLib();   // 逐次更新はしない（毎回全件取得は重い）。完了時に1回だけ
+      this.charLib.batchBusy = false;
+      const p = this.charLib.batchProgress;
+      this.charLib.msg = this.charLib.batchStopFlag
+        ? `⏹ 中止しました（成功${p.done} / 失敗${p.failed} / 全${p.total}）`
+        : `✅ バッチ完了: 成功${p.done} / 失敗${p.failed} / 全${p.total}`;
     },
     // ─── 🎨 自由生成タブ ───────────────────────────────
     async loadFreeStyles() {
@@ -7210,6 +7816,7 @@ function app() {
         name: this.chara.name,
         description: this.chara.description,
         appearance_prompt: this.chara.appearance_prompt,
+        uses_images: !!this.chara.uses_images,
         caption: this.chara.caption || '',
         voice: this.chara.voice || { engine: 'irodori', voice_id: '' },
       };
@@ -7332,74 +7939,21 @@ function app() {
       else this.charaGen.references.push(fn);
     },
 
-    // ─── 🎬 紙芝居スタジオタブ ───────────────────────────────────
-    async refreshStudioTab() {
-      await Promise.all([this.loadCharas(), this.loadCharaStyles(), this.loadStudioPresets()]);
-      if (this.studioSel.char_id) await this.openStudioChar(this.studioSel.char_id);
-    },
+    // ─── 演技スロットの語彙（旧🎬紙芝居タブの残置） ───────────────
+    //
+    // 🎬紙芝居タブは 2026-08-28 に撤去した（psassist/Docs/CHARACTER_CUTOUT_PLAN.md §14-1）。
+    // ⚠️ ここは消さないこと ── studioPresets の語彙は 🖼️Aロール・✂️切り抜き・
+    // 📚キャラ画像の各タブが使っている（プルダウンが全部空になる）。
     async loadStudioPresets() {
       try {
         const d = await (await fetch(`${FAPI}/panel/presets`)).json();
         this.studioPresets = d.presets || this.studioPresets;
       } catch { /* 取得失敗時は空のまま */ }
     },
-    async openStudioChar(id) {
-      this.studioSel.char_id = id;
-      try { const r = await fetch(`${FAPI}/characters/${id}`); this.studioChar = r.ok ? await r.json() : null; }
-      catch { this.studioChar = null; }
-      this.studioSel.reference = '';
-    },
-    studioImg(kind, fn) {
-      return `${FAPI}/characters/${this.studioSel.char_id}/file/${kind}/${fn}`;
-    },
-    studioRefs() {
-      const c = this.charas.find(x => x.char_id === this.studioSel.char_id);
-      return (c && c.references) || [];
-    },
-    // プロンプトのライブプレビュー（バックエンドの build_panel_prompt と同じ順序で再現）
-    studioPromptPreview() {
-      const f = (g, id) => (this.studioPresets[g] || []).find(x => x.id === id)?.prompt || '';
-      const bg = { scene: 'in a simple anime-style background scene',
-        flat: 'plain solid pastel background, flat single color, no scenery',
-        transparent: 'isolated subject on a plain white background' }[this.studioSel.background_mode] || '';
-      const s = this.studioSel;
-      return [ this.studioChar?.appearance_prompt || '(キャラ未選択)',
-        f('shot', s.shot_id), f('angle', s.angle_id), f('pose', s.pose_id),
-        f('emotion', s.emotion_id), f('scene', s.scene_id), bg, s.extra_prompt
-      ].filter(Boolean).join(', ');
-    },
-    async generatePanel() {
-      if (!this.studioSel.char_id || this.studioBusy) { this.studioMsg = 'キャラを選択してください'; return; }
-      this.studioBusy = true; this.studioMsg = '';
-      try {
-        const r = await fetch(`${FAPI}/characters/${this.studioSel.char_id}/panel`, {
-          method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(this.studioSel),
-        });
-        if (!r.ok) { this.studioMsg = `生成失敗: ${(await r.json()).detail || r.status}`; return; }
-        this.studioMsg = '✅ 生成しました';
-        await this.loadCharas();
-        await this.openStudioChar(this.studioSel.char_id);  // ギャラリー更新
-      } catch (e) { this.studioMsg = `生成失敗: ${e}`; }
-      finally { this.studioBusy = false; }
-    },
-    async promoteStudioRef(filename) {
-      await fetch(`${FAPI}/characters/${this.studioSel.char_id}/reference/${filename}`, { method: 'POST' });
-      this.studioMsg = `⭐ ${filename} をリファレンスにしました`;
-      await this.loadCharas();
-    },
-    // 生成画像を削除（紙芝居/キャラ共通の generated/ を消す）
+    // 🎭キャラタブの生成ギャラリーから1枚消す（紙芝居撤去後もキャラタブで使う）
     async deleteGeneratedFile(charId, filename) {
       const r = await fetch(`${FAPI}/characters/${charId}/generated/${filename}`, { method: 'DELETE' });
       if (!r.ok) throw new Error((await r.json().catch(() => ({}))).detail || r.status);
-    },
-    async deleteStudioGen(filename) {
-      if (!confirm(`${filename} を削除しますか？（元に戻せません）`)) return;
-      try {
-        await this.deleteGeneratedFile(this.studioSel.char_id, filename);
-        this.studioMsg = `🗑 ${filename} を削除しました`;
-        await this.loadCharas();
-        await this.openStudioChar(this.studioSel.char_id);  // ギャラリー更新
-      } catch (e) { this.studioMsg = `削除失敗: ${e}`; }
     },
     async deleteCharaGen(filename) {
       if (!confirm(`${filename} を削除しますか？（元に戻せません）`)) return;
@@ -7409,79 +7963,6 @@ function app() {
         await this.openChara(this.chara.char_id);  // ギャラリー更新
       } catch (e) { alert(`削除失敗: ${e}`); }
     },
-    // ─── 🎲 バッチ生成 ───────────────────────────────────────────
-    sleep(ms) { return new Promise(r => setTimeout(r, ms)); },
-    _randItem(group) {
-      const arr = this.studioPresets[group] || [];
-      return arr.length ? arr[Math.floor(Math.random() * arr.length)].id : '';
-    },
-    // 🎲ONの項目をランダム、OFFは現在の固定値。同一組み合わせはバッチ内で極力回避
-    _buildBatchQueue() {
-      const groups = ['emotion', 'pose', 'shot', 'angle', 'scene'];
-      const n = parseInt(this.studioBatch.count) || 0;
-      const seen = new Set();
-      const out = [];
-      for (let i = 0; i < n; i++) {
-        let sel = null, key = '';
-        for (let tries = 0; tries < 12; tries++) {
-          sel = {};
-          for (const g of groups) sel[g + '_id'] = this.studioRand[g] ? this._randItem(g) : this.studioSel[g + '_id'];
-          key = groups.map(g => sel[g + '_id']).join('|');
-          if (!seen.has(key)) break;  // 重複でなければ採用。枯渇時は最後の候補で妥協
-        }
-        seen.add(key);
-        out.push({
-          ...sel,
-          background_mode: this.studioSel.background_mode,
-          style: this.studioSel.style,
-          aspect: this.studioSel.aspect,
-          extra_prompt: this.studioSel.extra_prompt,
-          reference: this.studioSel.reference,
-          count: 1,
-        });
-      }
-      return out;
-    },
-    stopBatch() { this.studioStopFlag = true; this.studioMsg = '⏹ 中止します（現在の1枚完了後に停止）'; },
-    async generateBatch() {
-      if (!this.studioSel.char_id) { this.studioMsg = 'キャラを選択してください'; return; }
-      if (this.studioBatchBusy) return;
-      const queue = this._buildBatchQueue();
-      if (!queue.length) { this.studioMsg = '生成キューが空です'; return; }
-      this.studioBatchBusy = true; this.studioStopFlag = false; this.studioMsg = '';
-      this.studioBatchProgress = { done: 0, total: queue.length, failed: 0 };
-      const url = `${FAPI}/characters/${this.studioSel.char_id}/panel`;
-      for (let i = 0; i < queue.length; i++) {
-        if (this.studioStopFlag) break;
-        let ok = false, fatal = false;
-        // レート系/一時失敗のみ最大2回バックオフ（8s, 16s）。それ以外は即中断
-        for (let attempt = 0; attempt <= 2 && !ok && !fatal; attempt++) {
-          if (attempt > 0) await this.sleep(8000 * attempt);
-          try {
-            const r = await fetch(url, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(queue[i]) });
-            if (r.ok) { ok = true; }
-            else if (![429, 502, 503].includes(r.status)) {
-              fatal = true;
-              this.studioMsg = `生成失敗: ${(await r.json().catch(() => ({}))).detail || r.status}`;
-            }
-          } catch (e) { /* ネットワーク等はリトライ対象 */ }
-        }
-        if (ok) {
-          this.studioBatchProgress.done++;
-          await this.loadCharas();
-          await this.openStudioChar(this.studioSel.char_id);  // ギャラリー逐次更新
-        } else {
-          this.studioBatchProgress.failed++;
-          if (fatal) break;  // 設定不備など回復不能なら打ち切り
-        }
-        if (i < queue.length - 1 && !this.studioStopFlag) await this.sleep(this.studioBatch.intervalMs);
-      }
-      this.studioBatchBusy = false;
-      const p = this.studioBatchProgress;
-      if (this.studioStopFlag) this.studioMsg = `⏹ 中止しました（成功${p.done} / 失敗${p.failed} / 全${p.total}）`;
-      else this.studioMsg = `✅ バッチ完了: 成功${p.done} / 失敗${p.failed} / 全${p.total}`;
-    },
-
     // ─── 📦 素材タブ ─────────────────────────────────────────────
     async refreshFootageTab() {
       if (!this.currentProject) return;
@@ -7561,6 +8042,13 @@ function app() {
       const panels = this.qaMerged;
       const f = this.qaFilter;
       if (f === 'all') return panels;
+      // 「絵はあるが未承認」＝在庫に積まれていない行。見て承認する動線のための絞り込み
+      if (f === 'unapproved') {
+        return panels.filter(p => {
+          const a = this.arollPanelOf(p.line_id);
+          return a && a.status === 'done' && a.image && !a.image_approved_at;
+        });
+      }
       if (f.startsWith('code:')) {
         const code = f.slice(5);
         return panels.filter(p => (p.issues || []).some(i => i.code === code));
@@ -7653,46 +8141,96 @@ function app() {
       if (m.export_size) rows.push(['納品PNG', m.export_size.join('×')]);
       return rows;
     },
-    // ─── ✂️ 切り抜きタブ（合成素材の在庫） ────────────────────────
-    // 選択のロジックは持たない。指紋での選び方は scrapping-agent の cutout_selector が本籍で、
-    // ここは在庫を見て承認/削除するだけ（1事実1ホーム）。
-    get cutoutCounts() {
-      const it = this.cutoutLib.items || [];
+    // ─── 📚 キャラ在庫タブ: 閲覧・整理（旧✂️切り抜き＋📚キャラ画像を統合。2026-08-28） ────
+    // 選択のロジックは持たない（find_current・cutout_selectorが本籍・1事実1ホーム）。
+    // ここは在庫を見て承認/削除/ラベル編集/世代付け替えをするだけ。
+    //
+    // 絞り込みは軸ごとに独立（🏞️背景タブと同じ方式）: 用途(usable) / 状態(status) / 感情 / ショット。
+    // チップの件数は「他の軸を適用した集合」で数える＝押すと0件になるチップが出ない。
+    charLibSubset(exclude) {
+      const cap = this.cutoutThresholds.max_uses ?? 3;
+      return (this.charLib.items || []).filter(e => {
+        if (exclude !== 'usable' && this.charLib.usable !== 'all' && !e.usable?.[this.charLib.usable]) return false;
+        if (exclude !== 'status') {
+          const st = this.charLib.status;
+          if (st === 'unapproved' && e.review_status !== 'pending') return false;
+          if (st === 'unused' && (e.times_used || 0)) return false;
+          // 上限は✂️切り抜きとしての消費にのみ意味を持つ（find_current(🖼️パネル)に上限は無い）
+          if (st === 'exhausted' && !(e.usable?.cutout && (e.times_used || 0) >= cap)) return false;
+          if (st === 'stale' && !e.is_stale) return false;
+        }
+        if (exclude !== 'emotion' && this.charLib.emotion !== 'all'
+            && (e.emotion || '感情なし') !== this.charLib.emotion) return false;
+        if (exclude !== 'shot' && this.charLib.shot !== 'all'
+            && (e.shot || 'ショットなし') !== this.charLib.shot) return false;
+        return true;
+      });
+    },
+    get charLibFiltered() {
+      return this.charLibSubset(null).slice().reverse();   // 新しい順（生成直後の絵が先頭）
+    },
+    // 画像生成を弾く理由（空文字なら生成できる）。押せば必ず失敗するボタンを見せないため。
+    // ⚠️ 判定の本籍はバックエンドの character_manager.can_generate_images で、ここは**表示専用の写し**。
+    // 順序（画像を使わない → 外見が無い → 参照が無い）を揃えてあるのは、理由の文言が
+    // バックエンドの400と食い違うと「なぜ弾かれたか」が分からなくなるため。
+    charImageBlockReason(c) {
+      if (!c) return 'キャラが見つからない';
+      if (!c.uses_images) return '画像を使わない設定（声のみのキャラ）';
+      if (!c.has_appearance) return '外見(appearance_prompt)が未設定';
+      if (!(c.references || []).length) return 'リファレンス画像が無い（生成のたびに別人になります）';
+      return '';
+    },
+    // 生成パネルを出してよいか。'*'（全キャラ）は積む先が決まらないため不可。
+    get charLibCanGenerate() {
+      if (!this.charLib.charId || this.charLib.charId === '*') return false;
+      return !this.charLibBlockReason;
+    },
+    get charLibBlockReason() {
+      return this.charImageBlockReason(this.charas.find(c => c.char_id === this.charLib.charId));
+    },
+    get charLibCounts() {
+      const it = this.charLib.items || [];
       const cap = this.cutoutThresholds.max_uses ?? 3;
       return {
         total: it.length,
+        shown: this.charLibSubset(null).length,
         approved: it.filter(e => e.review_status !== 'pending').length,
-        pending: it.filter(e => e.review_status === 'pending').length,
-        stale: it.filter(e => e.is_stale).length,
+        unapproved: it.filter(e => e.review_status === 'pending').length,
         unused: it.filter(e => !(e.times_used || 0)).length,
-        exhausted: it.filter(e => (e.times_used || 0) >= cap).length,
+        exhausted: it.filter(e => e.usable?.cutout && (e.times_used || 0) >= cap).length,
+        stale: it.filter(e => e.is_stale).length,
+        panelUsable: it.filter(e => e.usable?.panel).length,
+        cutoutUsable: it.filter(e => e.usable?.cutout).length,
       };
     },
-    get cutoutByEmotion() {
-      const m = {};
-      for (const e of this.cutoutLib.items || []) {
-        const k = e.emotion || '感情なし';
-        m[k] = (m[k] || 0) + 1;
-      }
-      return Object.entries(m).sort((a, b) => b[1] - a[1]);
+    charLibTally(rows, pick) {
+      const m = new Map();
+      for (const e of rows) { const v = pick(e); if (v) m.set(v, (m.get(v) || 0) + 1); }
+      return [...m.entries()].sort((a, b) => b[1] - a[1]);
     },
-    get cutoutFiltered() {
-      const f = this.cutoutLib.filter;
-      const cap = this.cutoutThresholds.max_uses ?? 3;
-      const it = this.cutoutLib.items || [];
-      if (f === 'pending') return it.filter(e => e.review_status === 'pending');
-      if (f === 'unused') return it.filter(e => !(e.times_used || 0));
-      if (f === 'exhausted') return it.filter(e => (e.times_used || 0) >= cap);
-      if (f.startsWith('emo:')) {
-        const k = f.slice(4);
-        return it.filter(e => (e.emotion || '感情なし') === k);
-      }
-      return it;
+    get charLibEmotionFacet() {
+      return this.charLibTally(this.charLibSubset('emotion'), e => e.emotion || '感情なし');
     },
-    // 全キャラ表示では charId が '*' なので、実体は entry 側の char_id で引く
-    cutoutUrl(e) {
-      const filename = (e.cutout || '').split('/').pop();
-      return `${FAPI}/characters/${e.char_id || this.cutoutLib.charId}/panel_library/cutout/${filename}`;
+    get charLibShotFacet() {
+      return this.charLibTally(this.charLibSubset('shot'), e => e.shot || 'ショットなし');
+    },
+    charLibSetFilter(axis, value) {
+      // 同じチップをもう一度押したら解除（🏞️背景タブと同じ・軸が独立なので戻せる口が要る）
+      this.charLib[axis] = (this.charLib[axis] === value && value !== 'all') ? 'all' : value;
+    },
+    // 全キャラ表示では charId が '*' なので、実体の場所は entry 側の char_id で引く
+    charLibImageUrl(item) {
+      const filename = (item.image || '').split('/').pop();
+      return `${FAPI}/characters/${item.char_id || this.charLib.charId}/panel_library/file/${filename}`;
+    },
+    charLibCutoutUrl(item) {
+      const filename = (item.cutout || '').split('/').pop();
+      return `${FAPI}/characters/${item.char_id || this.charLib.charId}/panel_library/cutout/${filename}`;
+    },
+    // サムネの主表示。⚠️ 取り違えると背景の上に背景付きの絵を貼る事故になるため、
+    // 🖼️パネルが無い（＝切り抜き専用）entryは必ず灰色地の切り抜きを見せる
+    charLibThumbUrl(item) {
+      return item.usable?.panel ? this.charLibImageUrl(item) : this.charLibCutoutUrl(item);
     },
     // ② の試算。**生成の前に無料で埋まる行を確定させる**ための窓口。
     // 「賄えない行」は在庫から無理に埋めない（ワンパターンの発生源になる）。
@@ -7738,94 +8276,189 @@ function app() {
       }
     },
     // 一覧の並び（絞り込み後）を順に送る。合成チェックの qaStep と同じ作り
-    cutoutStep(d) {
-      const list = this.cutoutFiltered;
-      if (!list.length || !this.cutoutLib.detail) return;
+    charLibStep(d) {
+      const list = this.charLibFiltered;
+      if (!list.length || !this.charLib.detail) return;
       const key = e => (e.char_id || '') + '/' + e.slot_id;
-      let i = list.findIndex(e => key(e) === key(this.cutoutLib.detail));
+      let i = list.findIndex(e => key(e) === key(this.charLib.detail));
       if (i < 0) i = 0;
-      this.cutoutLib.detail = list[(i + d + list.length) % list.length];
+      this.charLib.detail = list[(i + d + list.length) % list.length];
     },
-    get cutoutPositionLabel() {
-      const list = this.cutoutFiltered;
-      if (!this.cutoutLib.detail) return '';
+    get charLibPositionLabel() {
+      const list = this.charLibFiltered;
+      if (!this.charLib.detail) return '';
       const key = e => (e.char_id || '') + '/' + e.slot_id;
-      const i = list.findIndex(e => key(e) === key(this.cutoutLib.detail));
+      const i = list.findIndex(e => key(e) === key(this.charLib.detail));
       return `${i < 0 ? '—' : i + 1} / ${list.length}`;
     },
     charaName(charId) {
       return (this.charas.find(c => c.char_id === charId) || {}).name || charId || '';
     },
-    cutoutBorder(e) {
+    charLibBorder(e) {
       if (e.is_stale) return '#7f1d1d';
       if (e.review_status === 'pending') return '#78350f';
-      if ((e.times_used || 0) >= (this.cutoutThresholds.max_uses ?? 3)) return '#334155';
+      if (e.usable?.cutout && (e.times_used || 0) >= (this.cutoutThresholds.max_uses ?? 3)) return '#334155';
       return '#166534';
     },
-    cutoutEdges(e) {
+    // 似ている在庫（`GET .../{slot_id}/similar`）。⚠️ 距離の計算はフロントに持たない
+    // ── 指紋の版が変わった時にPython側とJS側で食い違うのを避けるため（1事実1ホーム）
+    get charLibSimilar() { return this.charLib.similar || []; },
+    async loadCharLibSimilar(e) {
+      const charId = e.char_id || this.charLib.charId;
+      this.charLib.similarBusy = true;
+      try {
+        const r = await fetch(
+          `${FAPI}/characters/${charId}/panel_library/${e.slot_id}/similar?limit=6`);
+        const d = await r.json();
+        this.charLib.similar = r.ok ? (d.similar || []) : [];
+        this.charLib.similarFor = e.slot_id;
+        if (r.ok && d.reason) this.charLib.msg = d.reason;
+      } catch (err) {
+        this.charLib.similar = [];
+        this.charLib.msg = `似ている在庫の照合に失敗: ${err.message}`;
+      } finally { this.charLib.similarBusy = false; }
+    },
+    // 似ている在庫のサムネをクリック → その絵を詳細で開く（一覧の絞り込みは変えない）
+    charLibJumpTo(slotId) {
+      const hit = (this.charLib.items || []).find(
+        x => x.slot_id === slotId
+          && (x.char_id || '') === (this.charLib.detail?.char_id || ''));
+      if (hit) { this.charLib.detail = hit; this.charLib.similarFor = ''; this.charLib.similar = []; }
+    },
+    charLibEdges(e) {
       const ed = e.measured?.edges || {};
       const on = Object.entries(ed).filter(([, v]) => v).map(([k]) => k);
       return on.length ? on.join(' / ') : 'なし（四辺とも余白あり）';
     },
-    async loadCutoutLib() {
-      if (!this.cutoutLib.charId) return;
-      this.cutoutLib.busy = true;
-      this.cutoutLib.msg = '';
+    async loadCharLib() {
+      if (!this.charLib.charId) return;
+      this.charLib.busy = true;
+      this.charLib.msg = '';
       try {
-        const ids = this.cutoutLib.charId === '*'
-          ? this.charas.map(c => c.char_id) : [this.cutoutLib.charId];
+        const ids = this.charLib.charId === '*'
+          ? this.charas.map(c => c.char_id) : [this.charLib.charId];
         const [lists, th] = await Promise.all([
           Promise.all(ids.map(async id => {
-            const d = await (await fetch(`${FAPI}/characters/${id}/panel_library?kind=cutout`)).json();
-            // 実体の場所を引くのに char_id が要る。slot_id はキャラ内でしか一意でないので
-            // 全キャラ表示では :key も char_id で修飾する
+            // kind='' で全種別（panel由来・cutout由来の両方）を取る。usableで見せ分ける
+            const d = await (await fetch(`${FAPI}/characters/${id}/panel_library?kind=`)).json();
             return (d.entries || []).map(e => ({ ...e, char_id: id }));
           })),
           (await fetch(`${FAPI}/cutout/thresholds`)).json(),
         ]);
         this.cutoutThresholds = th || this.cutoutThresholds;
-        this.cutoutLib.items = lists.flat();
+        this.charLib.items = lists.flat();
       } catch (e) {
-        this.cutoutLib.msg = '読み込みに失敗しました: ' + e;
+        this.charLib.msg = '読み込みに失敗しました: ' + e;
       } finally {
-        this.cutoutLib.busy = false;
+        this.charLib.busy = false;
       }
     },
-    async approveAllCutouts() {
-      // 194件を1枚ずつ承認するのは現実的でないので、まとめて入れて要らないものを消す運用
-      this.cutoutLib.busy = true;
+    async approveAllCharLib() {
+      // 未承認は出自によって kind が違う（先回り生成の承認待ち=既定kind／psassist取り込み=kind:"cutout"）。
+      // 両方まとめて承認する
+      this.charLib.busy = true;
       try {
-        const ids = this.cutoutLib.charId === '*'
-          ? this.charas.map(c => c.char_id) : [this.cutoutLib.charId];
-        const rs = await Promise.all(ids.map(async id => (await fetch(
-          `${FAPI}/characters/${id}/panel_library/approve-all?kind=cutout`, { method: 'POST' })).json()));
-        this.cutoutLib.msg = `${rs.reduce((a, r) => a + (r.approved || 0), 0)} 件を承認しました`;
-        await this.loadCutoutLib();
+        const ids = this.charLib.charId === '*'
+          ? this.charas.map(c => c.char_id) : [this.charLib.charId];
+        const rs = await Promise.all(ids.flatMap(id => ['panel', 'cutout'].map(kind => fetch(
+          `${FAPI}/characters/${id}/panel_library/approve-all?kind=${kind}`, { method: 'POST' })
+          .then(r => r.json()))));
+        this.charLib.msg = `${rs.reduce((a, r) => a + (r.approved || 0), 0)} 件を承認しました`;
+        await this.loadCharLib();
       } finally {
-        this.cutoutLib.busy = false;
+        this.charLib.busy = false;
       }
     },
-    async approveCutout(e) {
-      this.cutoutLib.busy = true;
+    // ラベルの手直し（LLMの誤ラベルの受け皿）。slot_idもファイル名も動かさないので、
+    // 台本行が持つ cutout_slot_id / background_id 等の参照は切れない。語彙の検証はバックエンド側。
+    async saveCharLibLabel(e, axis, value) {
+      const charId = e.char_id || this.charLib.charId;
+      this.charLib.busy = true;
+      this.charLib.msg = '';
       try {
-        await fetch(`${FAPI}/characters/${e.char_id || this.cutoutLib.charId}/panel_library/${e.slot_id}/approve`,
+        const r = await fetch(`${FAPI}/characters/${charId}/panel_library/${e.slot_id}`, {
+          method: 'PATCH', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ [axis]: value }),
+        });
+        const d = await r.json();
+        if (!r.ok) throw new Error(d.detail || '保存に失敗しました');
+        const { changed, ...entry } = d;
+        Object.assign(e, entry);          // 一覧・詳細は同じオブジェクトなので両方に反映される
+        this.charLib.msg = (changed || []).length
+          ? `${e.slot_id} を保存しました（${(changed || []).join(', ')}）`
+          : '変更はありませんでした';
+      } catch (err) {
+        this.charLib.msg = `保存に失敗: ${err.message}`;
+      } finally { this.charLib.busy = false; }
+    },
+    // ⚠️ 世代の付け替え（rebless）＝「見た目は変わっていない」という**人の宣言**。
+    // appearance_version は appearance_prompt と reference/ の全バイトのハッシュなので、
+    // 参照画像を1枚足しただけでそのキャラの在庫が一斉に世代違いになる。機械には「参照を
+    // 足しただけ」と「デザインを変えた」の区別がつかないので、試算を見せてから人に宣言させる。
+    // 本籍 Docs/AROLL_ASSET_PLAN.md §12-1
+    async reblessCharLib() {
+      const ids = this.charLib.charId === '*'
+        ? this.charas.map(c => c.char_id) : [this.charLib.charId];
+      if (!ids.length) return;
+      const call = (id, body) => fetch(`${FAPI}/characters/${id}/panel_library/rebless`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body),
+      }).then(r => r.json());
+      this.charLib.busy = true;
+      this.charLib.msg = '';
+      try {
+        // ① 試算（バックエンドの既定も dry_run=true）
+        const dry = await Promise.all(ids.map(async id => ({ id, ...(await call(id, { dry_run: true })) })));
+        const targets = dry.filter(d => (d.count || 0) > 0);
+        const total = targets.reduce((a, d) => a + d.count, 0);
+        if (!total) { this.charLib.msg = '世代違いの在庫はありませんでした'; return; }
+        const detail = targets.map(d => {
+          const kinds = Object.entries(d.by_kind || {}).map(([k, n]) => `${k} ${n}`).join(' / ');
+          return `　・${this.charaName(d.id) || d.id}: ${d.count}件（${kinds}）`;
+        }).join('\n');
+        // ② 人の宣言を取る（機械には区別できない判断なので、ここは必ず止める）
+        if (!confirm(
+          `世代違いの在庫 ${total} 件を「現在の外見」として付け替えます。\n${detail}\n\n`
+          + '⚠️ これは「見た目は変わっていない」という宣言です。\n'
+          + '　 参照画像を足しただけ・プロンプトの言い回しを直しただけ → OK\n'
+          + '　 実際にデザイン（髪型・服・色）を変えた → 実行しないでください\n'
+          + '　 （古い外見の絵が現行の在庫として配られてしまいます）\n\n'
+          + '実行しますか？　索引はバックアップされ、履歴(rebless_log)に残ります。')) return;
+        const note = prompt('付け替えの理由を残してください（後から追えるように）',
+                            '参照画像を追加しただけで外見は変えていない');
+        if (note === null) return;
+        // ③ 適用
+        const rs = await Promise.all(targets.map(d => call(d.id, { dry_run: false, note })));
+        const n = rs.reduce((a, r) => a + (r.count || 0), 0);
+        const baks = rs.map(r => r.backup).filter(Boolean);
+        this.charLib.msg = `${n} 件を現在の外見へ付け替えました`
+          + (baks.length ? `（バックアップ: ${baks.join(' / ')}）` : '');
+        await this.loadCharLib();
+      } catch (e) {
+        this.charLib.msg = `付け替えに失敗: ${e}`;
+      } finally { this.charLib.busy = false; }
+    },
+    async approveCharLibEntry(e) {
+      this.charLib.busy = true;
+      try {
+        await fetch(`${FAPI}/characters/${e.char_id || this.charLib.charId}/panel_library/${e.slot_id}/approve`,
                     { method: 'POST' });
-        this.cutoutLib.detail = null;
-        await this.loadCutoutLib();
+        this.charLib.detail = null;
+        await this.loadCharLib();
       } finally {
-        this.cutoutLib.busy = false;
+        this.charLib.busy = false;
       }
     },
-    async deleteCutout(e) {
+    async deleteCharLibEntry(e) {
       if (!confirm(`${e.slot_id} を削除します（実体ファイルも消えます）。よろしいですか？`)) return;
-      this.cutoutLib.busy = true;
+      this.charLib.busy = true;
       try {
-        await fetch(`${FAPI}/characters/${e.char_id || this.cutoutLib.charId}/panel_library/${e.slot_id}`,
+        await fetch(`${FAPI}/characters/${e.char_id || this.charLib.charId}/panel_library/${e.slot_id}`,
                     { method: 'DELETE' });
-        this.cutoutLib.detail = null;
-        await this.loadCutoutLib();
+        this.charLib.detail = null;
+        await this.loadCharLib();
       } finally {
-        this.cutoutLib.busy = false;
+        this.charLib.busy = false;
       }
     },
 
@@ -7942,6 +8575,59 @@ function app() {
       } catch (e) {
         this.arollMsg = `確定に失敗: ${e.message}`;
       } finally { this.arollSyncBusy = false; }
+    },
+    // ─── 画像の承認（在庫へ積む口） ────────────────────────────────
+    //
+    // 生成の瞬間ではなく**人が承認した瞬間**に積む。生成時に積むと、作り直して捨てた絵まで
+    // 在庫に入る（a_roll/panel_{line_id}.png は上書きで最後の1枚しか残らないのに、在庫には
+    // 作り直した回数ぶん並ぶ）。台本・TTSの「承認」と同じ位置づけ。Docs/AROLL_ASSET_PLAN.md §12-2
+    get arollApprovalCounts() {
+      const c = { done: 0, approved: 0, pending: 0 };
+      for (const p of this.arollPanels) {
+        if (p.status !== 'done' || !p.image) continue;
+        c.done++;
+        if (p.image_approved_at) c.approved++; else c.pending++;
+      }
+      return c;
+    },
+    get arollUnapprovedLineIds() {
+      return this.arollPanels
+        .filter(p => p.status === 'done' && p.image && !p.image_approved_at)
+        .map(p => p.line_id);
+    },
+    async arollApproveImages(lineIds) {
+      const ids = lineIds || this.arollUnapprovedLineIds;
+      if (!ids.length) return;
+      // 一括だけ確認を挟む（1行ずつは「今その絵を見て押す」操作なので挟まない）
+      if (!lineIds && !confirm(
+          `未承認 ${ids.length} 件を承認し、キャラ所有ライブラリへ取り込みます。\n`
+          + '無料です（背景除去→指紋→多様性検査を通すだけで、画像は生成しません）。\n'
+          + '既存の在庫と近すぎる絵は積まれませんが、その行の絵はそのまま使われます。\n'
+          + '続行しますか？')) return;
+      this.arollApproveBusy = true;
+      this.arollMsg = '';
+      try {
+        const r = await fetch(`${this.arollApiBase}/approve-images`, {
+          method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ line_ids: ids }),
+        });
+        const d = await r.json();
+        if (!r.ok) throw new Error(d.detail || '承認に失敗しました');
+        this.arollApproveResult = d;
+        this.arollMsg = `✔ ${d.approved}件を承認 / ${d.registered}件を在庫へ取り込みました`;
+        await this.loadArollManifest();
+      } catch (e) {
+        this.arollMsg = `承認に失敗: ${e.message}`;
+      } finally { this.arollApproveBusy = false; }
+    },
+    // 「積まなかった理由」は件数でまとめる（1行ずつ読ませない）
+    get arollApproveSkipReasons() {
+      const m = {};
+      for (const s of this.arollApproveResult?.skipped || []) {
+        const k = (s.reason || '').split('（')[0];
+        m[k] = (m[k] || 0) + 1;
+      }
+      return Object.entries(m).sort((a, b) => b[1] - a[1]);
     },
     async arollExport() {
       this.arollExportBusy = true;
