@@ -1946,12 +1946,10 @@ async def aroll_generate_prompts(project_id: str, episode_number: int, req: Arol
     speaker_map = aroll_manager.get_speaker_map(project_id)
     known_chars = aroll_manager.get_cast_characters(project_id)
 
-    warnings: list[str] = []
-    # 配役未割当の話者を警告（そのキャラは参照画像なしで生成される）
-    used_speakers = {ln.get("speaker_id") for ln in script.get("lines", [])}
-    for sid in sorted(s for s in used_speakers if s):
-        if not speaker_map.get(sid, {}).get("character_id"):
-            warnings.append(f"話者 {sid} にキャラが割り当てられていません（TTS配役を確認）")
+    # 配役の問題（未割当・キャラ不在・画像を使わない設定）をまとめて出す。
+    # 「描けないキャラを候補から外す」のは get_cast_characters が黙って行うので、
+    # なぜその役のコマにキャラが出ないのかは必ずここで言う。
+    warnings: list[str] = list(aroll_manager.cast_warnings(project_id))
 
     prompts_by_line: dict[str, dict] = {}
     for section, lines in _group_line_objs_by_section(script):

@@ -169,7 +169,17 @@ def get_speaker_map(project_id: str) -> dict[str, dict]:
 
 
 def get_cast_characters(project_id: str) -> dict[str, dict]:
-    """配役に登場するキャラの {char_id: {name, appearance_prompt}} を返す。"""
+    """配役に登場する**描けるキャラ**の {char_id: {name, appearance_prompt}} を返す。
+
+    ⚠️ **``uses_images`` が False のキャラは除外する。** 声だけのキャラ（ナレーター、
+    声を差し替えるために作られたキャラセット）を「映すキャラ」の候補としてLLMへ渡すと、
+    参照画像0枚のまま生成が走り、同じ人物の並行在庫ができる
+    （``psassist/Docs/CHARACTER_CUTOUT_PLAN.md`` §15）。
+
+    ⚠️ **``can_generate_images`` を丸ごと呼ばない。** Aロールは「参照が無くても生成を
+    止めない」で決着済み（§15-3④）── ここで参照必須にすると台本の途中で止まる。
+    **見るのは ``uses_images`` だけ。**
+    """
     chars: dict[str, dict] = {}
     for sp in get_speaker_map(project_id).values():
         cid = sp.get("character_id")
@@ -178,11 +188,37 @@ def get_cast_characters(project_id: str) -> dict[str, dict]:
         c = character_manager.read_character(cid)
         if c is None:
             continue
+        if not c.get("uses_images", True):
+            continue  # 声だけのキャラ。除外の告知は cast_warnings が担当
         chars[cid] = {
             "name": c.get("name", cid),
             "appearance_prompt": c.get("appearance_prompt", ""),
         }
     return chars
+
+
+def cast_warnings(project_id: str) -> list[str]:
+    """配役のうち「描けないキャラ」を人が読める形で並べる。
+
+    除外そのものは ``get_cast_characters`` が黙って行うので、**なぜその役のコマに
+    キャラが出ないのか**をここで必ず言う（黙って消えるのが一番たちが悪い）。
+    """
+    out: list[str] = []
+    for sid, sp in sorted(get_speaker_map(project_id).items()):
+        cid = sp.get("character_id")
+        if not cid:
+            out.append(f"話者 {sid} にキャラが割り当てられていません（TTS配役を確認）")
+            continue
+        c = character_manager.read_character(cid)
+        if c is None:
+            out.append(f"話者 {sid} のキャラ {cid} が見つかりません")
+        elif not c.get("uses_images", True):
+            out.append(
+                f"話者 {sid} のキャラ「{c.get('name', cid)}」({cid}) は"
+                "『画像を使わない』設定です。この役のコマはナレーション扱い"
+                "（キャラ無し・背景のみ）になります"
+            )
+    return out
 
 
 def build_or_update_manifest(
@@ -1119,8 +1155,13 @@ def select_targets(
     """バッチ対象パネルを選ぶ。only_missing=True なら done を除外（＝レジューム/失敗再試行）。
 
     台本から消えた行（orphan）は明示指定を含め常に除外する（消えたセリフの絵に課金しない）。
+
+    ⚠️ **ナレーション行（``characters`` が空）も常に除外する。** 映すキャラが居ないので
+    キャラ画像を生成する対象ではない（背景だけのコマになる）。ここを外さないと、
+    参照画像0枚のまま「誰でもない人物」が課金生成される。
     """
     panels = [p for p in manifest.get("panels", []) if not p.get("orphan")]
+    panels = [p for p in panels if p.get("characters")]
     # ⚠️ 空リストは「1行も選んでいない」＝対象ゼロ（省略＝None が「全行」）。
     # falsy判定にすると、行を1つも選んでいないのに全行へ課金生成が走る。
     if line_ids is not None:

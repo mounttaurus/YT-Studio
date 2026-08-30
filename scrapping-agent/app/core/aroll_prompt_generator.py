@@ -259,13 +259,30 @@ def substitute_char_tags(text: str, known_chars: dict[str, dict]) -> str:
 
 
 def _normalize_characters(
-    raw: list, known_chars: dict[str, dict], fallback_char_id: str,
+    raw: list, known_chars: dict[str, dict], speaker_char_id: str,
 ) -> list[str]:
     """LLM出力のキャラ列をchar_idへ正規化する（名前ゆらぎ対応・最大2人）。
 
-    known_chars: {char_id: {"name": ...}}。1人も解決できなければ話者のキャラへフォールバック。
+    known_chars: {char_id: {"name": ...}}（**描けるキャラだけ**が入っている）
+
+    ★**話者は機械的に先頭へ固定する**（2026-08-30）。従来はLLMの出力を採用し、
+      1人も解決できなかった時だけ話者へフォールバックしていたため、**LLMが聞き手
+      だけを返すと話者不在のコマが作れてしまった**。静止画マンガでは「喋っている
+      人物が写っていない」表現は成立しないので、ここは自然文の指示に頼らず機械で担保する
+      （memory ``aroll-two-shot-subchar-failure``: 自然文指示は信用しない）。
+
+    ★2人目は演出の選択なので残す。対面カット/リアクションの2ショットは意図した設計。
+
+    ★話者が ``known_chars`` に居ない = **その話者は描けない**（声だけのキャラ）。
+      その場合は空配列を返す ＝ ナレーション（キャラ無し・背景のみのコマ）。
+      ここで別のキャラを代役に立てない ── 喋っていない人物が写ることになるため。
     """
+    if speaker_char_id and speaker_char_id not in known_chars:
+        return []  # ナレーション。代役を立てない
+
     out: list[str] = []
+    if speaker_char_id:
+        out.append(speaker_char_id)  # 話者は必ず映る
     for token in raw if isinstance(raw, list) else []:
         t = str(token).strip()
         if not t:
@@ -286,8 +303,6 @@ def _normalize_characters(
             out.append(resolved)
         if len(out) >= 2:
             break
-    if not out and fallback_char_id:
-        out = [fallback_char_id]
     return out
 
 
@@ -348,12 +363,12 @@ async def generate_section_prompts(
     for ln in lines:
         lid = ln.get("id")
         speaker = speaker_map.get(ln.get("speaker_id"), {})
-        fallback_char = speaker.get("character_id") or ""
+        speaker_char = speaker.get("character_id") or ""
         p = by_line.get(lid)
         if p is None:
             warnings.append(f"[{section}] LLM応答に {lid} が無いためスキップ")
             continue
-        chars = _normalize_characters(p.get("characters"), known_chars, fallback_char)
+        chars = _normalize_characters(p.get("characters"), known_chars, speaker_char)
         text = str(p.get("prompt", "")).strip()
         if not text:
             warnings.append(f"[{section}] {lid} のpromptが空のためスキップ")

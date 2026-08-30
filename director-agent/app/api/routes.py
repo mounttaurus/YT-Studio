@@ -124,6 +124,81 @@ async def get_psassist_worker():
     return data
 
 
+# ─── 台本承認 → Aロールのプロンプト自動生成（AROLL_TAB_REDESIGN_PLAN.md Phase 1）───
+#
+# 承認した時点でAロールのプロンプトは確定できる（LLMは無料枠・課金しない）。
+# ユーザーにボタンをもう1つ押させる理由が無いので、司令塔がここで繋ぐ。
+# **この2段を繋げるのは director だけ**（SCRIPTING/SCRAPPING 両方のURLを持つのは
+# director だけ。docker-compose.yml の environment: 参照）。
+
+@router.post("/projects/{project_id}/episodes/{episode_number}/approve-and-prepare")
+async def approve_and_prepare(project_id: str, episode_number: int, request: Request):
+    """台本を承認し、続けてAロールのプロンプトを用意する。
+
+    ⚠️ **`overwrite` は False 固定。** 承認は台本を直すたび何度も押す操作なので、
+    ユーザーが手編集したプロンプト（``prompt_source="user"``）や生成済み画像との
+    紐付けを上書きで壊してはいけない。全部作り直したい時は🖼️Aロールタブの
+    「プロンプトを作り直す」を使う（そちらが ``overwrite=True``）。
+
+    ⚠️ **プロンプト生成の失敗で承認を失敗にしない。** 承認は台本の確定という
+    独立した成果で、Aロールはその後工程。ここで500を返すと「承認できていない」と
+    誤解させ、もう一度承認を押させることになる。``aroll_error`` に載せて200を返す。
+    """
+    body = {}
+    try:
+        body = await request.json()
+    except Exception:
+        pass  # ボディ無しで呼ばれるのが通常（承認ボタン）
+
+    async with httpx.AsyncClient(timeout=60.0) as client:
+        try:
+            res = await client.post(
+                f"{SCRIPTING_AGENT_URL}/projects/{project_id}/approve",
+                params={"episode_number": episode_number},
+            )
+        except httpx.RequestError as e:
+            raise HTTPException(status_code=502, detail=f"scripting-agent unreachable: {e}")
+    if res.status_code >= 400:
+        raise HTTPException(status_code=res.status_code, detail=res.text)
+    out = res.json()
+
+    # ここから先は「失敗しても承認は成功」。例外を外へ出さない。
+    payload = {"overwrite": False}
+    for k in ("style", "aspect", "extra_prompt", "model"):
+        if body.get(k):
+            payload[k] = body[k]
+    try:
+        async with httpx.AsyncClient(timeout=600.0) as client:
+            r2 = await client.post(
+                f"{SCRAPPING_AGENT_URL}/projects/{project_id}"
+                f"/episodes/{episode_number}/aroll/prompts",
+                json=payload,
+            )
+        if r2.status_code >= 400:
+            out["aroll"] = None
+            out["aroll_error"] = f"HTTP {r2.status_code}: {r2.text[:300]}"
+        else:
+            data = r2.json()
+            panels = (data.get("manifest") or {}).get("panels") or []
+            out["aroll"] = {
+                "panel_count": len(panels),
+                "warnings": data.get("warnings") or [],
+            }
+            out["aroll_error"] = None
+    except Exception as e:
+        out["aroll"] = None
+        out["aroll_error"] = f"{type(e).__name__}: {e}"
+
+    # 承認を200で返す以上、失敗は監査ログに残さないと「静かに起きなかった」ことになる
+    project_manager.append_director_log(project_id, {
+        "action": "approve-and-prepare",
+        "episode": episode_number,
+        "aroll_panels": (out.get("aroll") or {}).get("panel_count"),
+        "aroll_error": out.get("aroll_error"),
+    })
+    return out
+
+
 # ─── TTS連携 ──────────────────────────────────────────────────────────
 
 @router.post("/projects/{project_id}/episodes/{episode_number}/tts/run")

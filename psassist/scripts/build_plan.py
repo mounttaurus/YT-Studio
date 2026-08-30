@@ -38,12 +38,19 @@ def main() -> None:
     print("パネル数 %d → %s\n" % (len(panels), path))
 
     print("■ 話者 / バブル / 位置")
+    # 既定表はチャンネル固有データ（assets/speaker_defaults.json）で、build() が
+    # 実際に使ったものがプランに載る。ここで読み直さない（食い違いを作らないため）。
+    speakers = plan.get("defaults", {}).get("speakers", {})
     for sp, c in collections.Counter(p["speaker"] for p in panels).most_common():
-        d = spec.SPEAKER_DEFAULTS.get(sp)
+        d = speakers.get(sp)
+        layer = spec.BUBBLE_BY_KEY[d["bubble_key"]].layer if d else "?"
         print(
             "   %-5s %3d件  %s (%s) / %s"
-            % (sp, c, d.bubble_key if d else "?", spec.BUBBLE_BY_KEY[d.bubble_key].layer if d else "?", d.side if d else "?")
+            % (sp, c, d["bubble_key"] if d else "既定へ", layer, d["side"] if d else "既定へ")
         )
+    if not speakers:
+        print("   （assets/speaker_defaults.json が無いため全話者が既定。"
+              "左右は mask_stats があればそちらが優先されます）")
 
     print("\n■ フォントサイズの分布（実測フィット前の見積り）")
     for size, c in sorted(collections.Counter(p["text"]["size"] for p in panels).items(), reverse=True):

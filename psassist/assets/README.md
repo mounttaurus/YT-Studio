@@ -81,3 +81,23 @@ bubbles.psd を直して再生成すればよい。
 
 更新は `psassist/scripts/build_overrides.py`（判定CSVから集約）。
 設計の本籍は `psassist/Docs/CHARACTER_CUTOUT_PLAN.md` §11。
+
+## `speaker_defaults.json`（話者ごとの既定バブル・任意）
+
+話者名 → バブル形状と左右の既定値。**チャンネル固有のデータなので配布物には入れない**
+（`background_overrides.json` と同じ扱い）。
+
+```json
+{ "speakers": { "<話者名>": { "bubble_key": "rect_a", "side": "right", "note": "" } } }
+```
+
+`bubble_key` は `spec.BUBBLES` のキー（`rect_a` / `round_a` / `cloud_a` / `spike_a` …）。
+知らないキーは黙って捨てられ、既定へ落ちる。
+
+⚠️ **無くても動く。** 未知の話者は `spec.FALLBACK_DEFAULT` に落ち、`UNKNOWN_SPEAKER`
+警告が出るだけ。しかも**左右は `mask_stats` があればそちらが優先される**（実測82%で、
+話者別の最頻値64%より正確）。効くのはマスクが無い行の左右と、バブル形状の初期値だけ。
+
+形状は**そもそも当てられない** ── 129枚の実測で、emotion を使っても約60%にしかならず
+最頻値の決め打ち47%と大差なかった。当てにいかず、既定を置いて人が直す方針
+（`psd-layout-has-no-rule`）。

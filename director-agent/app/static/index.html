@@ -2165,6 +2165,10 @@
                 承認済み台本のセリフをLLM（Gemini無料枠→OpenRouter無料）が解釈してコマごとの演出プロンプトを作り、
                 NanoBananaでキャラ画像を生成します。スタイル・キャラ外見は生成時に自動合成されるため、
                 プロンプト欄には<b>演出（表情・ポーズ・構図）だけ</b>が入ります。
+                <br>
+                <b>プロンプトは台本を承認した時点で自動的に用意されます。</b>
+                ここは<b>作り直したい時だけ</b>使ってください（スタイルや追加指示を変えた場合など）。
+                <b>既にあるプロンプトを上書きします</b>（「上書きする」がOFFなら手編集分は残ります）。
               </p>
               <div style="display:flex;gap:14px;align-items:flex-end;flex-wrap:wrap">
                 <div>
@@ -2192,7 +2196,7 @@
                 </label>
                 <button class="btn btn-primary" @click="arollGeneratePrompts()" :disabled="arollBusy || arollRunning">
                   <template x-if="arollBusy === 'prompts'"><span class="spinner"></span></template>
-                  <span x-text="arollBusy === 'prompts' ? 'LLMがプロンプト生成中...' : '✍ ① プロンプト一括生成'"></span>
+                  <span x-text="arollBusy === 'prompts' ? 'LLMがプロンプト生成中...' : '✍ ① プロンプトを作り直す'"></span>
                 </button>
               </div>
               <div x-show="arollWarnings.length" style="margin-top:10px">
@@ -2324,7 +2328,7 @@
               <div x-show="arollDriftCount" style="font-size:11px;color:#94a3b8;margin-top:6px;line-height:1.7">
                 台本を後から追加・削除・推敲すると、生成済みのAロールとズレます。
                 <b>絵が古い</b>＝セリフが変わったのに絵が生成時のまま（下の一覧で「↻ 生成し直す」）。
-                <b>画像なし</b>＝台本に追加された行（パネルが無い行は「① プロンプト一括生成」を実行してから生成）。
+                <b>画像なし</b>＝台本に追加された行（パネルが無い行は「① プロンプトを作り直す」を実行してから生成）。
                 <b>行が消えた</b>＝台本から削除された行のPNGがディスクに残っている（編集には使われません）。
               </div>
               <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-top:10px">
@@ -2349,7 +2353,7 @@
                         生成時: <span x-text="it.source_text"></span>
                       </div>
                       <div x-show="it.sync === 'missing' && it.status === 'no_panel'" style="color:#64748b;margin-top:2px">
-                        パネル未作成 —「① プロンプト一括生成」が必要です
+                        パネル未作成 —「① プロンプトを作り直す」が必要です
                       </div>
                       <div x-show="it.prompt_stale" style="color:#64748b;margin-top:2px">
                         プロンプトも古いテキスト由来です（①を overwrite で作り直すと更新されます）
@@ -2587,16 +2591,27 @@
                       <div style="font-size:10px;color:#4b5563;margin-top:2px" x-text="p.section"></div>
                       <div style="font-size:11px;color:#cbd5e1;margin-top:4px;line-height:1.5" x-text="p.text"></div>
                       <div style="margin-top:6px;display:flex;gap:4px;flex-wrap:wrap;align-items:center">
-                        <template x-for="cid in p.characters" :key="cid">
-                          <span style="font-size:10px;background:#1e1040;color:#c4b5fd;border-radius:99px;padding:2px 8px;cursor:pointer"
-                                :title="'クリックで外す: ' + cid"
-                                @click="arollRemoveChar(p, cid)"
-                                x-text="(charas.find(c => c.char_id === cid)?.name || cid) + ' ×'"></span>
+                        <!-- 先頭＝話者。バックエンドが必ず先頭に固定するので外させない
+                             （喋っている人物が写らないコマは静止画マンガでは成立しない） -->
+                        <template x-for="(cid, ci) in p.characters" :key="cid">
+                          <span style="font-size:10px;border-radius:99px;padding:2px 8px"
+                                :style="ci === 0
+                                  ? 'background:#1e1040;color:#c4b5fd;cursor:default'
+                                  : 'background:#1e1040;color:#c4b5fd;cursor:pointer'"
+                                :title="ci === 0
+                                  ? '話者なので外せません（' + cid + '）'
+                                  : 'クリックで外す: ' + cid"
+                                @click="ci === 0 || arollRemoveChar(p, cid)"
+                                x-text="(charas.find(c => c.char_id === cid)?.name || cid) + (ci === 0 ? ' 🔒' : ' ×')"></span>
                         </template>
+                        <span x-show="!p.characters.length" style="font-size:10px;color:#93c5fd"
+                              title="話者のキャラが『画像を使わない』設定です。キャラ画像は生成せず、背景だけのコマになります">
+                          🎙 ナレーション（背景のみ）
+                        </span>
                         <select x-show="p.characters.length < 2" style="font-size:10px;padding:2px;width:auto"
                                 @change="arollAddChar(p, $event.target.value); $event.target.value = ''">
                           <option value="">＋キャラ</option>
-                          <template x-for="c in charas.filter(c => !p.characters.includes(c.char_id))" :key="c.char_id">
+                          <template x-for="c in charas.filter(c => !p.characters.includes(c.char_id) && arollCanShowChar(c))" :key="c.char_id">
                             <option :value="c.char_id" x-text="c.name"></option>
                           </template>
                         </select>
@@ -6110,13 +6125,27 @@ function app() {
     async approveScript() {
       if (!this.currentProject) return;
       const ep = this.activeEpisodeNumber || 1;
-      if (!confirm(`第${ep}話を承認してscript.jsonとして確定しますか？`)) return;
+      if (!confirm(`第${ep}話を承認してscript.jsonとして確定しますか？\n\n続けてAロールのコマごとのプロンプトも用意します（無料・画像生成なし）。`)) return;
       this.approving = true;
       try {
-        const r = await fetch(`${SAPI}/projects/${this.currentProject.id}/approve?episode_number=${ep}`, { method: 'POST' });
+        // 承認 → Aロールのプロンプト生成 を director が繋ぐ（Phase 1）。
+        // 既存プロンプトは上書きしない（overwrite=false 固定）ので、承認を何度押しても安全。
+        const r = await fetch(
+          `/projects/${this.currentProject.id}/episodes/${ep}/approve-and-prepare`,
+          { method: 'POST' });
         const data = await r.json();
         if (!r.ok) { alert('エラー: ' + (data.detail || JSON.stringify(data))); return; }
-        alert(`第${ep}話 承認完了！\n${data.script_path}`);
+        let msg = `第${ep}話 承認完了！\n${data.script_path}`;
+        if (data.aroll) {
+          msg += `\n\n🖼️ Aロール: ${data.aroll.panel_count}コマ分のプロンプトを用意しました`;
+          const w = data.aroll.warnings || [];
+          if (w.length) msg += `\n⚠️ ${w.length}件の警告（Aロールタブで確認してください）`;
+        } else if (data.aroll_error) {
+          // 承認そのものは成功している。ここを混ぜて「失敗した」と読ませない
+          msg += `\n\n⚠️ Aロールのプロンプト生成は失敗しました（承認は完了しています）\n`
+               + `${data.aroll_error}\n🖼️Aロールタブから手動で実行できます。`;
+        }
+        alert(msg);
         await this.loadEpisodes();
         await this.loadProjects();
         await this.loadLocales();
@@ -8274,6 +8303,13 @@ function app() {
       if (!c.has_appearance) return '外見(appearance_prompt)が未設定';
       if (!(c.references || []).length) return 'リファレンス画像が無い（生成のたびに別人になります）';
       return '';
+    },
+    // Aロールで「映すキャラ」として選べるか。
+    // ⚠️ charImageBlockReason とは基準が違う（参照画像の有無を見ない）。Aロールは
+    // 「参照が無くても生成を止めない」で決着済みなので、ここで参照必須にすると
+    // バックエンド（aroll_manager.get_cast_characters）と食い違う。見るのは uses_images だけ。
+    arollCanShowChar(c) {
+      return !!c && c.uses_images !== false;
     },
     // 生成パネルを出してよいか。'*'（全キャラ）は積む先が決まらないため不可。
     get charLibCanGenerate() {
