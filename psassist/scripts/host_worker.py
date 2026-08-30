@@ -31,6 +31,7 @@ import io
 import json
 import os
 import re
+import subprocess
 import sys
 import time
 from datetime import datetime, timezone
@@ -49,7 +50,13 @@ load_root_env()
 sys.path.insert(0, os.path.join(PSASSIST_ROOT, "host-bridge"))
 import export_png as export_png_mod  # noqa: E402
 
-CAPABILITIES = ["export_png"]  # Phase 0 はこれだけ。残りは Phase 5
+# 組版ロジック本体（build_plan.py と同じ入れ方）。plan_builder は build_plan ジョブで使う
+sys.path.insert(0, os.path.join(PSASSIST_ROOT, "psassist-agent"))
+
+# Phase 5 で組版の全工程を載せた。director はこの文字列だけを知る（§2-6）。
+# ★Photoshop を占有するものと、しないものを分けて持つ。UI が警告を出し分けるため。
+CAPABILITIES = ["build_plan", "cutout", "build_panel", "qa_check", "export_png"]
+NEEDS_PHOTOSHOP = {"cutout", "build_panel", "export_png"}
 JOB_KINDS = set(CAPABILITIES)
 DEFAULT_INTERVAL = 1.5
 
@@ -166,6 +173,113 @@ def pick_oldest_job(episodes: list[dict]) -> tuple[str, str] | None:
     return (best[0], best[1]) if best else None
 
 
+def _run_script(argv: list[str], env_extra: dict, log: list[str], label: str) -> int:
+    """psassist の CLI スクリプトを子プロセスで回す。
+
+    ⚠️ **Photoshop を触るスクリプトは import して呼ばない。** モジュール先頭で
+    `PSA_EPISODE_DIR` を読む作りで、しかも win32com の状態を持つ。1プロセスで
+    複数エピソードを回す worker から import すると env の付け替えが効かない。
+    子プロセスなら env をそのジョブ用に閉じ込められる。
+    """
+    env = dict(os.environ)
+    env.update(env_extra)
+    env["PYTHONIOENCODING"] = "utf-8"
+    proc = subprocess.Popen(argv, cwd=PSASSIST_ROOT, env=env, stdout=subprocess.PIPE,
+                            stderr=subprocess.STDOUT, text=True, encoding="utf-8",
+                            errors="replace", bufsize=1)
+    for line in proc.stdout:
+        line = line.rstrip()
+        if line:
+            print("    | %s" % line)
+            log.append(line)
+    proc.wait()
+    if proc.returncode != 0:
+        raise RuntimeError("%s が失敗しました（exit %d）" % (label, proc.returncode))
+    return proc.returncode
+
+
+def run_build_plan_job(ep_dir: str, job: dict, log: list[str]) -> dict:
+    """工程1: panel_plan.json を作る（Photoshop 不要）。
+
+    ★`Paths.from_env()` を使わない。worker は複数エピソードを1プロセスで回すので、
+      env 依存にするとどの話数のプランを作っているか分からなくなる。明示的に組む。
+    """
+    from app.core import plan_builder  # noqa: PLC0415  （子プロセスにしないので遅延import）
+
+    # ep_dir = <shared>/projects/<pid>/episodes/epNN → 4段上が <shared>
+    shared = os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(ep_dir))))
+    paths = plan_builder.Paths(
+        episode_dir=ep_dir,
+        backgrounds_dir=(os.environ.get("PSA_BACKGROUNDS_DIR") or "").strip()
+                        or os.path.join(shared, "backgrounds"),
+        bubbles_psd=(os.environ.get("PSA_BUBBLES_PSD") or "").strip()
+                    or plan_builder.DEFAULT_BUBBLES_PSD,
+        out_dir=os.path.join(ep_dir, "psassist"),
+    )
+    plan = plan_builder.build(paths)
+    path = plan_builder.write(plan, paths.out_dir)
+    panels = plan.get("panels", [])
+    need = [p for p in panels if p.get("needs_attention")]
+    log.append("パネル %d 件 → %s" % (len(panels), path))
+    if need:
+        log.append("人の判断が要る行: %d 件" % len(need))
+    return {"panels": len(panels), "needs_attention": len(need), "plan": path}
+
+
+def run_qa_check_job(ep_dir: str, job: dict, log: list[str]) -> dict:
+    """工程5: 合成結果の検査（Photoshop 不要・PSDの合成プレビューを読む）。
+
+    lines を指定すればその行だけ。省略で全件。
+    """
+    ctx = qa_check.build_ctx(ep_dir)
+    if ctx is None:
+        raise RuntimeError("検査の準備ができません（psd_final が見つかりません）")
+    lines = job.get("lines") or []
+    files = None
+    if lines:
+        files = ["panel_%s.psd" % lid for lid in lines]
+        files = [f for f in files if os.path.exists(os.path.join(ctx["psd_dir"], f))]
+        if not files:
+            raise RuntimeError("対象のPSDが1枚もありません")
+    rep = qa_check.run_pass(ctx, files, verbose=False)
+    summary = (rep or {}).get("summary", {})
+    # ⚠️ `run_pass` は**マージ後のレポート全体**を返す。`panels` の数は検査した枚数では
+    #    ないので、そのまま「検査N件」と書くと1行だけ指定した時に196と出て嘘になる。
+    checked = len(files) if files else len((rep or {}).get("panels", []))
+    log.append("検査 %d 枚（レポート全体 %d 行）: %s"
+               % (checked, len((rep or {}).get("panels", [])), summary))
+    return {"checked": checked, "total": len((rep or {}).get("panels", [])),
+            "summary": summary}
+
+
+def run_cutout_job(ep_dir: str, job: dict, log: list[str]) -> dict:
+    """工程1(素材): 背景抜き。⚠️ Photoshop を占有する。"""
+    _run_script([sys.executable, os.path.join("scripts", "batch_cutout.py")],
+                {"PSA_EPISODE_DIR": ep_dir}, log, "batch_cutout")
+    cut = os.path.join(ep_dir, "psassist", "cutout")
+    n = len([f for f in os.listdir(cut)]) if os.path.isdir(cut) else 0
+    return {"cutouts": n}
+
+
+def run_build_panel_job(ep_dir: str, job: dict, log: list[str]) -> dict:
+    """工程2-4: バブル配置・セリフ流し込み・背景合成。⚠️ Photoshop を占有する。"""
+    plan = os.path.join(ep_dir, "psassist", "panel_plan.json")
+    if not os.path.exists(plan):
+        raise RuntimeError("panel_plan.json がありません（先に build_plan を実行してください）")
+    argv = [sys.executable, os.path.join("host-bridge", "bridge.py"), "--plan", plan]
+    lines = job.get("lines") or []
+    if lines:
+        argv += ["--lines", ",".join(lines)]
+    else:
+        argv += ["--all"]
+        if (job.get("args") or {}).get("resume"):
+            argv.append("--resume")
+    _run_script(argv, {"PSA_EPISODE_DIR": ep_dir}, log, "bridge")
+    psd = os.path.join(ep_dir, "psassist", "psd")
+    n = len([f for f in os.listdir(psd) if f.endswith(".psd")]) if os.path.isdir(psd) else 0
+    return {"psd": n, "lines": len(lines) or None}
+
+
 def run_export_png_job(ep_dir: str, job: dict, log: list[str]) -> dict:
     lines = job.get("lines") or []
     if not lines:
@@ -244,6 +358,14 @@ def process_job(ep_dir: str, job_path: str) -> None:
             raise ValueError("未対応のkind: %s" % kind)
         if kind == "export_png":
             result = run_export_png_job(ep_dir, job, log)
+        elif kind == "build_plan":
+            result = run_build_plan_job(ep_dir, job, log)
+        elif kind == "qa_check":
+            result = run_qa_check_job(ep_dir, job, log)
+        elif kind == "cutout":
+            result = run_cutout_job(ep_dir, job, log)
+        elif kind == "build_panel":
+            result = run_build_panel_job(ep_dir, job, log)
         status = "done"
     except Exception as e:
         log.append("エラー: %s" % e)

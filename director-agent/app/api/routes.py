@@ -89,7 +89,12 @@ async def get_psassist_file(project_id: str, episode_number: int, rel: str):
 # ジョブを書くだけ、state/ を読むだけ。ホストの生死は shared/_psassist/worker.json
 # のハートビートで判定する（プロジェクト非依存のグローバル1本）。
 
-_PSASSIST_JOB_KINDS = {"export_png"}  # Phase 0 はこれだけ。残りは Phase 5
+# host_worker.py が実行できる工程。director はこの文字列だけを知り、Photoshop 固有の
+# 詳細（COM・JSX・PSD）には触れない（AROLL_TAB_REDESIGN_PLAN.md §2-6）。
+_PSASSIST_JOB_KINDS = {"build_plan", "cutout", "build_panel", "qa_check", "export_png"}
+# lines 省略で「全件」を意味する工程。export_png だけは対象行の明示を必須にする
+#（--resume が mtime を見ないため、全件指定だと直した行が飛ばされる。Phase 0-c）。
+_PSASSIST_KINDS_ALLOW_ALL = {"build_plan", "cutout", "build_panel", "qa_check"}
 
 
 @router.post("/projects/{project_id}/episodes/{episode_number}/psassist/jobs")
@@ -99,8 +104,11 @@ async def create_psassist_job(project_id: str, episode_number: int, request: Req
     kind = body.get("kind")
     if kind not in _PSASSIST_JOB_KINDS:
         raise HTTPException(status_code=400, detail=f"unsupported kind: {kind}")
-    lines = body.get("lines") or []
-    if not isinstance(lines, list) or not lines:
+    lines = body.get("lines")
+    if lines is None and kind in _PSASSIST_KINDS_ALLOW_ALL:
+        lines = []          # 省略＝全件。工程1〜5は話数まるごと回すのが通常
+    elif not isinstance(lines, list) or not lines:
+        # ⚠️ 空リストは「対象ゼロ」。export_png は対象行の明示を必須にする
         raise HTTPException(status_code=400, detail="lines is required (empty = no target)")
     job = project_manager.enqueue_psassist_job(
         project_id, episode_number, kind, lines, body.get("args") or {})

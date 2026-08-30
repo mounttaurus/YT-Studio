@@ -2476,6 +2476,36 @@
                     <div style="font-size:11px;color:#64748b;line-height:1.7">ホスト常駐（<code>host_worker.py</code>）が動いている間だけ操作できます。<b>Photoshop を占有する処理があるので、作業中は流さないこと。</b></div>
                 <div class="card">
                   <h2>🖥️ ホスト工程</h2>
+
+                  <!-- 組版の工程1〜4（Phase 5）。ここが §1-2「中心工程がUIに無い」の答え。
+                       director は kind 文字列を投げるだけで、Photoshop の詳細は知らない。 -->
+                  <div x-show="psassistAlive" style="margin-bottom:12px">
+                    <div style="display:flex;gap:6px;flex-wrap:wrap;align-items:center">
+                      <template x-for="st in psassistSteps" :key="st.kind">
+                        <button class="btn btn-sm"
+                                :disabled="psassistJobBusy || psassistLatestJob?.status === 'running'"
+                                :title="st.hint + (st.ps ? ' ／ ⚠️ Photoshop を占有します' : '')"
+                                @click="psassistRunStep(st.kind, st.label, st.ps)">
+                          <span x-text="st.label"></span>
+                          <span x-show="st.ps" style="color:#fbbf24" title="Photoshop を占有します">⚠️</span>
+                        </button>
+                      </template>
+                    </div>
+                    <div style="font-size:10px;color:#64748b;margin-top:6px;line-height:1.7">
+                      ①→②→③→④ の順に実行します（③はプランが要ります）。
+                      <b style="color:#fbbf24">⚠️ が付いた工程は Photoshop を占有します</b> ── 作業中は流さないでください。
+                      1件ずつ順に処理され、走っている間は他のジョブを受け付けません。
+                    </div>
+                    <div x-show="psassistLatestJob" style="margin-top:8px;font-size:11px"
+                         :style="psassistLatestJob?.status === 'failed' ? 'color:#f87171' : 'color:#94a3b8'">
+                      <span x-text="`直近のジョブ: ${psassistLatestJob?.job_id ?? ''} — ${psassistLatestJob?.status ?? ''}`"></span>
+                      <div class="log-area" x-show="(psassistLatestJob?.log || []).length" style="margin-top:4px;max-height:140px">
+                        <template x-for="(l, i) in (psassistLatestJob.log || []).slice(-40)" :key="i">
+                          <div class="log-line" x-text="l"></div>
+                        </template>
+                      </div>
+                    </div>
+                  </div>
                   <!-- 🖥️ ホスト工程（host_worker.py）の状態 -->
                   <div style="margin-top:8px">
                     <template x-if="psassistAlive">
@@ -8257,6 +8287,41 @@ function app() {
       } catch { this.psassistJobs = []; }
     },
     // 押した瞬間に1件投げてポーリング開始。lineIds省略時はEXPORT_STALE/MISSING全部。
+    // 工程の定義。director は kind 文字列だけを知る（Photoshop固有の詳細は持たない §2-6）
+    get psassistSteps() {
+      return [
+        { kind: 'build_plan',  label: '① プランを作る',   ps: false,
+          hint: 'aroll.json と背景アーカイブから panel_plan.json を組み立てます（Photoshop不要・数秒）' },
+        { kind: 'cutout',      label: '② 背景を抜く',     ps: true,
+          hint: '生成した絵からキャラを切り抜きます。在庫から選んだ行は既に抜けているので対象外' },
+        { kind: 'build_panel', label: '③ コマを組む',     ps: true,
+          hint: '吹き出しの配置・セリフの流し込み・背景合成。プランが要ります' },
+        { kind: 'qa_check',    label: '④ 検査する',       ps: false,
+          hint: '合成結果を検査してサムネと指摘を作ります（Photoshop不要・196枚で約1分）' },
+      ];
+    },
+    // 汎用のジョブ投入。lines を省略すると工程1〜4は全件を意味する
+    async psassistRunStep(kind, label, needsPhotoshop) {
+      if (this.psassistJobBusy || !this.psassistAlive) return;
+      if (this.psassistLatestJob?.status === 'running') { alert('別のジョブが実行中です'); return; }
+      let msg = `${label} を実行します。`;
+      if (needsPhotoshop) {
+        // ⚠️ Photoshop を占有する工程は必ず確認する（作業中に流すと壊れる）
+        msg += `\n\n⚠️ この工程は Photoshop を占有します。`
+             + `\nPhotoshop で作業中なら、先に手を止めてください。`;
+      }
+      if (!confirm(msg + `\n\n続行しますか？`)) return;
+      this.psassistJobBusy = true;
+      try {
+        const r = await fetch(`${this.qaBase}/jobs`, {
+          method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ kind }),   // lines 省略＝全件
+        });
+        if (!r.ok) { const d = await r.json().catch(() => ({})); alert('ジョブ投入エラー: ' + (d.detail || r.status)); return; }
+        await this.loadPsassistJobs();
+        this.psassistPollJob();
+      } finally { this.psassistJobBusy = false; }
+    },
     async psassistRunExportJob(lineIds) {
       const lines = lineIds && lineIds.length ? lineIds : this.psassistExportTargets;
       if (!lines.length || this.psassistJobBusy) return;
@@ -8913,9 +8978,8 @@ function app() {
       if (!ids.length) return;
       // §13-4「画像の承認は一括だけ確認を挟む」。arollApproveImages は明示idsだと
       // 確認しない（1行ずつ押す用途のため正しい）ので、一括のこちら側で挟む。
-      if (!confirm(`選択した ${ids.length}行 を承認し、キャラ所有ライブラリへ取り込みます。
-`
-          + '無料です（画像は生成しません）。続行しますか？')) return;
+      if (!confirm(`選択した ${ids.length}行 を承認し、キャラ所有ライブラリへ取り込みます。`
+          + `\n無料です（画像は生成しません）。続行しますか？`)) return;
       this.arollBulkBusy = true;
       try {
         await this.arollApproveImages(ids);
@@ -8994,18 +9058,22 @@ function app() {
       }
     },
     // プロンプトが全行そろい、背景も割り当て済みで、台本ともズレていない
+    // 生きている行（台本から消えた orphan は対象外＝直しようがない）
+    get arollLivePanels() { return this.arollPanels.filter(p => !p.orphan); },
     get arollPrepDone() {
       if (!this.arollManifest) return false;
-      const ps = this.arollPanels;
+      const ps = this.arollLivePanels;
       if (!ps.length) return false;
+      // ⚠️ 背景は**全行に要る**。ナレーション行（キャラ無し）は背景だけが絵なので、
+      //    むしろ背景が必須。ここを「キャラが居る行だけ」にすると逆になる。
       return ps.every(p => (p.prompt || '').trim())
-        && ps.every(p => p.background_id || !(p.characters || []).length)
+        && ps.every(p => p.background_id)
         && !this.arollDriftCount;
     },
     // 生成が要る行が残っていない（在庫割当・生成の両方が終わっている）
     get arollDrawDone() {
       if (!this.arollManifest) return false;
-      const ps = this.arollPanels.filter(p => (p.characters || []).length);
+      const ps = this.arollLivePanels.filter(p => (p.characters || []).length);
       return ps.length > 0 && ps.every(p => p.status === 'done' || p.cutout_slot_id);
     },
     // 見出しの右端に出す一行サマリ。畳んだままでも進捗が分かるようにする
@@ -9014,8 +9082,8 @@ function app() {
       switch (key) {
         case 'prep': {
           if (!this.arollManifest) return 'まだ何もありません';
-          const noPrompt = this.arollPanels.filter(p => !(p.prompt || '').trim()).length;
-          const noBg = this.arollPanels.filter(p => !p.background_id && (p.characters || []).length).length;
+          const noPrompt = this.arollLivePanels.filter(p => !(p.prompt || '').trim()).length;
+          const noBg = this.arollLivePanels.filter(p => !p.background_id).length;
           const bits = [];
           if (noPrompt) bits.push(`プロンプト未 ${noPrompt}`);
           if (noBg) bits.push(`背景未 ${noBg}`);
