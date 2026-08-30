@@ -426,7 +426,8 @@ def update_line(
     return None
 
 
-def auto_assign_backgrounds(project_id: str, episode: int, only_missing: bool = True) -> dict:
+def auto_assign_backgrounds(project_id: str, episode: int, only_missing: bool = True,
+                            line_ids: list[str] | None = None) -> dict:
     """全行に背景を自動割当する（無料・画像は一切生成しない。既存backgroundsアーカイブから選ぶだけ）。
 
     行の(shot→framing, emotion→mood)から background_manager.suggest_background() で1件選び、
@@ -437,6 +438,11 @@ def auto_assign_backgrounds(project_id: str, episode: int, only_missing: bool = 
     only_missing=True（既定）: 既にbackground_idを持つ行はスキップ（手動で選んだ行を壊さない）。
     False: 全行を割当し直す（既存の手動選択も上書きする）。
 
+    line_ids: 指定した行だけを対象にする（コマ一覧の一括操作用）。
+    ⚠️ **空リストは「対象ゼロ」**（省略＝None が「全行」）。falsy 判定にすると、
+    1行も選んでいないのに全行の背景を割り当て直すことになる
+    （``CHARACTER_CUTOUT_PLAN.md`` §13-4 と同じ規則）。
+
     直近 AROLL_BG_RECENT_WINDOW 行で使った背景は避ける（順序どおりに1行ずつ処理するため、
     同じ背景が連続して出るのを防げる）。times_usedによる最小消費優先ローテーションと合わせて
     「反復感を機械側が担保する」設計（キャラ画像ライブラリのfind_currentと同じ考え方）。
@@ -445,10 +451,18 @@ def auto_assign_backgrounds(project_id: str, episode: int, only_missing: bool = 
     if manifest is None:
         raise ValueError("aroll.json not found (run /aroll/prompts first)")
 
+    wanted = None if line_ids is None else set(line_ids)
+
     recent: list[str] = []
     assigned = unmatched = skipped = 0
     for p in manifest["panels"]:
         if p.get("orphan"):
+            continue
+        # 対象外の行も recent には積む（連続を避ける判定は行の並び順で効くため）
+        if wanted is not None and p.get("line_id") not in wanted:
+            if p.get("background_id"):
+                recent.append(p["background_id"])
+                recent[:] = recent[-AROLL_BG_RECENT_WINDOW:]
             continue
         if only_missing and p.get("background_id"):
             recent.append(p["background_id"])

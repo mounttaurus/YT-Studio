@@ -1899,6 +1899,8 @@ class ArollSetLibraryImageRequest(BaseModel):
 
 class ArollAutoAssignBackgroundsRequest(BaseModel):
     only_missing: bool = True   # False で既存の手動選択も含め全行を割当し直す
+    # 指定行だけを対象にする（コマ一覧の一括操作）。⚠️ 空リストは「対象ゼロ」・省略で全行
+    line_ids: Optional[list[str]] = None
 
 
 class ArollSyncAcceptRequest(BaseModel):
@@ -2093,6 +2095,7 @@ async def aroll_auto_assign_backgrounds(project_id: str, episode_number: int,
     try:
         return aroll_manager.auto_assign_backgrounds(
             project_id, episode_number, only_missing=req.only_missing,
+            line_ids=req.line_ids,
         )
     except ValueError as e:
         raise HTTPException(status_code=404, detail=str(e))

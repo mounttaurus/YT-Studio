@@ -20,6 +20,21 @@
     .main { overflow-y: auto; padding: 20px; display: flex; flex-direction: column; gap: 16px; }
     .card { background: #1a1d2e; border: 1px solid #2d3748; border-radius: 8px; padding: 16px; }
     .card h2 { font-size: 13px; font-weight: 600; color: #94a3b8; text-transform: uppercase; letter-spacing: 0.05em; margin-bottom: 12px; }
+    /* Aロールタブの工程セクション見出し（畳める）。工程順に並べ、済んだ工程は畳む */
+    .aroll-sec-head {
+      width: 100%; display: flex; align-items: center; gap: 10px; cursor: pointer;
+      background: #161a29; border: 1px solid #2d3748; border-radius: 8px;
+      padding: 10px 14px; color: #e2e8f0; font-size: 13px; font-weight: 600;
+      text-align: left; font-family: inherit;
+    }
+    .aroll-sec-head:hover { border-color: #4c1d95; }
+    .aroll-sec-head .num {
+      display: inline-flex; align-items: center; justify-content: center;
+      width: 20px; height: 20px; border-radius: 50%; background: #4c1d95;
+      color: #ede9fe; font-size: 11px; flex: 0 0 auto;
+    }
+    .aroll-sec-head .sum { margin-left: auto; font-weight: 400; font-size: 11px; color: #64748b; }
+    .aroll-sec-head[data-done="1"] .num { background: #14532d; color: #bbf7d0; }
     select, input[type="text"], input[type="number"], textarea {
       width: 100%; background: #0f1117; border: 1px solid #374151; border-radius: 6px;
       color: #e2e8f0; padding: 8px 10px; font-size: 13px; outline: none;
@@ -2175,589 +2190,643 @@
         <template x-if="currentProject">
           <div style="display:flex;flex-direction:column;gap:16px">
 
-            <!-- ① プロンプト生成 -->
-            <div class="card">
-              <h2>🖼️ Aロール（マンガ形式）
-                <span style="font-weight:400;text-transform:none;color:#4b5563;font-size:11px"
-                      x-text="`第${activeEpisodeNumber}話 — セリフ1行＝1コマ。吹き出しは編集時に手作業で載せます`"></span>
-              </h2>
-              <p class="info-note" style="margin:8px 0 12px">
-                承認済み台本のセリフをLLM（Gemini無料枠→OpenRouter無料）が解釈してコマごとの演出プロンプトを作り、
-                NanoBananaでキャラ画像を生成します。スタイル・キャラ外見は生成時に自動合成されるため、
-                プロンプト欄には<b>演出（表情・ポーズ・構図）だけ</b>が入ります。
-                <br>
-                <b>プロンプトは台本を承認した時点で自動的に用意されます。</b>
-                ここは<b>作り直したい時だけ</b>使ってください（スタイルや追加指示を変えた場合など）。
-                <b>既にあるプロンプトを上書きします</b>（「上書きする」がOFFなら手編集分は残ります）。
-              </p>
-              <div style="display:flex;gap:14px;align-items:flex-end;flex-wrap:wrap">
-                <div>
-                  <label>スタイル</label>
-                  <select x-model="arollStyle">
-                    <template x-for="s in freeStyles" :key="s"><option :value="s" x-text="s"></option></template>
-                  </select>
-                </div>
-                <div>
-                  <label>アスペクト比</label>
-                  <select x-model="arollAspect">
-                    <option value="16:9">16:9（横・既定）</option>
-                    <option value="1:1">1:1（正方形）</option>
-                    <option value="9:16">9:16（縦）</option>
-                    <option value="4:3">4:3</option>
-                  </select>
-                </div>
-                <div style="flex:1;min-width:200px">
-                  <label>追加指示（任意・プロンプト生成LLMへ）</label>
-                  <input type="text" x-model="arollExtraPrompt" placeholder="例: 全体的にコミカルに、背景は教室で統一">
-                </div>
-                <label style="display:flex;align-items:center;gap:6px;cursor:pointer;font-size:12px;color:#94a3b8">
-                  <input type="checkbox" x-model="arollOverwrite" style="width:13px;height:13px;accent-color:#7c3aed">
-                  既存プロンプトを作り直す（手編集した行は保持）
-                </label>
-                <button class="btn btn-primary" @click="arollGeneratePrompts()" :disabled="arollBusy || arollRunning">
-                  <template x-if="arollBusy === 'prompts'"><span class="spinner"></span></template>
-                  <span x-text="arollBusy === 'prompts' ? 'LLMがプロンプト生成中...' : '✍ ① プロンプトを作り直す'"></span>
+            <!-- ═══ 1. 下ごしらえ ═══ -->
+            <template x-if="currentProject">
+              <div style="display:flex;flex-direction:column;gap:16px">
+                <button class="aroll-sec-head" :data-done="arollPrepDone ? 1 : 0" @click="arollSecToggle('prep')">
+                  <span class="num" x-text="arollPrepDone ? '✓' : '1'"></span>
+                  <span x-text="arollSecIsOpen('prep') ? '▼ 下ごしらえ' : '▶ 下ごしらえ'"></span>
+                  <span class="sum" x-text="arollSecSummary('prep')"></span>
                 </button>
-              </div>
-              <div x-show="arollWarnings.length" style="margin-top:10px">
-                <template x-for="(w, i) in arollWarnings" :key="i">
-                  <div class="log-line warn" style="font-size:11px" x-text="'⚠ ' + w"></div>
-                </template>
-              </div>
-              <div x-show="arollMsg" style="margin-top:8px;font-size:12px" :style="arollMsg.startsWith('✔') ? 'color:#4ade80' : 'color:#f87171'" x-text="arollMsg"></div>
-            </div>
-
-            <!-- ② 画像バッチ生成 -->
-            <div class="card" x-show="arollManifest">
-              <h2>② 画像一括生成
-                <span style="font-weight:400;text-transform:none;color:#4b5563;font-size:11px"
-                      x-text="`生成済み ${arollCounts.done} / 全 ${arollCounts.total} コマ（失敗 ${arollCounts.failed}）`"></span>
-              </h2>
-              <div style="display:flex;gap:14px;align-items:flex-end;flex-wrap:wrap;margin-top:8px">
-                <div>
-                  <label>対象</label>
-                  <select x-model="arollTarget">
-                    <option value="missing">未生成のみ（失敗含む・レジューム）</option>
-                    <option value="failed">失敗した行のみ</option>
-                    <option value="all">全行（生成済みも作り直す）</option>
-                  </select>
-                </div>
-                <label style="display:flex;align-items:center;gap:6px;cursor:pointer;font-size:12px;color:#94a3b8"
-                       title="OpenRouter経由のNanoBananaはFree表示でも実際は課金されます。OFFなら失敗行は失敗マークで続行し、後からまとめて再試行できます">
-                  <input type="checkbox" x-model="arollPaidFallback" style="width:13px;height:13px;accent-color:#f59e0b"
-                         @change="arollPaidFallback && arollLoadCredits()">
-                  Gemini失敗時にOpenRouterへ課金退避する
-                </label>
-                <span x-show="arollPaidFallback" style="font-size:11px;color:#fbbf24"
-                      x-text="arollOrCredits !== null ? `OpenRouter残高: $${arollOrCredits.toFixed(2)}` : '残高取得中...'"></span>
-                <button class="btn btn-primary" @click="arollStartBatch()" :disabled="arollRunning || arollBusy || arollBatchTargetCount === 0">
-                  <template x-if="arollRunning"><span class="spinner"></span></template>
-                  <span x-text="arollRunning ? '生成中...' : `🎬 ② 画像一括生成（${arollBatchTargetCount}枚 ≈ $${(arollBatchTargetCount * 0.04).toFixed(2)}）`"></span>
-                </button>
-                <button class="btn btn-danger" @click="arollStop()" :disabled="!arollRunning">⏸ 中断</button>
-              </div>
-
-              <!-- 在庫で賄える分の試算（生成の前に、無料で埋まる行を先に確定させる） -->
-              <div style="margin-top:12px;border-top:1px solid #2d3748;padding-top:10px">
-                <div style="display:flex;gap:12px;align-items:center;flex-wrap:wrap">
-                  <span style="font-size:12px;color:#a5f3fc">✂️ 切り抜き在庫からの割当</span>
-                  <button class="btn btn-sm" @click="loadCutoutPlan()" :disabled="cutoutPlanBusy">🔄 試算</button>
-                  <template x-if="cutoutPlan">
-                    <span style="font-size:12px;color:#94a3b8"
-                          x-text="`在庫で ${cutoutPlan.from_stock} 行（無料）／ 新規生成が要る ${cutoutPlan.need_generation} 行 ≈ $${(cutoutPlan.need_generation * 0.04).toFixed(2)}`"></span>
-                  </template>
-                  <template x-if="cutoutPlan && cutoutPlan.from_stock">
-                    <button class="btn btn-primary btn-sm" :disabled="cutoutPlanBusy || arollRunning"
-                            @click="applyCutoutPlan()"
-                            x-text="`✂️ 在庫 ${cutoutPlan.from_stock} 行を割り当てる（無料）`"></button>
-                  </template>
-                </div>
-                <div x-show="cutoutPlan" style="font-size:11px;color:#64748b;margin-top:6px;line-height:1.7">
-                  在庫は<b>直近の行と視覚的に離れているもの</b>から順に、使用回数の少ないものを選びます。
-                  賄えない行は<b>無理に在庫から埋めません</b>（ワンパターンの発生源になるため）。
-                  <span style="color:#4b5563">生成した絵はまだ背景付きなので、素材にするには切り抜き工程が要ります。</span>
-                </div>
-                <div x-show="cutoutPlanReasons.length" style="font-size:11px;color:#64748b;margin-top:6px">
-                  <template x-for="[why, n] in cutoutPlanReasons" :key="why">
-                    <div><span style="color:#fbbf24" x-text="n + '行'"></span> <span x-text="why"></span></div>
-                  </template>
-                </div>
-                <div x-show="cutoutPlanMsg" style="font-size:11px;color:#a5b4fc;margin-top:6px" x-text="cutoutPlanMsg"></div>
-              </div>
-              <div class="progress-bar" x-show="arollRunning || (arollJob.total > 0)">
-                <div class="progress-fill" :style="`width:${arollJob.total ? Math.round(((arollJob.done + arollJob.failed) / arollJob.total) * 100) : 0}%`"></div>
-              </div>
-              <div x-show="arollJob.total > 0" style="font-size:11px;color:#64748b"
-                   x-text="`${arollJob.done + arollJob.failed} / ${arollJob.total}（成功 ${arollJob.done}・失敗 ${arollJob.failed}）` + (arollJob.current_line ? ` — ${arollJob.current_line} を生成中` : '')"></div>
-              <div class="log-area" x-show="(arollJob.log || []).length">
-                <template x-for="(l, i) in arollJob.log || []" :key="i">
-                  <div class="log-line" :class="l.startsWith('✔') ? 'ok' : (l.startsWith('✘') ? 'err' : 'info')" x-text="l"></div>
-                </template>
-              </div>
-            </div>
-
-            <!-- 画像の承認（②で作った絵のうち、採用と決めたものだけを在庫へ積む） -->
-            <div class="card" x-show="arollManifest"
-                 :style="arollApprovalCounts.pending ? 'border-color:#a16207' : ''">
-              <h2>✓ 画像の承認
-                <span style="font-weight:400;text-transform:none;color:#4b5563;font-size:11px"
-                      x-text="`承認済み ${arollApprovalCounts.approved} / 未承認 ${arollApprovalCounts.pending}（生成済み ${arollApprovalCounts.done}コマ）`"></span>
-              </h2>
-              <div style="font-size:11px;color:#94a3b8;margin-top:6px;line-height:1.7">
-                目視して<b>採用と決めた絵だけ</b>をキャラ所有ライブラリへ積みます（<b>無料</b>・画像生成なし）。
-                生成した瞬間に積まないのは、<b>作り直して捨てた絵まで在庫に入れないため</b>です。
-                積んだ絵は次の話数から在庫として自動で配られます。
-              </div>
-              <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-top:10px">
-                <button class="btn btn-primary"
-                        :disabled="arollApproveBusy || arollRunning || !arollApprovalCounts.pending"
-                        @click="arollApproveImages(null)">
-                  <template x-if="arollApproveBusy"><span class="spinner"></span></template>
-                  <span x-text="arollApproveBusy ? '承認中...' : `✓ 未承認 ${arollApprovalCounts.pending} 件を承認して在庫へ`"></span>
-                </button>
-                <span x-show="!arollApprovalCounts.pending && arollApprovalCounts.done"
-                      style="font-size:11px;color:#4ade80">✔ 生成済みの絵はすべて承認済みです</span>
-              </div>
-              <div x-show="arollApproveResult" style="font-size:11px;color:#94a3b8;margin-top:8px;line-height:1.7">
-                <div x-text="`✔ ${arollApproveResult?.approved ?? 0}件を承認 — うち ${arollApproveResult?.registered ?? 0}件を在庫へ取り込みました`"></div>
-                <div x-show="arollApproveSkipReasons.length" style="margin-top:4px">
-                  <div style="color:#64748b">在庫に積まなかった内訳（その行の絵はそのまま使われます・課金ゼロ）:</div>
-                  <template x-for="[why, n] in arollApproveSkipReasons" :key="why">
-                    <div><span style="color:#fbbf24" x-text="n + '件'"></span> <span x-text="why"></span></div>
-                  </template>
-                </div>
-              </div>
-              <div style="font-size:10px;color:#4b5563;margin-top:8px;line-height:1.7;border-top:1px solid #2d3748;padding-top:8px">
-                ⚠️ <b>絵を作り直すと承認は外れます。</b>さらに、その行から取り込んだ在庫は「未承認」へ降格し、
-                以後は自動で配られなくなります（気に入らなくて描き直した絵が、後の話数で出てくるのを防ぐため）。
-                削除ではないので、良い絵なら<b>✂️切り抜きタブで承認し直せば戻ります</b>。
-                在庫から差し替えた場合・台本テキストが変わった場合は降格しません。
-              </div>
-            </div>
-
-            <!-- 台本との同期状態（差分検知） -->
-            <div class="card" x-show="arollSync?.has_manifest"
-                 :style="arollDriftCount ? 'border-color:#a16207' : ''">
-              <h2>台本との同期
-                <span style="font-weight:400;text-transform:none;font-size:11px"
-                      :style="arollDriftCount ? 'color:#fbbf24' : 'color:#4ade80'"
-                      x-text="arollDriftCount
-                        ? `${arollDriftCount}行ズレています（絵が古い ${arollSyncCounts.stale} / 画像なし ${arollSyncCounts.missing} / 行が消えた ${arollSyncCounts.orphan} / 記録なし ${arollSyncCounts.unknown}）`
-                        : `✔ 確定台本と一致しています（${arollSyncCounts.ok}コマ）`"></span>
-              </h2>
-              <div x-show="arollDriftCount" style="font-size:11px;color:#94a3b8;margin-top:6px;line-height:1.7">
-                台本を後から追加・削除・推敲すると、生成済みのAロールとズレます。
-                <b>絵が古い</b>＝セリフが変わったのに絵が生成時のまま（下の一覧で「↻ 生成し直す」）。
-                <b>画像なし</b>＝台本に追加された行（パネルが無い行は「① プロンプトを作り直す」を実行してから生成）。
-                <b>行が消えた</b>＝台本から削除された行のPNGがディスクに残っている（編集には使われません）。
-              </div>
-              <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-top:10px">
-                <button class="btn btn-sm" @click="loadArollSync()">🔄 再チェック</button>
-                <button class="btn btn-sm" x-show="arollSyncItems.length"
-                        @click="arollSyncOpen = !arollSyncOpen"
-                        x-text="arollSyncOpen ? '▲ 明細を閉じる' : `▼ ズレている行を見る（${arollSyncItems.length}）`"></button>
-                <button class="btn btn-sm" x-show="arollSyncCounts.unknown"
-                        :disabled="arollSyncBusy" @click="arollAcceptSync(null)"
-                        title="この機能より前に生成された画像は「どのセリフから描いたか」の記録がありません。現在の台本テキストで確定します（画像は作り直しません）"
-                        x-text="`✓ 記録なし${arollSyncCounts.unknown}行を現在の台本で確定`"></button>
-              </div>
-              <div x-show="arollSyncOpen" style="display:flex;flex-direction:column;gap:6px;margin-top:10px">
-                <template x-for="it in arollSyncItems" :key="it.line_id">
-                  <div style="display:flex;gap:10px;align-items:flex-start;padding:6px 8px;background:#0f172a;border-radius:6px">
-                    <span style="font-size:11px;color:#4b5563;min-width:28px" x-text="it.order ?? '—'"></span>
-                    <span class="status-badge" style="white-space:nowrap"
-                          :style="arollSyncStyle(it.sync)" x-text="arollSyncLabel(it.sync)"></span>
-                    <div style="flex:1;font-size:11px;line-height:1.6;min-width:0">
-                      <div style="color:#cbd5e1" x-text="it.current_text || '（台本から削除された行）'"></div>
-                      <div x-show="it.sync === 'stale'" style="color:#a16207;margin-top:2px">
-                        生成時: <span x-text="it.source_text"></span>
-                      </div>
-                      <div x-show="it.sync === 'missing' && it.status === 'no_panel'" style="color:#64748b;margin-top:2px">
-                        パネル未作成 —「① プロンプトを作り直す」が必要です
-                      </div>
-                      <div x-show="it.prompt_stale" style="color:#64748b;margin-top:2px">
-                        プロンプトも古いテキスト由来です（①を overwrite で作り直すと更新されます）
-                      </div>
+                <template x-if="arollSecIsOpen('prep')">
+                  <div style="display:flex;flex-direction:column;gap:16px">
+                    <div style="font-size:11px;color:#64748b;line-height:1.7">コマごとの演出プロンプトと背景を用意します。<b>プロンプトは台本を承認した時点で自動で入る</b>ので、普段はここを開く必要はありません（作り直したい時と、台本を直してズレた時だけ）。</div>
+                <!-- ① プロンプト生成 -->
+                <div class="card">
+                  <h2>✍ プロンプトを作り直す
+                    <span style="font-weight:400;text-transform:none;color:#4b5563;font-size:11px"
+                          x-text="`第${activeEpisodeNumber}話 — セリフ1行＝1コマ。吹き出しは編集時に手作業で載せます`"></span>
+                  </h2>
+                  <p class="info-note" style="margin:8px 0 12px">
+                    承認済み台本のセリフをLLM（Gemini無料枠→OpenRouter無料）が解釈してコマごとの演出プロンプトを作り、
+                    NanoBananaでキャラ画像を生成します。スタイル・キャラ外見は生成時に自動合成されるため、
+                    プロンプト欄には<b>演出（表情・ポーズ・構図）だけ</b>が入ります。
+                    <br>
+                    <b>プロンプトは台本を承認した時点で自動的に用意されます。</b>
+                    ここは<b>作り直したい時だけ</b>使ってください（スタイルや追加指示を変えた場合など）。
+                    <b>既にあるプロンプトを上書きします</b>（「上書きする」がOFFなら手編集分は残ります）。
+                  </p>
+                  <div style="display:flex;gap:14px;align-items:flex-end;flex-wrap:wrap">
+                    <div>
+                      <label>スタイル</label>
+                      <select x-model="arollStyle">
+                        <template x-for="s in freeStyles" :key="s"><option :value="s" x-text="s"></option></template>
+                      </select>
                     </div>
-                    <button class="btn btn-sm" x-show="it.sync === 'stale'"
-                            :disabled="arollSyncBusy" @click="arollAcceptSync([it.line_id])"
-                            title="セリフは変わったが、この絵のままで問題ないと追認する">✓ このままでよい</button>
+                    <div>
+                      <label>アスペクト比</label>
+                      <select x-model="arollAspect">
+                        <option value="16:9">16:9（横・既定）</option>
+                        <option value="1:1">1:1（正方形）</option>
+                        <option value="9:16">9:16（縦）</option>
+                        <option value="4:3">4:3</option>
+                      </select>
+                    </div>
+                    <div style="flex:1;min-width:200px">
+                      <label>追加指示（任意・プロンプト生成LLMへ）</label>
+                      <input type="text" x-model="arollExtraPrompt" placeholder="例: 全体的にコミカルに、背景は教室で統一">
+                    </div>
+                    <label style="display:flex;align-items:center;gap:6px;cursor:pointer;font-size:12px;color:#94a3b8">
+                      <input type="checkbox" x-model="arollOverwrite" style="width:13px;height:13px;accent-color:#7c3aed">
+                      既存プロンプトを作り直す（手編集した行は保持）
+                    </label>
+                    <button class="btn btn-primary" @click="arollGeneratePrompts()" :disabled="arollBusy || arollRunning">
+                      <template x-if="arollBusy === 'prompts'"><span class="spinner"></span></template>
+                      <span x-text="arollBusy === 'prompts' ? 'LLMがプロンプト生成中...' : '✍ プロンプトを作り直す'"></span>
+                    </button>
                   </div>
-                </template>
-              </div>
-            </div>
-
-            <!-- Photoshop作業用の書き出し -->
-            <div class="card" x-show="arollManifest">
-              <h2>③ Photoshop用に書き出し
-                <span style="font-weight:400;text-transform:none;color:#4b5563;font-size:11px">a_roll/export/</span>
-              </h2>
-              <div style="font-size:11px;color:#94a3b8;margin-top:6px;line-height:1.7">
-                正本(a_roll/)はリネームせず、<code>a_roll/export/</code> に「行番号付きのコピー」＋
-                同じ行番号のセリフ一覧(script_lines.txt)を作ります。台本を編集した後は、もう一度
-                このボタンを押すだけで作り直せます（export/ フォルダは毎回全消去→再作成）。
-                絵が古い行・未生成の行はコピーされず、番号が欠番になります。
-              </div>
-              <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-top:10px">
-                <button class="btn btn-primary" :disabled="arollExportBusy" @click="arollExport()">
-                  <template x-if="arollExportBusy"><span class="spinner"></span></template>
-                  <span x-text="arollExportBusy ? '書き出し中...' : '📤 export/ へ書き出し'"></span>
-                </button>
-              </div>
-              <div x-show="arollExportResult" style="font-size:11px;color:#94a3b8;margin-top:8px;line-height:1.7">
-                <span x-text="`✔ ${arollExportResult?.exported_count ?? 0}枚を書き出しました → ${arollExportResult?.export_dir ?? ''}`"></span>
-                <span x-show="arollExportResult?.missing?.length" style="color:#fbbf24">
-                  （欠番: <span x-text="(arollExportResult?.missing || []).map(m => m.order).join(', ')"></span>）
-                </span>
-                <span x-show="arollExportResult?.stale?.length" style="color:#fbbf24">
-                  （絵が古く未書き出し: <span x-text="(arollExportResult?.stale || []).map(m => m.order).join(', ')"></span>）
-                </span>
-              </div>
-            </div>
-
-            <!-- ④ 背景の自動割当 -->
-            <div class="card" x-show="arollManifest">
-              <h2>④ 背景の自動割当
-                <span style="font-weight:400;text-transform:none;color:#4b5563;font-size:11px">無料・画像生成なし</span>
-              </h2>
-              <p style="font-size:11px;color:#94a3b8;margin:6px 0 10px;line-height:1.6">
-                各行の根拠（表情・ショット）から背景アーカイブの候補を自動で選ぶ（<code>shot→framing</code>・
-                <code>emotion→mood</code>の対応）。既に背景が入っている行はスキップする。気に入らない行だけ
-                下の一覧で「🔀背景差替」から選び直せる。
-              </p>
-              <button class="btn btn-primary" :disabled="arollBgAssignBusy" @click="arollAutoAssignBackgrounds()">
-                <span x-text="arollBgAssignBusy ? '割当中...' : '🏞️ 未割当の行に自動割当'"></span>
-              </button>
-            </div>
-
-            <!-- ⑤ 合成チェック（PS-Assist の qa_report.json を読む） -->
-            <!-- psassistAvailable=false（=shared/_psassist/worker.json が一度も無い）は
-                 psassist/ を使わない環境（公開パッケージ等）。その時はカードごと隠す
-                 （AROLL_TAB_REDESIGN_PLAN.md §1-8・Phase 0-e）。 -->
-            <div class="card" x-show="arollManifest && psassistAvailable"
-                 :style="qaCounts.blocking ? 'border-color:#7f1d1d' : ''">
-              <h2>🔍 合成チェック
-                <span style="font-weight:400;text-transform:none;color:#4b5563;font-size:11px"
-                      x-text="`台本 ${qaCounts.total} 行 — 未生成・未合成・検査結果を1つの一覧で追う`"></span>
-              </h2>
-
-              <!-- 🖥️ ホスト工程（host_worker.py）の状態 -->
-              <div style="margin-top:8px">
-                <template x-if="psassistAlive">
-                  <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
-                    <button class="btn btn-primary btn-sm"
-                            :disabled="psassistJobBusy || psassistLatestJob?.status === 'running' || !psassistExportTargets.length"
-                            @click="psassistRunExportJob()"
-                            x-text="psassistLatestJob?.status === 'running' ? '🖼 更新中…' : `🖼 納品PNGを更新（${psassistExportTargets.length}枚）`"></button>
-                    <span x-show="!psassistExportTargets.length" style="font-size:11px;color:#4b5563">古い／未書き出しの行はありません</span>
-                    <span x-show="psassistLatestJob && psassistLatestJob.status !== 'running'"
-                          style="font-size:11px;color:#94a3b8"
-                          x-text="psassistLatestJob.status === 'done' ? `✔ 直近: 成功${psassistLatestJob.result?.exported ?? 0} / 失敗${psassistLatestJob.result?.failed ?? 0}` : `✘ 直近のジョブが失敗しました`"></span>
-                  </div>
-                </template>
-                <template x-if="!psassistAlive">
-                  <div style="font-size:11px;color:#94a3b8;line-height:1.7">
-                    ホスト工程が動いていません。次を実行すると、ここにボタンが出ます。
-                    <div style="margin-top:4px;padding:8px 10px;background:#0f172a;border-radius:6px;font-family:monospace;font-size:11px;color:#a5b4fc;user-select:all;overflow-x:auto">python psassist/scripts/host_worker.py</div>
-                  </div>
-                </template>
-              </div>
-
-              <!-- 未検査（一覧は出したまま案内だけ添える。検査前でも進捗は見えるべき） -->
-              <div x-show="!qa" style="font-size:11px;color:#94a3b8;margin-top:8px;line-height:1.8">
-                <div>
-                  合成結果の検査レポートがまだありません。ホスト側（Docker外）で次を実行してください。
-                  <div style="margin-top:6px;padding:8px 10px;background:#0f172a;border-radius:6px;font-family:monospace;font-size:11px;color:#cbd5e1;user-select:all;overflow-x:auto"
-                       x-text="qaCheckCommand"></div>
-                  <div style="margin-top:6px;color:#64748b">
-                    Photoshop は不要です（PSD が持つ合成プレビューをそのまま読みます）。196枚で約1分。
-                  </div>
-                </div>
-              </div>
-
-              <template x-if="arollPanels.length">
-                <div>
-                  <!-- 集計バー -->
-                  <div style="display:flex;gap:16px;align-items:center;flex-wrap:wrap;margin-top:10px">
-                    <span style="font-size:12px;color:#fecaca"
-                          x-text="`● 要対応 ${qaCounts.blocking}`"></span>
-                    <span style="font-size:12px;color:#fde68a"
-                          x-text="`● 助言 ${qaCounts.advisory}`"></span>
-                    <span style="font-size:12px;color:#86efac"
-                          x-text="`○ 問題なし ${qaCounts.clean}`"></span>
-                    <span style="font-size:12px;color:#93c5fd" x-show="qaCounts.unbuilt"
-                          x-text="`🔧 未合成 ${qaCounts.unbuilt}`"></span>
-                    <span style="font-size:12px;color:#d8b4fe" x-show="qaCounts.restale"
-                          x-text="`♻️ 要・組み直し ${qaCounts.restale}`"></span>
-                    <span style="font-size:12px;color:#a1a1aa" x-show="qaCounts.ungenerated"
-                          x-text="`○ 未生成 ${qaCounts.ungenerated}`"></span>
-                    <span style="font-size:12px;color:#fde68a" x-show="arollApprovalCounts.pending"
-                          title="絵はあるがまだ承認していない＝在庫に積まれていない行"
-                          x-text="`✓ 未承認 ${arollApprovalCounts.pending}`"></span>
-                    <span style="font-size:11px;color:#4b5563;margin-left:auto" x-show="qa"
-                          x-text="`最終検査 ${qaCheckedAt}　/　検査元 ${qa?.source || '—'}`"></span>
-                    <button class="btn btn-sm" @click="loadPsassistQa()" :disabled="qaBusy">🔄 再読込</button>
-                  </div>
-
-                  <!-- 絞り込みチップ -->
-                  <div style="display:flex;gap:6px;flex-wrap:wrap;margin-top:10px">
-                    <button class="btn btn-sm" :style="qaFilter === 'all' ? 'background:#4c1d95;color:#ede9fe' : ''"
-                            @click="qaFilter = 'all'" x-text="`すべて ${qaCounts.total}`"></button>
-                    <button class="btn btn-sm" x-show="qaCounts.blocking"
-                            :style="qaFilter === 'blocking' ? 'background:#7f1d1d;color:#fecaca' : ''"
-                            @click="qaFilter = 'blocking'" x-text="`要対応のみ ${qaCounts.blocking}`"></button>
-                    <button class="btn btn-sm" x-show="qaCounts.advisory"
-                            :style="qaFilter === 'advisory' ? 'background:#78350f;color:#fde68a' : ''"
-                            @click="qaFilter = 'advisory'" x-text="`助言のみ ${qaCounts.advisory}`"></button>
-                    <button class="btn btn-sm" x-show="qaCounts.restale"
-                            :style="qaFilter === 'restale' ? 'background:#581c87;color:#e9d5ff' : ''"
-                            @click="qaFilter = 'restale'" x-text="`要・組み直し ${qaCounts.restale}`"></button>
-                    <button class="btn btn-sm" x-show="qaCounts.unbuilt"
-                            :style="qaFilter === 'unbuilt' ? 'background:#1e3a8a;color:#bfdbfe' : ''"
-                            @click="qaFilter = 'unbuilt'" x-text="`未合成 ${qaCounts.unbuilt}`"></button>
-                    <button class="btn btn-sm" x-show="qaCounts.ungenerated"
-                            :style="qaFilter === 'ungenerated' ? 'background:#3f3f46;color:#e4e4e7' : ''"
-                            @click="qaFilter = 'ungenerated'" x-text="`未生成 ${qaCounts.ungenerated}`"></button>
-                    <button class="btn btn-sm" x-show="arollApprovalCounts.pending"
-                            :style="qaFilter === 'unapproved' ? 'background:#78350f;color:#fde68a' : ''"
-                            @click="qaFilter = 'unapproved'"
-                            x-text="`未承認 ${arollApprovalCounts.pending}`"></button>
-                    <template x-for="[code, n] in Object.entries(qa?.summary?.by_code || {})" :key="code">
-                      <button class="btn btn-sm" :style="qaFilter === 'code:' + code ? 'background:#1e3a8a;color:#bfdbfe' : ''"
-                              @click="qaFilter = 'code:' + code"
-                              x-text="`${qaCodeLabel(code)} ${n}`"></button>
+                  <div x-show="arollWarnings.length" style="margin-top:10px">
+                    <template x-for="(w, i) in arollWarnings" :key="i">
+                      <div class="log-line warn" style="font-size:11px" x-text="'⚠ ' + w"></div>
                     </template>
                   </div>
-                  <div style="font-size:11px;color:#64748b;margin-top:8px;line-height:1.7">
-                    <b>台本の全行</b>を出します（🔧未合成＝絵はあるがPhotoshopで組んでいない、
-                    ○未生成＝絵がまだ無い）。光源の違和感や手のアーティファクトのように
-                    <b>機械では判定できない問題は目視でしか見つからない</b>ため、指摘の一覧ではなく
-                    「全コマ一覧＋指摘の色付け」として使ってください。
-                    <b>クリックすると拡大＋指摘の赤枠に加えて、その行の再生成・在庫からの選択・
-                    表情/ショット/アングル/ポーズ・プロンプト編集ができます。</b>
-                    絵を差し替えた行は<b>♻️要・組み直し</b>になり、古い合成サムネは出しません
-                    （直したつもりが直っていない、を防ぐため）。Photoshopで組み直して再検査すると戻ります。
+                  <div x-show="arollMsg" style="margin-top:8px;font-size:12px" :style="arollMsg.startsWith('✔') ? 'color:#4ade80' : 'color:#f87171'" x-text="arollMsg"></div>
+                </div>
+                <!-- 背景の自動割当 -->
+                <div class="card" x-show="arollManifest">
+                  <h2>背景の自動割当
+                    <span style="font-weight:400;text-transform:none;color:#4b5563;font-size:11px">無料・画像生成なし</span>
+                  </h2>
+                  <p style="font-size:11px;color:#94a3b8;margin:6px 0 10px;line-height:1.6">
+                    各行の根拠（表情・ショット）から背景アーカイブの候補を自動で選ぶ（<code>shot→framing</code>・
+                    <code>emotion→mood</code>の対応）。既に背景が入っている行はスキップする。気に入らない行だけ
+                    下の一覧で「🔀背景差替」から選び直せる。
+                  </p>
+                  <button class="btn btn-primary" :disabled="arollBgAssignBusy" @click="arollAutoAssignBackgrounds()">
+                    <span x-text="arollBgAssignBusy ? '割当中...' : '🏞️ 未割当の行に自動割当'"></span>
+                  </button>
+                </div>
+                <!-- 台本との同期状態（差分検知） -->
+                <div class="card" x-show="arollSync?.has_manifest"
+                     :style="arollDriftCount ? 'border-color:#a16207' : ''">
+                  <h2>台本との同期
+                    <span style="font-weight:400;text-transform:none;font-size:11px"
+                          :style="arollDriftCount ? 'color:#fbbf24' : 'color:#4ade80'"
+                          x-text="arollDriftCount
+                            ? `${arollDriftCount}行ズレています（絵が古い ${arollSyncCounts.stale} / 画像なし ${arollSyncCounts.missing} / 行が消えた ${arollSyncCounts.orphan} / 記録なし ${arollSyncCounts.unknown}）`
+                            : `✔ 確定台本と一致しています（${arollSyncCounts.ok}コマ）`"></span>
+                  </h2>
+                  <div x-show="arollDriftCount" style="font-size:11px;color:#94a3b8;margin-top:6px;line-height:1.7">
+                    台本を後から追加・削除・推敲すると、生成済みのAロールとズレます。
+                    <b>絵が古い</b>＝セリフが変わったのに絵が生成時のまま（下の一覧で「↻ 生成し直す」）。
+                    <b>画像なし</b>＝台本に追加された行（パネルが無い行は「下ごしらえ → プロンプトを作り直す」を実行してから生成）。
+                    <b>行が消えた</b>＝台本から削除された行のPNGがディスクに残っている（編集には使われません）。
                   </div>
-
-                  <!-- サムネイル一覧 -->
-                  <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(148px,1fr));gap:8px;margin-top:12px">
-                    <template x-for="p in qaFiltered" :key="p.line_id">
-                      <div :style="`cursor:zoom-in;border-radius:6px;overflow:hidden;background:#0f172a;border:2px solid ${qaSevColor(p.severity)}`"
-                           @click="qaOpen(p)">
-                        <template x-if="p.thumb">
-                          <img :src="qaFileUrl(p.thumb)" loading="lazy"
-                               style="width:100%;display:block;aspect-ratio:16/9;object-fit:cover">
-                        </template>
-                        <template x-if="!p.thumb && qaFallbackThumb(p)">
-                          <img :src="qaFallbackThumb(p)" loading="lazy"
-                               style="width:100%;display:block;aspect-ratio:16/9;object-fit:contain;background:#334155">
-                        </template>
-                        <template x-if="!p.thumb && !qaFallbackThumb(p)">
-                          <div style="width:100%;aspect-ratio:16/9;display:flex;align-items:center;justify-content:center;color:#4b5563;font-size:10px">画像なし</div>
-                        </template>
-                        <div style="padding:4px 6px;display:flex;align-items:center;gap:5px">
-                          <span style="font-size:10px;color:#64748b" x-text="p.order ?? '—'"></span>
-                          <span style="font-size:11px" x-text="qaSevMark(p.severity)"></span>
-                          <span style="font-size:9px;color:#94a3b8;overflow:hidden;text-overflow:ellipsis;white-space:nowrap"
-                                x-text="qaMainIssue(p)"></span>
+                  <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-top:10px">
+                    <button class="btn btn-sm" @click="loadArollSync()">🔄 再チェック</button>
+                    <button class="btn btn-sm" x-show="arollSyncItems.length"
+                            @click="arollSyncOpen = !arollSyncOpen"
+                            x-text="arollSyncOpen ? '▲ 明細を閉じる' : `▼ ズレている行を見る（${arollSyncItems.length}）`"></button>
+                    <button class="btn btn-sm" x-show="arollSyncCounts.unknown"
+                            :disabled="arollSyncBusy" @click="arollAcceptSync(null)"
+                            title="この機能より前に生成された画像は「どのセリフから描いたか」の記録がありません。現在の台本テキストで確定します（画像は作り直しません）"
+                            x-text="`✓ 記録なし${arollSyncCounts.unknown}行を現在の台本で確定`"></button>
+                  </div>
+                  <div x-show="arollSyncOpen" style="display:flex;flex-direction:column;gap:6px;margin-top:10px">
+                    <template x-for="it in arollSyncItems" :key="it.line_id">
+                      <div style="display:flex;gap:10px;align-items:flex-start;padding:6px 8px;background:#0f172a;border-radius:6px">
+                        <span style="font-size:11px;color:#4b5563;min-width:28px" x-text="it.order ?? '—'"></span>
+                        <span class="status-badge" style="white-space:nowrap"
+                              :style="arollSyncStyle(it.sync)" x-text="arollSyncLabel(it.sync)"></span>
+                        <div style="flex:1;font-size:11px;line-height:1.6;min-width:0">
+                          <div style="color:#cbd5e1" x-text="it.current_text || '（台本から削除された行）'"></div>
+                          <div x-show="it.sync === 'stale'" style="color:#a16207;margin-top:2px">
+                            生成時: <span x-text="it.source_text"></span>
+                          </div>
+                          <div x-show="it.sync === 'missing' && it.status === 'no_panel'" style="color:#64748b;margin-top:2px">
+                            パネル未作成 —「下ごしらえ → プロンプトを作り直す」が必要です
+                          </div>
+                          <div x-show="it.prompt_stale" style="color:#64748b;margin-top:2px">
+                            プロンプトも古いテキスト由来です（①を overwrite で作り直すと更新されます）
+                          </div>
                         </div>
+                        <button class="btn btn-sm" x-show="it.sync === 'stale'"
+                                :disabled="arollSyncBusy" @click="arollAcceptSync([it.line_id])"
+                                title="セリフは変わったが、この絵のままで問題ないと追認する">✓ このままでよい</button>
                       </div>
                     </template>
                   </div>
-                  <div x-show="!qaFiltered.length" class="empty" style="padding:24px">該当するコマはありません</div>
+                </div>
+                  </div>
+                </template>
+              </div>
+            </template>
 
+            <!-- ═══ 2. 絵を決める ═══ -->
+            <template x-if="arollManifest">
+              <div style="display:flex;flex-direction:column;gap:16px">
+                <button class="aroll-sec-head" :data-done="arollDrawDone ? 1 : 0" @click="arollSecToggle('draw')">
+                  <span class="num" x-text="arollDrawDone ? '✓' : '2'"></span>
+                  <span x-text="arollSecIsOpen('draw') ? '▼ 絵を決める' : '▶ 絵を決める'"></span>
+                  <span class="sum" x-text="arollSecSummary('draw')"></span>
+                </button>
+                <template x-if="arollSecIsOpen('draw')">
+                  <div style="display:flex;flex-direction:column;gap:16px">
+                    <div style="font-size:11px;color:#64748b;line-height:1.7">まず<b>在庫で賄える行を無料で埋め</b>、残りだけを生成します（試算はタブを開いた時点で済んでいます）。</div>
+                <!-- ② 画像バッチ生成 -->
+                <div class="card" x-show="arollManifest">
+                  <h2>画像を生成
+                    <span style="font-weight:400;text-transform:none;color:#4b5563;font-size:11px"
+                          x-text="`生成済み ${arollCounts.done} / 全 ${arollCounts.total} コマ（失敗 ${arollCounts.failed}）`"></span>
+                  </h2>
+                  <div style="display:flex;gap:14px;align-items:flex-end;flex-wrap:wrap;margin-top:8px">
+                    <div>
+                      <label>対象</label>
+                      <select x-model="arollTarget">
+                        <option value="missing">未生成のみ（失敗含む・レジューム）</option>
+                        <option value="failed">失敗した行のみ</option>
+                        <option value="all">全行（生成済みも作り直す）</option>
+                      </select>
+                    </div>
+                    <label style="display:flex;align-items:center;gap:6px;cursor:pointer;font-size:12px;color:#94a3b8"
+                           title="OpenRouter経由のNanoBananaはFree表示でも実際は課金されます。OFFなら失敗行は失敗マークで続行し、後からまとめて再試行できます">
+                      <input type="checkbox" x-model="arollPaidFallback" style="width:13px;height:13px;accent-color:#f59e0b"
+                             @change="arollPaidFallback && arollLoadCredits()">
+                      Gemini失敗時にOpenRouterへ課金退避する
+                    </label>
+                    <span x-show="arollPaidFallback" style="font-size:11px;color:#fbbf24"
+                          x-text="arollOrCredits !== null ? `OpenRouter残高: $${arollOrCredits.toFixed(2)}` : '残高取得中...'"></span>
+                    <button class="btn btn-primary" @click="arollStartBatch()" :disabled="arollRunning || arollBusy || arollBatchTargetCount === 0">
+                      <template x-if="arollRunning"><span class="spinner"></span></template>
+                      <span x-text="arollRunning ? '生成中...'
+                        : (arollBillableCount === null
+                            ? `🎬 画像を生成（${arollBatchTargetCount}枚 ≈ $${(arollBatchTargetCount * 0.04).toFixed(2)}）`
+                            : `🎬 画像を生成（${arollBatchTargetCount}枚中 課金 ${arollBillableCount}枚 ≈ $${(arollBillableCount * 0.04).toFixed(2)}）`)"></span>
+                    </button>
+                    <button class="btn btn-danger" @click="arollStop()" :disabled="!arollRunning">⏸ 中断</button>
+                  </div>
+
+                  <!-- 在庫で賄える分の試算（生成の前に、無料で埋まる行を先に確定させる） -->
+                  <div style="margin-top:12px;border-top:1px solid #2d3748;padding-top:10px">
+                    <div style="display:flex;gap:12px;align-items:center;flex-wrap:wrap">
+                      <span style="font-size:12px;color:#a5f3fc">✂️ 切り抜き在庫からの割当</span>
+                      <button class="btn btn-sm" @click="loadCutoutPlan()" :disabled="cutoutPlanBusy">🔄 試算</button>
+                      <template x-if="cutoutPlan">
+                        <span style="font-size:12px;color:#94a3b8"
+                              x-text="`在庫で ${cutoutPlan.from_stock} 行（無料）／ 新規生成が要る ${cutoutPlan.need_generation} 行 ≈ $${(cutoutPlan.need_generation * 0.04).toFixed(2)}`"></span>
+                      </template>
+                      <template x-if="cutoutPlan && cutoutPlan.from_stock">
+                        <button class="btn btn-primary btn-sm" :disabled="cutoutPlanBusy || arollRunning"
+                                @click="applyCutoutPlan()"
+                                x-text="`✂️ 在庫 ${cutoutPlan.from_stock} 行を割り当てる（無料）`"></button>
+                      </template>
+                    </div>
+                    <div x-show="cutoutPlan" style="font-size:11px;color:#64748b;margin-top:6px;line-height:1.7">
+                      在庫は<b>直近の行と視覚的に離れているもの</b>から順に、使用回数の少ないものを選びます。
+                      賄えない行は<b>無理に在庫から埋めません</b>（ワンパターンの発生源になるため）。
+                      <span style="color:#4b5563">生成した絵はまだ背景付きなので、素材にするには切り抜き工程が要ります。</span>
+                    </div>
+                    <div x-show="cutoutPlanReasons.length" style="font-size:11px;color:#64748b;margin-top:6px">
+                      <template x-for="[why, n] in cutoutPlanReasons" :key="why">
+                        <div><span style="color:#fbbf24" x-text="n + '行'"></span> <span x-text="why"></span></div>
+                      </template>
+                    </div>
+                    <div x-show="cutoutPlanMsg" style="font-size:11px;color:#a5b4fc;margin-top:6px" x-text="cutoutPlanMsg"></div>
+                  </div>
+                  <div class="progress-bar" x-show="arollRunning || (arollJob.total > 0)">
+                    <div class="progress-fill" :style="`width:${arollJob.total ? Math.round(((arollJob.done + arollJob.failed) / arollJob.total) * 100) : 0}%`"></div>
+                  </div>
+                  <div x-show="arollJob.total > 0" style="font-size:11px;color:#64748b"
+                       x-text="`${arollJob.done + arollJob.failed} / ${arollJob.total}（成功 ${arollJob.done}・失敗 ${arollJob.failed}）` + (arollJob.current_line ? ` — ${arollJob.current_line} を生成中` : '')"></div>
+                  <div class="log-area" x-show="(arollJob.log || []).length">
+                    <template x-for="(l, i) in arollJob.log || []" :key="i">
+                      <div class="log-line" :class="l.startsWith('✔') ? 'ok' : (l.startsWith('✘') ? 'err' : 'info')" x-text="l"></div>
+                    </template>
+                  </div>
+                </div>
+                  </div>
+                </template>
+              </div>
+            </template>
+
+            <!-- ═══ 3. 承認して在庫へ ═══ -->
+            <template x-if="arollManifest">
+              <div style="display:flex;flex-direction:column;gap:16px">
+                <button class="aroll-sec-head" :data-done="!arollApprovalCounts.pending ? 1 : 0" @click="arollSecToggle('approve')">
+                  <span class="num" x-text="!arollApprovalCounts.pending ? '✓' : '3'"></span>
+                  <span x-text="arollSecIsOpen('approve') ? '▼ 承認して在庫へ' : '▶ 承認して在庫へ'"></span>
+                  <span class="sum" x-text="arollSecSummary('approve')"></span>
+                </button>
+                <template x-if="arollSecIsOpen('approve')">
+                  <div style="display:flex;flex-direction:column;gap:16px">
+                    <div style="font-size:11px;color:#64748b;line-height:1.7">目視して<b>採用と決めた絵だけ</b>を在庫に積みます。次の話数から自動で配られるようになります。</div>
+                <!-- 画像の承認（②で作った絵のうち、採用と決めたものだけを在庫へ積む） -->
+                <div class="card" x-show="arollManifest"
+                     :style="arollApprovalCounts.pending ? 'border-color:#a16207' : ''">
+                  <h2>✓ 画像の承認
+                    <span style="font-weight:400;text-transform:none;color:#4b5563;font-size:11px"
+                          x-text="`承認済み ${arollApprovalCounts.approved} / 未承認 ${arollApprovalCounts.pending}（生成済み ${arollApprovalCounts.done}コマ）`"></span>
+                  </h2>
+                  <div style="font-size:11px;color:#94a3b8;margin-top:6px;line-height:1.7">
+                    目視して<b>採用と決めた絵だけ</b>をキャラ所有ライブラリへ積みます（<b>無料</b>・画像生成なし）。
+                    生成した瞬間に積まないのは、<b>作り直して捨てた絵まで在庫に入れないため</b>です。
+                    積んだ絵は次の話数から在庫として自動で配られます。
+                  </div>
+                  <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-top:10px">
+                    <button class="btn btn-primary"
+                            :disabled="arollApproveBusy || arollRunning || !arollApprovalCounts.pending"
+                            @click="arollApproveImages(null)">
+                      <template x-if="arollApproveBusy"><span class="spinner"></span></template>
+                      <span x-text="arollApproveBusy ? '承認中...' : `✓ 未承認 ${arollApprovalCounts.pending} 件を承認して在庫へ`"></span>
+                    </button>
+                    <span x-show="!arollApprovalCounts.pending && arollApprovalCounts.done"
+                          style="font-size:11px;color:#4ade80">✔ 生成済みの絵はすべて承認済みです</span>
+                  </div>
+                  <div x-show="arollApproveResult" style="font-size:11px;color:#94a3b8;margin-top:8px;line-height:1.7">
+                    <div x-text="`✔ ${arollApproveResult?.approved ?? 0}件を承認 — うち ${arollApproveResult?.registered ?? 0}件を在庫へ取り込みました`"></div>
+                    <div x-show="arollApproveSkipReasons.length" style="margin-top:4px">
+                      <div style="color:#64748b">在庫に積まなかった内訳（その行の絵はそのまま使われます・課金ゼロ）:</div>
+                      <template x-for="[why, n] in arollApproveSkipReasons" :key="why">
+                        <div><span style="color:#fbbf24" x-text="n + '件'"></span> <span x-text="why"></span></div>
+                      </template>
+                    </div>
+                  </div>
+                  <div style="font-size:10px;color:#4b5563;margin-top:8px;line-height:1.7;border-top:1px solid #2d3748;padding-top:8px">
+                    ⚠️ <b>絵を作り直すと承認は外れます。</b>さらに、その行から取り込んだ在庫は「未承認」へ降格し、
+                    以後は自動で配られなくなります（気に入らなくて描き直した絵が、後の話数で出てくるのを防ぐため）。
+                    削除ではないので、良い絵なら<b>✂️切り抜きタブで承認し直せば戻ります</b>。
+                    在庫から差し替えた場合・台本テキストが変わった場合は降格しません。
+                  </div>
+                </div>
+                  </div>
+                </template>
+              </div>
+            </template>
+
+            <!-- ═══ 4. 組む（Photoshop） ═══ -->
+            <template x-if="arollManifest && psassistAvailable">
+              <div style="display:flex;flex-direction:column;gap:16px">
+                <button class="aroll-sec-head" @click="arollSecToggle('build')">
+                  <span class="num" x-text="'4'"></span>
+                  <span x-text="arollSecIsOpen('build') ? '▼ 組む（Photoshop）' : '▶ 組む（Photoshop）'"></span>
+                  <span class="sum" x-text="arollSecSummary('build')"></span>
+                </button>
+                <template x-if="arollSecIsOpen('build')">
+                  <div style="display:flex;flex-direction:column;gap:16px">
+                    <div style="font-size:11px;color:#64748b;line-height:1.7">ホスト常駐（<code>host_worker.py</code>）が動いている間だけ操作できます。<b>Photoshop を占有する処理があるので、作業中は流さないこと。</b></div>
+                <div class="card">
+                  <h2>🖥️ ホスト工程</h2>
+                  <!-- 🖥️ ホスト工程（host_worker.py）の状態 -->
+                  <div style="margin-top:8px">
+                    <template x-if="psassistAlive">
+                      <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
+                        <button class="btn btn-primary btn-sm"
+                                :disabled="psassistJobBusy || psassistLatestJob?.status === 'running' || !psassistExportTargets.length"
+                                @click="psassistRunExportJob()"
+                                x-text="psassistLatestJob?.status === 'running' ? '🖼 更新中…' : `🖼 納品PNGを更新（${psassistExportTargets.length}枚）`"></button>
+                        <span x-show="!psassistExportTargets.length" style="font-size:11px;color:#4b5563">古い／未書き出しの行はありません</span>
+                        <span x-show="psassistLatestJob && psassistLatestJob.status !== 'running'"
+                              style="font-size:11px;color:#94a3b8"
+                              x-text="psassistLatestJob.status === 'done' ? `✔ 直近: 成功${psassistLatestJob.result?.exported ?? 0} / 失敗${psassistLatestJob.result?.failed ?? 0}` : `✘ 直近のジョブが失敗しました`"></span>
+                      </div>
+                    </template>
+                    <template x-if="!psassistAlive">
+                      <div style="font-size:11px;color:#94a3b8;line-height:1.7">
+                        ホスト工程が動いていません。次を実行すると、ここにボタンが出ます。
+                        <div style="margin-top:4px;padding:8px 10px;background:#0f172a;border-radius:6px;font-family:monospace;font-size:11px;color:#a5b4fc;user-select:all;overflow-x:auto">python psassist/scripts/host_worker.py</div>
+                      </div>
+                    </template>
+                  </div>
                   <div style="font-size:11px;color:#64748b;margin-top:12px;line-height:1.8;border-top:1px solid #2d3748;padding-top:10px">
                     <b style="color:#94a3b8">直す作業に入るなら、ホスト側でこれを出しっぱなしにする</b>
                     ── Photoshop で保存するたびに、その1枚だけ自動で検査し直します（Photoshop は占有しません）。
                     あとはここで「🔄 再読込」を押すだけ。<b>全部緑になったら完了</b>です。
-                    <div style="margin-top:4px;padding:8px 10px;background:#0f172a;border-radius:6px;font-family:monospace;color:#a5b4fc;user-select:all;overflow-x:auto"
-                         x-text="qaWatchCommand"></div>
-                    <div style="margin-top:6px">全部まとめて検査し直す場合:</div>
-                    <div style="margin-top:4px;padding:8px 10px;background:#0f172a;border-radius:6px;font-family:monospace;color:#cbd5e1;user-select:all;overflow-x:auto"
-                         x-text="qaCheckCommand"></div>
-                    <div style="margin-top:6px">納品用の 1920×1080 PNG（Photoshop でベクター再描画）:</div>
-                    <div style="margin-top:4px;padding:8px 10px;background:#0f172a;border-radius:6px;font-family:monospace;color:#cbd5e1;user-select:all;overflow-x:auto"
-                         x-text="qaExportCommand"></div>
-                    <div style="margin-top:6px;color:#4b5563">
-                      ⚠️ 書き出しは Photoshop を占有します（作業中は流さないこと）。マスターPSDは1376×768のまま保たれます。
-                      直したのに書き出し直していない行は<b>「書き出しが古い」</b>として助言に出ます。
-                    </div>
+                        <div style="margin-top:4px;padding:8px 10px;background:#0f172a;border-radius:6px;font-family:monospace;color:#a5b4fc;user-select:all;overflow-x:auto"
+                             x-text="qaWatchCommand"></div>
+                        <div style="margin-top:6px">全部まとめて検査し直す場合:</div>
+                        <div style="margin-top:4px;padding:8px 10px;background:#0f172a;border-radius:6px;font-family:monospace;color:#cbd5e1;user-select:all;overflow-x:auto"
+                             x-text="qaCheckCommand"></div>
+                        <div style="margin-top:6px">納品用の 1920×1080 PNG（Photoshop でベクター再描画）:</div>
+                        <div style="margin-top:4px;padding:8px 10px;background:#0f172a;border-radius:6px;font-family:monospace;color:#cbd5e1;user-select:all;overflow-x:auto"
+                             x-text="qaExportCommand"></div>
+                        <div style="margin-top:6px;color:#4b5563">
+                          ⚠️ 書き出しは Photoshop を占有します（作業中は流さないこと）。マスターPSDは1376×768のまま保たれます。
+                          直したのに書き出し直していない行は<b>「書き出しが古い」</b>として助言に出ます。
+                        </div>
                   </div>
                 </div>
-              </template>
-            </div>
-
-            <!-- パネル一覧 -->
-            <div class="card" x-show="arollManifest">
-              <h2>コマ一覧</h2>
-              <div style="display:flex;flex-direction:column;gap:8px;margin-top:8px">
-                <template x-for="p in arollPanels" :key="p.line_id">
-                  <div class="audio-line-row" style="align-items:flex-start;cursor:default">
-                    <!-- 左: 行情報 -->
-                    <div style="min-width:150px;max-width:150px">
-                      <div style="display:flex;align-items:center;gap:6px;flex-wrap:wrap">
-                        <span style="font-size:11px;color:#4b5563" x-text="p.order"></span>
-                        <span style="font-size:11px;color:#60a5fa" x-text="p.speaker_name || p.speaker_id"></span>
-                        <span class="status-badge"
-                              :style="p.status === 'done' ? 'background:#14532d;color:#bbf7d0' : (p.status === 'failed' ? 'background:#7f1d1d;color:#fecaca' : 'background:#1e293b;color:#94a3b8')"
-                              x-text="p.status === 'done' ? '✔ 生成済' : (p.status === 'failed' ? '✘ 失敗' : '未生成')"></span>
-                        <span class="status-badge" x-show="p.sync && p.sync !== 'ok' && p.sync !== 'missing'"
-                              :style="arollSyncStyle(p.sync)" x-text="arollSyncLabel(p.sync)"></span>
-                        <span class="status-badge" x-show="p.status === 'done' && p.image"
-                              :style="p.image_approved_at ? 'background:#14532d;color:#bbf7d0' : 'background:#78350f;color:#fde68a'"
-                              :title="p.image_approved_at ? '承認済み — 在庫へ取り込み済み' : 'まだ承認していません（在庫には積まれません）'"
-                              x-text="p.image_approved_at ? '✓ 承認済' : '未承認'"></span>
-                      </div>
-                      <div style="font-size:10px;color:#4b5563;margin-top:2px" x-text="p.section"></div>
-                      <div style="font-size:11px;color:#cbd5e1;margin-top:4px;line-height:1.5" x-text="p.text"></div>
-                      <div style="margin-top:6px;display:flex;gap:4px;flex-wrap:wrap;align-items:center">
-                        <!-- 先頭＝話者。バックエンドが必ず先頭に固定するので外させない
-                             （喋っている人物が写らないコマは静止画マンガでは成立しない） -->
-                        <template x-for="(cid, ci) in p.characters" :key="cid">
-                          <span style="font-size:10px;border-radius:99px;padding:2px 8px"
-                                :style="ci === 0
-                                  ? 'background:#1e1040;color:#c4b5fd;cursor:default'
-                                  : 'background:#1e1040;color:#c4b5fd;cursor:pointer'"
-                                :title="ci === 0
-                                  ? '話者なので外せません（' + cid + '）'
-                                  : 'クリックで外す: ' + cid"
-                                @click="ci === 0 || arollRemoveChar(p, cid)"
-                                x-text="(charas.find(c => c.char_id === cid)?.name || cid) + (ci === 0 ? ' 🔒' : ' ×')"></span>
-                        </template>
-                        <span x-show="!p.characters.length" style="font-size:10px;color:#93c5fd"
-                              title="話者のキャラが『画像を使わない』設定です。キャラ画像は生成せず、背景だけのコマになります">
-                          🎙 ナレーション（背景のみ）
-                        </span>
-                        <select x-show="p.characters.length < 2" style="font-size:10px;padding:2px;width:auto"
-                                @change="arollAddChar(p, $event.target.value); $event.target.value = ''">
-                          <option value="">＋キャラ</option>
-                          <template x-for="c in charas.filter(c => !p.characters.includes(c.char_id) && arollCanShowChar(c))" :key="c.char_id">
-                            <option :value="c.char_id" x-text="c.name"></option>
-                          </template>
-                        </select>
-                      </div>
-                    </div>
-                    <!-- 中: 根拠(slot)＋プロンプト編集 -->
-                    <div style="flex:1">
-                      <div style="display:flex;gap:4px;flex-wrap:wrap;align-items:center;margin-bottom:6px">
-                        <span style="font-size:10px;color:#64748b">根拠</span>
-                        <select style="font-size:10px;padding:2px" :value="p.slot?.emotion || ''"
-                                @change="arollSetSlot(p, 'emotion', $event.target.value)">
-                          <option value="">表情</option>
-                          <template x-for="o in studioPresets.emotion" :key="o.id"><option :value="o.id" x-text="o.label_ja"></option></template>
-                        </select>
-                        <select style="font-size:10px;padding:2px" :value="p.slot?.shot || ''"
-                                @change="arollSetSlot(p, 'shot', $event.target.value)">
-                          <option value="">ショット</option>
-                          <template x-for="o in studioPresets.shot" :key="o.id"><option :value="o.id" x-text="o.label_ja"></option></template>
-                        </select>
-                        <select style="font-size:10px;padding:2px" :value="p.slot?.angle || ''"
-                                @change="arollSetSlot(p, 'angle', $event.target.value)">
-                          <option value="">アングル</option>
-                          <template x-for="o in studioPresets.angle" :key="o.id"><option :value="o.id" x-text="o.label_ja"></option></template>
-                        </select>
-                        <select style="font-size:10px;padding:2px" :value="p.slot?.pose || ''"
-                                @change="arollSetSlot(p, 'pose', $event.target.value)">
-                          <option value="">ポーズ(任意)</option>
-                          <template x-for="o in studioPresets.pose" :key="o.id"><option :value="o.id" x-text="o.label_ja"></option></template>
-                        </select>
-                        <span x-show="!p.slot_key" style="font-size:9px;color:#f59e0b" title="emotion・shot・angleが揃うとライブラリと照合できます">未照合（必ず課金生成）</span>
-                      </div>
-                      <textarea rows="2" style="width:100%;font-size:11px;font-family:monospace"
-                                :value="p.prompt" :placeholder="'（プロンプト未生成 — ①を実行するか手入力）'"
-                                @change="arollSavePrompt(p, $event.target.value)"></textarea>
-                      <div style="display:flex;gap:8px;align-items:center;margin-top:2px">
-                        <span style="font-size:10px;color:#4b5563" x-text="p.prompt_source === 'user' ? '手編集済み（①作り直しでも保持）' : (p.prompt ? 'LLM生成' : '')"></span>
-                        <span x-show="p.error" style="font-size:10px;color:#f87171" x-text="p.error"></span>
-                      </div>
-                    </div>
-                    <!-- 右: サムネ＋行生成＋差し替え -->
-                    <div style="min-width:170px;max-width:170px;display:flex;flex-direction:column;gap:6px;align-items:center;position:relative">
-                      <template x-if="p.image">
-                        <img :src="arollImageUrl(p)" loading="lazy"
-                             style="width:160px;border-radius:6px;border:1px solid #334155;cursor:zoom-in"
-                             @click="window.open(arollImageUrl(p), '_blank')">
-                      </template>
-                      <span x-show="p.image_source === 'library'" style="font-size:9px;color:#7dd3fc" x-text="'📚 ' + (p.library_slot_id || '')"></span>
-                      <span x-show="p.cutout_slot_id" style="font-size:9px;color:#a5f3fc;display:flex;align-items:center;gap:4px">
-                        <span x-text="'✂️ ' + (p.cutout_slot_id || '')" style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:120px"></span>
-                        <button class="btn btn-ghost btn-sm" style="font-size:9px;padding:0 4px"
-                                @click="arollClearCutout(p)" title="割り当てを外す">×</button>
-                      </span>
-                      <div x-show="arollLineBusy === p.line_id" class="progress-indeterminate" style="width:160px"></div>
-                      <button class="btn btn-sm" style="width:160px"
-                              @click="arollGenerateLine(p)"
-                              :disabled="arollRunning || arollLineBusy || !p.prompt">
-                        <span x-text="arollLineBusy === p.line_id ? '生成中...' : (p.status === 'done' ? '↻ 生成し直す' : '▶ この行だけ生成')"></span>
-                      </button>
-                      <div style="display:flex;gap:4px;width:160px">
-                        <button class="btn btn-ghost btn-sm" style="flex:1;font-size:10px;padding:3px"
-                                @click="arollTogglePicker(p)" :disabled="arollRunning || arollLineBusy || (p.characters||[]).length !== 1"
-                                title="在庫から選び直す（無料）。直近の行から遠い順に並びます">🔀 選び直す</button>
-                        <button class="btn btn-ghost btn-sm" style="flex:1;font-size:10px;padding:3px"
-                                @click="arollGenerateLineFresh(p)" :disabled="arollRunning || arollLineBusy || !p.prompt"
-                                title="在庫を使わず必ず新しく課金生成する">🎲 新しく生成</button>
-                      </div>
-                      <button class="btn btn-sm" style="width:160px"
-                              x-show="p.status === 'done' && p.image && !p.image_approved_at"
-                              :disabled="arollApproveBusy || arollRunning || arollLineBusy"
-                              @click="arollApproveImages([p.line_id])"
-                              title="この絵を採用と決めて在庫へ積む（無料・画像生成なし）">✓ 承認して在庫へ</button>
-                      <!-- キャラ画像ピッカー -->
-                      <div x-show="arollPickerFor === p.line_id"
-                           style="position:absolute;top:0;right:172px;z-index:20;background:#0f172a;border:1px solid #374151;border-radius:8px;padding:8px;width:280px;max-height:320px;overflow-y:auto">
-                        <div style="font-size:10px;color:#94a3b8;margin-bottom:6px">在庫から選び直す（クリックで即割当・無料）— <b>直近の行から遠い順</b></div>
-                        <div x-show="arollPickerBusy" style="font-size:11px;color:#64748b">読み込み中…</div>
-                        <div x-show="!arollPickerBusy && arollPickerNote" style="font-size:11px;color:#fbbf24;line-height:1.6" x-text="arollPickerNote"></div>
-                        <div style="display:grid;grid-template-columns:repeat(2,1fr);gap:6px">
-                          <template x-for="item in arollPickerItems" :key="item.slot_id">
-                            <div style="cursor:pointer" @click="arollPickLibraryImage(p, item)"
-                                 :style="item.too_close ? 'opacity:0.45' : ''"
-                                 :title="item.too_close ? '直近の行と近すぎます（使い回しに見える恐れ）' : ''">
-                              <img :src="arollPickerImageUrl((p.characters||[])[0], item)"
-                                   style="width:100%;aspect-ratio:16/9;object-fit:contain;border-radius:4px;background:#334155"
-                                   :style="item.slot_id === p.cutout_slot_id ? 'outline:2px solid #7c3aed' : ''">
-                              <div style="font-size:9px;text-align:center"
-                                   :style="item.too_close ? 'color:#f87171' : 'color:#64748b'"
-                                   x-text="`距離${item.distance} / 使用${item.times_used||0}回`"></div>
-                            </div>
-                          </template>
-                        </div>
-                        <div x-show="arollPickerItems.length" style="font-size:9px;color:#4b5563;margin-top:6px;line-height:1.6">
-                          距離が <span x-text="arollPickerThreshold"></span> 未満は赤字＝使い回しに見える恐れ。
-                          全部赤いなら在庫が尽きているので新規生成が要ります。
-                        </div>
-                      </div>
-                      <!-- 背景 -->
-                      <div style="display:flex;gap:6px;align-items:center;width:160px;margin-top:2px">
-                        <img x-show="p.background_id" :src="arollBgImageUrl(p.background_id)"
-                             style="width:36px;height:20px;object-fit:cover;border-radius:3px;border:1px solid #334155">
-                        <span style="font-size:9px;color:#64748b;flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap"
-                              x-text="p.background_id || '（背景未割当）'"></span>
-                        <button class="btn btn-ghost btn-sm" style="font-size:9px;padding:2px 5px"
-                                @click="arollToggleBgPicker(p)" :disabled="arollRunning">🔀</button>
-                      </div>
-                      <!-- 背景ピッカー -->
-                      <div x-show="arollBgPickerFor === p.line_id"
-                           style="position:absolute;bottom:0;right:172px;z-index:20;background:#0f172a;border:1px solid #374151;border-radius:8px;padding:8px;width:280px;max-height:320px;overflow-y:auto">
-                        <div style="font-size:10px;color:#94a3b8;margin-bottom:6px">背景アーカイブから選ぶ（クリックで即差替・無料）</div>
-                        <div x-show="arollBgPickerBusy" style="font-size:11px;color:#64748b">読み込み中…</div>
-                        <div x-show="!arollBgPickerBusy && !arollBgPickerItems.length" style="font-size:11px;color:#64748b">該当する背景がありません</div>
-                        <div style="display:grid;grid-template-columns:repeat(2,1fr);gap:6px">
-                          <template x-for="item in arollBgPickerItems" :key="item.bg_id">
-                            <div style="cursor:pointer" @click="arollSetBackground(p, item.bg_id)">
-                              <img :src="arollBgImageUrl(item.bg_id)"
-                                   style="width:100%;aspect-ratio:16/9;object-fit:cover;border-radius:4px"
-                                   :style="item.bg_id === p.background_id ? 'outline:2px solid #7c3aed' : ''">
-                              <div style="font-size:9px;color:#64748b;text-align:center" x-text="item.bg_id"></div>
-                            </div>
-                          </template>
-                        </div>
-                      </div>
-                    </div>
+                <!-- Photoshop作業用の書き出し -->
+                <!-- ⚠️ 参照しているコードは1つも無い（psassist は a_roll/ を直接読む）。
+                     手作業で使っている可能性を潰せていないので、撤去せず畳んで残す（§3-b・§6-1）。 -->
+                <div class="card" x-show="arollManifest" style="opacity:0.75">
+                  <h2 style="cursor:pointer" @click="arollShowLegacyExport = !arollShowLegacyExport">
+                    <span x-text="arollShowLegacyExport ? '▼' : '▶'"></span>
+                    旧・手作業用の書き出し
+                    <span style="font-weight:400;text-transform:none;color:#4b5563;font-size:11px">
+                      a_roll/export/ — 今の工程では使いません
+                    </span>
+                  </h2>
+                  <div x-show="arollShowLegacyExport" style="font-size:11px;color:#94a3b8;margin-top:6px;line-height:1.7">
+                    <b style="color:#fbbf24">psassist は a_roll/ を直接読むため、この書き出しは参照されていません。</b>
+                    手作業でPhotoshopを開いていた頃の工程です（手で使っている場合のために残しています）。<br>
+                    正本(a_roll/)はリネームせず、<code>a_roll/export/</code> に「行番号付きのコピー」＋
+                    同じ行番号のセリフ一覧(script_lines.txt)を作ります。台本を編集した後は、もう一度
+                    このボタンを押すだけで作り直せます（export/ フォルダは毎回全消去→再作成）。
+                    絵が古い行・未生成の行はコピーされず、番号が欠番になります。
+                  </div>
+                  <div x-show="arollShowLegacyExport" style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-top:10px">
+                    <button class="btn btn-primary" :disabled="arollExportBusy" @click="arollExport()">
+                      <template x-if="arollExportBusy"><span class="spinner"></span></template>
+                      <span x-text="arollExportBusy ? '書き出し中...' : '📤 export/ へ書き出し'"></span>
+                    </button>
+                  </div>
+                  <div x-show="arollExportResult" style="font-size:11px;color:#94a3b8;margin-top:8px;line-height:1.7">
+                    <span x-text="`✔ ${arollExportResult?.exported_count ?? 0}枚を書き出しました → ${arollExportResult?.export_dir ?? ''}`"></span>
+                    <span x-show="arollExportResult?.missing?.length" style="color:#fbbf24">
+                      （欠番: <span x-text="(arollExportResult?.missing || []).map(m => m.order).join(', ')"></span>）
+                    </span>
+                    <span x-show="arollExportResult?.stale?.length" style="color:#fbbf24">
+                      （絵が古く未書き出し: <span x-text="(arollExportResult?.stale || []).map(m => m.order).join(', ')"></span>）
+                    </span>
+                  </div>
+                </div>
                   </div>
                 </template>
               </div>
+            </template>
+
+            <!-- ═══ 5. 仕上がりを見る ═══ -->
+            <template x-if="arollManifest && psassistAvailable">
+              <div style="display:flex;flex-direction:column;gap:16px">
+                <button class="aroll-sec-head" @click="arollSecToggle('review')">
+                  <span class="num" x-text="'5'"></span>
+                  <span x-text="arollSecIsOpen('review') ? '▼ 仕上がりを見る' : '▶ 仕上がりを見る'"></span>
+                  <span class="sum" x-text="arollSecSummary('review')"></span>
+                </button>
+                <template x-if="arollSecIsOpen('review')">
+                  <div style="display:flex;flex-direction:column;gap:16px">
+                    <div style="font-size:11px;color:#64748b;line-height:1.7"><b>台本の全行</b>を出します。光源の違和感や手のアーティファクトのように<b>機械では判定できない問題は目視でしか見つからない</b>ため、指摘の一覧ではなく「全コマ一覧＋指摘の色付け」として使ってください。</div>
+                <!-- ⑤ 合成チェック（PS-Assist の qa_report.json を読む） -->
+                <!-- psassistAvailable=false（=shared/_psassist/worker.json が一度も無い）は
+                     psassist/ を使わない環境（公開パッケージ等）。その時はカードごと隠す
+                     （AROLL_TAB_REDESIGN_PLAN.md §1-8・Phase 0-e）。 -->
+                <div class="card" x-show="arollManifest && psassistAvailable"
+                     :style="qaCounts.blocking ? 'border-color:#7f1d1d' : ''">
+                  <h2>🔍 合成チェック（検査結果）
+                    <span style="font-weight:400;text-transform:none;color:#4b5563;font-size:11px"
+                          x-text="`台本 ${qaCounts.total} 行 — 未生成・未合成・検査結果を1つの一覧で追う`"></span>
+                  </h2>
+
+                  <!-- 未検査（一覧は出したまま案内だけ添える。検査前でも進捗は見えるべき） -->
+                  <div x-show="!qa" style="font-size:11px;color:#94a3b8;margin-top:8px;line-height:1.8">
+                    <div>
+                      合成結果の検査レポートがまだありません。ホスト側（Docker外）で次を実行してください。
+                      <div style="margin-top:6px;padding:8px 10px;background:#0f172a;border-radius:6px;font-family:monospace;font-size:11px;color:#cbd5e1;user-select:all;overflow-x:auto"
+                           x-text="qaCheckCommand"></div>
+                      <div style="margin-top:6px;color:#64748b">
+                        Photoshop は不要です（PSD が持つ合成プレビューをそのまま読みます）。196枚で約1分。
+                      </div>
+                    </div>
+                  </div>
+
+                  <template x-if="arollPanels.length">
+                    <div>
+                      <!-- 集計バー -->
+                      <div style="display:flex;gap:16px;align-items:center;flex-wrap:wrap;margin-top:10px">
+                        <span style="font-size:12px;color:#fecaca"
+                              x-text="`● 要対応 ${qaCounts.blocking}`"></span>
+                        <span style="font-size:12px;color:#fde68a"
+                              x-text="`● 助言 ${qaCounts.advisory}`"></span>
+                        <span style="font-size:12px;color:#86efac"
+                              x-text="`○ 問題なし ${qaCounts.clean}`"></span>
+                        <span style="font-size:12px;color:#93c5fd" x-show="qaCounts.unbuilt"
+                              x-text="`🔧 未合成 ${qaCounts.unbuilt}`"></span>
+                        <span style="font-size:12px;color:#d8b4fe" x-show="qaCounts.restale"
+                              x-text="`♻️ 要・組み直し ${qaCounts.restale}`"></span>
+                        <span style="font-size:12px;color:#a1a1aa" x-show="qaCounts.ungenerated"
+                              x-text="`○ 未生成 ${qaCounts.ungenerated}`"></span>
+                        <span style="font-size:12px;color:#fde68a" x-show="arollApprovalCounts.pending"
+                              title="絵はあるがまだ承認していない＝在庫に積まれていない行"
+                              x-text="`✓ 未承認 ${arollApprovalCounts.pending}`"></span>
+                        <span style="font-size:11px;color:#4b5563;margin-left:auto" x-show="qa"
+                              x-text="`最終検査 ${qaCheckedAt}　/　検査元 ${qa?.source || '—'}`"></span>
+                        <button class="btn btn-sm" @click="loadPsassistQa()" :disabled="qaBusy">🔄 再読込</button>
+                      </div>
+
+                      <!-- 絞り込みチップ -->
+                      <div style="display:flex;gap:6px;flex-wrap:wrap;margin-top:10px">
+                        <button class="btn btn-sm" :style="qaFilter === 'all' ? 'background:#4c1d95;color:#ede9fe' : ''"
+                                @click="qaFilter = 'all'" x-text="`すべて ${qaCounts.total}`"></button>
+                        <button class="btn btn-sm" x-show="qaCounts.blocking"
+                                :style="qaFilter === 'blocking' ? 'background:#7f1d1d;color:#fecaca' : ''"
+                                @click="qaFilter = 'blocking'" x-text="`要対応のみ ${qaCounts.blocking}`"></button>
+                        <button class="btn btn-sm" x-show="qaCounts.advisory"
+                                :style="qaFilter === 'advisory' ? 'background:#78350f;color:#fde68a' : ''"
+                                @click="qaFilter = 'advisory'" x-text="`助言のみ ${qaCounts.advisory}`"></button>
+                        <button class="btn btn-sm" x-show="qaCounts.restale"
+                                :style="qaFilter === 'restale' ? 'background:#581c87;color:#e9d5ff' : ''"
+                                @click="qaFilter = 'restale'" x-text="`要・組み直し ${qaCounts.restale}`"></button>
+                        <button class="btn btn-sm" x-show="qaCounts.unbuilt"
+                                :style="qaFilter === 'unbuilt' ? 'background:#1e3a8a;color:#bfdbfe' : ''"
+                                @click="qaFilter = 'unbuilt'" x-text="`未合成 ${qaCounts.unbuilt}`"></button>
+                        <button class="btn btn-sm" x-show="qaCounts.ungenerated"
+                                :style="qaFilter === 'ungenerated' ? 'background:#3f3f46;color:#e4e4e7' : ''"
+                                @click="qaFilter = 'ungenerated'" x-text="`未生成 ${qaCounts.ungenerated}`"></button>
+                        <button class="btn btn-sm" x-show="arollApprovalCounts.pending"
+                                :style="qaFilter === 'unapproved' ? 'background:#78350f;color:#fde68a' : ''"
+                                @click="qaFilter = 'unapproved'"
+                                x-text="`未承認 ${arollApprovalCounts.pending}`"></button>
+                        <template x-for="[code, n] in Object.entries(qa?.summary?.by_code || {})" :key="code">
+                          <button class="btn btn-sm" :style="qaFilter === 'code:' + code ? 'background:#1e3a8a;color:#bfdbfe' : ''"
+                                  @click="qaFilter = 'code:' + code"
+                                  x-text="`${qaCodeLabel(code)} ${n}`"></button>
+                        </template>
+                      </div>
+                      <div style="font-size:11px;color:#64748b;margin-top:8px;line-height:1.7">
+                        <b>台本の全行</b>を出します（🔧未合成＝絵はあるがPhotoshopで組んでいない、
+                        ○未生成＝絵がまだ無い）。光源の違和感や手のアーティファクトのように
+                        <b>機械では判定できない問題は目視でしか見つからない</b>ため、指摘の一覧ではなく
+                        「全コマ一覧＋指摘の色付け」として使ってください。
+                        <b>クリックすると拡大＋指摘の赤枠に加えて、その行の再生成・在庫からの選択・
+                        表情/ショット/アングル/ポーズ・プロンプト編集ができます。</b>
+                        絵を差し替えた行は<b>♻️要・組み直し</b>になり、古い合成サムネは出しません
+                        （直したつもりが直っていない、を防ぐため）。Photoshopで組み直して再検査すると戻ります。
+                      </div>
+
+                      <!-- サムネイル一覧 -->
+                      <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(148px,1fr));gap:8px;margin-top:12px">
+                        <template x-for="p in qaFiltered" :key="p.line_id">
+                          <div :style="`cursor:zoom-in;border-radius:6px;overflow:hidden;background:#0f172a;border:2px solid ${qaSevColor(p.severity)}`"
+                               @click="qaOpen(p)">
+                            <template x-if="p.thumb">
+                              <img :src="qaFileUrl(p.thumb)" loading="lazy"
+                                   style="width:100%;display:block;aspect-ratio:16/9;object-fit:cover">
+                            </template>
+                            <template x-if="!p.thumb && qaFallbackThumb(p)">
+                              <img :src="qaFallbackThumb(p)" loading="lazy"
+                                   style="width:100%;display:block;aspect-ratio:16/9;object-fit:contain;background:#334155">
+                            </template>
+                            <template x-if="!p.thumb && !qaFallbackThumb(p)">
+                              <div style="width:100%;aspect-ratio:16/9;display:flex;align-items:center;justify-content:center;color:#4b5563;font-size:10px">画像なし</div>
+                            </template>
+                            <div style="padding:4px 6px;display:flex;align-items:center;gap:5px">
+                              <span style="font-size:10px;color:#64748b" x-text="p.order ?? '—'"></span>
+                              <span style="font-size:11px" x-text="qaSevMark(p.severity)"></span>
+                              <span style="font-size:9px;color:#94a3b8;overflow:hidden;text-overflow:ellipsis;white-space:nowrap"
+                                    x-text="qaMainIssue(p)"></span>
+                            </div>
+                          </div>
+                        </template>
+                      </div>
+                      <div x-show="!qaFiltered.length" class="empty" style="padding:24px">該当するコマはありません</div>
+
+                    </div>
+                  </template>
+                </div>
+                  </div>
+                </template>
+              </div>
+            </template>
+
+            <!-- コマ一覧（表）— 一括操作の場所。1行の作り込みはクリックでモーダルへ -->
+            <div class="card" x-show="arollManifest">
+              <h2>コマ一覧
+                <span style="font-weight:400;text-transform:none;color:#4b5563;font-size:11px"
+                      x-text="`${arollPanels.length}行 — 行をクリックすると1行の詳細（生成・在庫から選ぶ・承認）が開きます`"></span>
+              </h2>
+
+              <!-- ── 一括操作 ──────────────────────────────────────────
+                   ⚠️ チェック0件では押せない。`line_ids: []` は「対象ゼロ」で、
+                   falsy 判定にすると1行も選んでいないのに全行へ走る
+                   （CHARACTER_CUTOUT_PLAN.md §13-4）。 -->
+              <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin:10px 0;
+                          padding:10px;background:#0f172a;border-radius:6px">
+                <label style="display:flex;align-items:center;gap:6px;font-size:12px;color:#cbd5e1;cursor:pointer">
+                  <input type="checkbox" style="width:14px;height:14px;accent-color:#7c3aed"
+                         :checked="arollAllChecked" @change="arollToggleAll($event.target.checked)">
+                  全選択
+                </label>
+                <span style="font-size:12px;color:#a5b4fc" x-text="`${arollSelected.length} 行を選択中`"></span>
+
+                <button class="btn btn-sm" :disabled="!arollSelected.length || arollBulkBusy"
+                        @click="arollBulkApprove()">✓ まとめて承認</button>
+
+                <button class="btn btn-sm" :disabled="!arollSelected.length || arollBulkBusy || arollRunning"
+                        @click="arollBulkRegenerate()"
+                        title="選択行を作り直します（課金・確認あり）">↻ まとめて生成し直す</button>
+
+                <button class="btn btn-sm" :disabled="!arollSelected.length || arollBulkBusy"
+                        @click="arollBulkBackground()"
+                        title="選択行の背景を自動で割り当て直します（無料）">🏞️ 背景を割り当て直す</button>
+
+                <template x-for="axis in [['emotion','表情'],['shot','ショット'],['angle','アングル'],['pose','ポーズ']]" :key="axis[0]">
+                  <select style="font-size:11px;padding:3px;width:auto"
+                          :disabled="!arollSelected.length || arollBulkBusy"
+                          @change="arollBulkSlot(axis[0], $event.target.value); $event.target.value = ''">
+                    <option value="" x-text="'一括: ' + axis[1]"></option>
+                    <template x-for="o in (studioPresets[axis[0]] || [])" :key="o.id">
+                      <option :value="o.id" x-text="o.label_ja"></option>
+                    </template>
+                  </select>
+                </template>
+
+                <span x-show="arollBulkMsg" style="font-size:11px;color:#a5b4fc" x-text="arollBulkMsg"></span>
+              </div>
+
+              <!-- ── 絞り込み ────────────────────────────────────────── -->
+              <div style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:8px">
+                <template x-for="f in [['all','すべて'],['ungenerated','未生成'],['unapproved','未承認'],['narration','ナレーション'],['drift','台本とズレ']]" :key="f[0]">
+                  <button class="btn btn-sm" :style="arollRowFilter === f[0] ? 'background:#4c1d95;color:#ede9fe' : ''"
+                          @click="arollRowFilter = f[0]"
+                          x-text="`${f[1]} ${arollRowFilterCount(f[0])}`"></button>
+                </template>
+              </div>
+
+              <div style="overflow-x:auto">
+                <table style="width:100%;border-collapse:collapse;font-size:11px">
+                  <thead>
+                    <tr style="color:#64748b;text-align:left">
+                      <th style="padding:6px 4px;width:28px"></th>
+                      <th style="padding:6px 4px;width:34px">#</th>
+                      <th style="padding:6px 4px;width:90px">話者</th>
+                      <th style="padding:6px 4px">セリフ</th>
+                      <th style="padding:6px 4px;width:340px">根拠（表情/ショット/アングル/ポーズ）</th>
+                      <th style="padding:6px 4px">プロンプト</th>
+                      <th style="padding:6px 4px;width:110px">状態</th>
+                      <th style="padding:6px 4px;width:74px">絵</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    <template x-for="p in arollRowsFiltered" :key="p.line_id">
+                      <tr style="border-top:1px solid #1e293b;cursor:pointer"
+                          :style="arollChecked[p.line_id] ? 'background:#1a1040' : ''"
+                          @click="arollOpenRow(p.line_id)">
+                        <td style="padding:6px 4px" @click.stop>
+                          <input type="checkbox" style="width:14px;height:14px;accent-color:#7c3aed"
+                                 :checked="!!arollChecked[p.line_id]"
+                                 @change="arollChecked[p.line_id] = $event.target.checked">
+                        </td>
+                        <td style="padding:6px 4px;color:#4b5563" x-text="p.order"></td>
+                        <td style="padding:6px 4px">
+                          <div style="color:#60a5fa" x-text="p.speaker_name || p.speaker_id"></div>
+                          <div style="font-size:9px;color:#4b5563" x-text="p.section"></div>
+                        </td>
+                        <td style="padding:6px 4px;color:#cbd5e1;line-height:1.5"
+                            :title="p.text" x-text="p.text"></td>
+                        <td style="padding:6px 4px">
+                          <div style="display:flex;gap:3px;flex-wrap:wrap;align-items:center">
+                            <span x-show="!(p.characters||[]).length" style="font-size:10px;color:#93c5fd"
+                                  title="話者のキャラが『画像を使わない』設定です。背景だけのコマになります">🎙 ナレーション</span>
+                            <template x-for="(cid, ci) in (p.characters||[])" :key="cid">
+                              <span style="font-size:9px;background:#1e1040;color:#c4b5fd;border-radius:99px;padding:1px 6px"
+                                    :title="ci === 0 ? '話者（外せません）' : cid"
+                                    x-text="(charas.find(c => c.char_id === cid)?.name || cid) + (ci === 0 ? ' 🔒' : '')"></span>
+                            </template>
+                          </div>
+                          <div style="display:flex;gap:3px;flex-wrap:wrap;margin-top:3px" @click.stop>
+                            <template x-for="axis in [['emotion','表情'],['shot','ショット'],['angle','アングル'],['pose','ポーズ']]" :key="axis[0]">
+                              <select style="font-size:10px;padding:1px;width:auto"
+                                      :value="p.slot?.[axis[0]] || ''"
+                                      @change="arollSetSlot(p, axis[0], $event.target.value)">
+                                <option value="" x-text="axis[1]"></option>
+                                <template x-for="o in (studioPresets[axis[0]] || [])" :key="o.id">
+                                  <option :value="o.id" x-text="o.label_ja"></option>
+                                </template>
+                              </select>
+                            </template>
+                          </div>
+                          <span x-show="!p.slot_key && (p.characters||[]).length" style="font-size:9px;color:#f59e0b"
+                                title="emotion・shot・angleが揃うとライブラリと照合できます">未照合（必ず課金生成）</span>
+                        </td>
+                        <td style="padding:6px 4px;color:#94a3b8;font-family:monospace;font-size:10px;line-height:1.5"
+                            :title="p.prompt || ''"
+                            x-text="(p.prompt || '（未生成）').slice(0, 90) + ((p.prompt || '').length > 90 ? '…' : '')"></td>
+                        <td style="padding:6px 4px">
+                          <div style="display:flex;gap:3px;flex-wrap:wrap">
+                            <span class="status-badge"
+                                  :style="p.status === 'done' ? 'background:#14532d;color:#bbf7d0' : (p.status === 'failed' ? 'background:#7f1d1d;color:#fecaca' : 'background:#1e293b;color:#94a3b8')"
+                                  x-text="p.status === 'done' ? '✔ 生成済' : (p.status === 'failed' ? '✘ 失敗' : '未生成')"></span>
+                            <span class="status-badge" x-show="p.status === 'done' && p.image"
+                                  :style="p.image_approved_at ? 'background:#14532d;color:#bbf7d0' : 'background:#78350f;color:#fde68a'"
+                                  x-text="p.image_approved_at ? '✓ 承認済' : '未承認'"></span>
+                            <span class="status-badge" x-show="p.sync && p.sync !== 'ok' && p.sync !== 'missing'"
+                                  :style="arollSyncStyle(p.sync)" x-text="arollSyncLabel(p.sync)"></span>
+                            <span x-show="p.cutout_slot_id" style="font-size:9px;color:#a5f3fc">✂️ 在庫</span>
+                            <span x-show="p.background_id" style="font-size:9px;color:#64748b"
+                                  :title="p.background_id">🏞️</span>
+                          </div>
+                        </td>
+                        <td style="padding:6px 4px">
+                          <img x-show="arollRowThumb(p)" :src="arollRowThumb(p)" loading="lazy"
+                               style="width:64px;aspect-ratio:16/9;object-fit:cover;border-radius:3px;border:1px solid #334155">
+                          <span x-show="!arollRowThumb(p)" style="font-size:9px;color:#4b5563">—</span>
+                        </td>
+                      </tr>
+                    </template>
+                  </tbody>
+                </table>
+              </div>
+              <div x-show="!arollRowsFiltered.length" class="empty" style="padding:24px">該当する行はありません</div>
             </div>
 
           </div>
@@ -4663,6 +4732,31 @@
           <div style="border-top:1px solid #2d3748;padding-top:10px;display:flex;flex-direction:column;gap:6px">
             <div style="font-size:10px;color:#64748b;text-transform:uppercase;letter-spacing:0.06em">この行の絵を決める</div>
 
+            <!-- 映すキャラ。先頭＝話者でバックエンドが固定するので外せない。
+                 2人目（対面カット・リアクション）だけ足したり外したりできる。 -->
+            <div style="display:flex;gap:4px;flex-wrap:wrap;align-items:center">
+              <span x-show="!(arollPanelOf(qaDetail.line_id).characters||[]).length"
+                    style="font-size:10px;color:#93c5fd"
+                    title="話者のキャラが『画像を使わない』設定です。キャラ画像は生成せず背景だけのコマになります">
+                🎙 ナレーション（背景のみ）
+              </span>
+              <template x-for="(cid, ci) in (arollPanelOf(qaDetail.line_id).characters||[])" :key="cid">
+                <span style="font-size:10px;border-radius:99px;padding:2px 8px;background:#1e1040;color:#c4b5fd"
+                      :style="ci === 0 ? 'cursor:default' : 'cursor:pointer'"
+                      :title="ci === 0 ? '話者なので外せません（' + cid + '）' : 'クリックで外す: ' + cid"
+                      @click="ci === 0 || arollRemoveChar(arollPanelOf(qaDetail.line_id), cid)"
+                      x-text="(charas.find(c => c.char_id === cid)?.name || cid) + (ci === 0 ? ' 🔒' : ' ×')"></span>
+              </template>
+              <select x-show="(arollPanelOf(qaDetail.line_id).characters||[]).length === 1"
+                      style="font-size:10px;padding:2px;width:auto"
+                      @change="arollAddChar(arollPanelOf(qaDetail.line_id), $event.target.value); $event.target.value = ''">
+                <option value="">＋キャラ</option>
+                <template x-for="c in charas.filter(c => !(arollPanelOf(qaDetail.line_id).characters||[]).includes(c.char_id) && arollCanShowChar(c))" :key="c.char_id">
+                  <option :value="c.char_id" x-text="c.name"></option>
+                </template>
+              </select>
+            </div>
+
             <!-- 表情 / ショット / アングル / ポーズ -->
             <div style="display:flex;gap:4px;flex-wrap:wrap">
               <template x-for="axis in [['emotion','表情'],['shot','ショット'],['angle','アングル'],['pose','ポーズ(任意)']]" :key="axis[0]">
@@ -4683,7 +4777,7 @@
             <!-- プロンプト -->
             <textarea rows="3" style="width:100%;font-size:10px;font-family:monospace"
                       :value="arollPanelOf(qaDetail.line_id).prompt"
-                      placeholder="（プロンプト未生成 — ①を実行するか手入力）"
+                      placeholder="（プロンプト未生成 — 下ごしらえで作るか手入力）"
                       @change="arollSavePrompt(arollPanelOf(qaDetail.line_id), $event.target.value)"></textarea>
             <div style="font-size:9px;color:#4b5563">英語で書いてください（画像モデルに渡すため）。</div>
 
@@ -4706,6 +4800,39 @@
                       :disabled="arollRunning || arollLineBusy || (arollPanelOf(qaDetail.line_id).characters||[]).length !== 1"
                       @click="arollTogglePicker(arollPanelOf(qaDetail.line_id))"
                       title="在庫から選び直す（無料）">🔀 選び直す</button>
+              <button class="btn btn-ghost btn-sm" style="flex:1 1 100px"
+                      :disabled="arollRunning || arollLineBusy || !arollPanelOf(qaDetail.line_id).prompt"
+                      @click="arollGenerateLineFresh(arollPanelOf(qaDetail.line_id))"
+                      title="在庫を使わず必ず新しく課金生成する">🎲 新しく生成</button>
+            </div>
+
+            <!-- 背景（この行に敷く1枚）。コマ一覧から撤去したのでここが唯一の口 -->
+            <div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap">
+              <img x-show="arollPanelOf(qaDetail.line_id).background_id"
+                   :src="arollBgImageUrl(arollPanelOf(qaDetail.line_id).background_id)"
+                   style="width:48px;height:27px;object-fit:cover;border-radius:3px;border:1px solid #334155">
+              <span style="font-size:10px;color:#64748b;flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap"
+                    x-text="arollPanelOf(qaDetail.line_id).background_id || '（背景未割当）'"></span>
+              <button class="btn btn-ghost btn-sm" style="font-size:10px;padding:2px 6px"
+                      @click="arollToggleBgPicker(arollPanelOf(qaDetail.line_id))"
+                      :disabled="arollRunning">🔀 背景</button>
+            </div>
+            <div x-show="arollBgPickerFor === qaDetail.line_id"
+                 style="background:#0f172a;border:1px solid #374151;border-radius:8px;padding:8px;max-height:240px;overflow-y:auto">
+              <div style="font-size:10px;color:#94a3b8;margin-bottom:6px">背景アーカイブから選ぶ（クリックで即差替・無料）</div>
+              <div x-show="arollBgPickerBusy" style="font-size:11px;color:#64748b">読み込み中…</div>
+              <div x-show="!arollBgPickerBusy && !arollBgPickerItems.length" style="font-size:11px;color:#64748b">該当する背景がありません</div>
+              <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:6px">
+                <template x-for="item in arollBgPickerItems" :key="item.bg_id">
+                  <div style="cursor:pointer" @click="arollSetBackground(arollPanelOf(qaDetail.line_id), item.bg_id)">
+                    <img :src="arollBgImageUrl(item.bg_id)"
+                         style="width:100%;aspect-ratio:16/9;object-fit:cover;border-radius:4px"
+                         :style="item.bg_id === arollPanelOf(qaDetail.line_id).background_id ? 'outline:2px solid #7c3aed' : ''">
+                    <div style="font-size:9px;color:#64748b;text-align:center;overflow:hidden;text-overflow:ellipsis;white-space:nowrap"
+                         x-text="item.bg_id"></div>
+                  </div>
+                </template>
+              </div>
             </div>
 
             <!-- 採用と決めた絵だけを在庫へ積む（生成の瞬間ではなく承認の瞬間に積む） -->
@@ -5405,6 +5532,14 @@ function app() {
     qaBusy: false,
     qaFilter: 'all',              // all | blocking | advisory | code:<CODE>
     qaDetail: null,               // 詳細ビューで開いているパネル
+    // Aロールタブの工程セクション開閉。**未設定なら進捗から自動で決める**（済んだ工程は畳む）。
+    // 手で開閉した分だけここに記録し、以後はその意思を尊重する（勝手に閉じ直さない）。
+    arollSecManual: {},
+    arollShowLegacyExport: false,  // 旧・手作業用の書き出し（既定で畳む）
+    arollChecked: {},              // コマ一覧のチェック状態 {line_id: true}
+    arollRowFilter: 'all',
+    arollBulkBusy: false,
+    arollBulkMsg: '',
     qaVersion: 0,                 // 画像のキャッシュバスター
 
     // 🖥️ ホスト工程ブリッジ（host_worker.py・AROLL_TAB_REDESIGN_PLAN.md Phase 0）
@@ -8711,14 +8846,204 @@ function app() {
     get arollJob() { return this.arollStatus?.job || {}; },
     // 対象セレクトに応じたバッチ対象枚数（概算コスト表示用。プロンプトの無い行は対象外）
     get arollBatchTargetCount() {
-      const panels = this.arollPanels.filter(p => (p.prompt || '').trim());
+      // ⚠️ ナレーション行（映すキャラが居ない）は課金生成の対象外。
+      //    バックエンドの aroll_manager.select_targets と条件を揃える
+      //    （ここだけ多く数えると「押したのに枚数が違う」になる）。
+      const panels = this.arollPanels.filter(
+        p => (p.prompt || '').trim() && (p.characters || []).length);
       if (this.arollTarget === 'all') return panels.length;
       if (this.arollTarget === 'failed') return panels.filter(p => p.status === 'failed').length;
       return panels.filter(p => p.status !== 'done').length;
     },
+    // 在庫で賄える行を引いた「実際に課金される枚数」。試算前は null。
+    // ★先に高い数字を見せて後から安い数字を出すのは順序が逆だった（§1-5）。
+    get arollBillableCount() {
+      if (!this.cutoutPlan || this.arollTarget !== 'missing') return null;
+      return Math.max(0, this.arollBatchTargetCount - (this.cutoutPlan.from_stock || 0));
+    },
     arollImageUrl(p) {
       return `${this.arollApiBase}/image/${p.image}?v=${this.arollImgVersion}`;
     },
+    // ── コマ一覧（表）と一括操作（Phase 4） ─────────────────────────
+    get arollRowsFiltered() {
+      const ps = this.arollPanels;
+      switch (this.arollRowFilter) {
+        case 'ungenerated': return ps.filter(p => p.status !== 'done' && !p.cutout_slot_id);
+        case 'unapproved':  return ps.filter(p => p.status === 'done' && p.image && !p.image_approved_at);
+        case 'narration':   return ps.filter(p => !(p.characters || []).length);
+        case 'drift':       return ps.filter(p => p.sync && p.sync !== 'ok');
+        default:            return ps;
+      }
+    },
+    arollRowFilterCount(f) {
+      const prev = this.arollRowFilter;
+      this.arollRowFilter = f;
+      const n = this.arollRowsFiltered.length;
+      this.arollRowFilter = prev;
+      return n;
+    },
+    // 選択中の line_id。⚠️ ここが空なら一括操作は押せない（`line_ids: []` は「対象ゼロ」）
+    get arollSelected() {
+      return this.arollPanels.filter(p => this.arollChecked[p.line_id]).map(p => p.line_id);
+    },
+    get arollAllChecked() {
+      const rows = this.arollRowsFiltered;
+      return rows.length > 0 && rows.every(p => this.arollChecked[p.line_id]);
+    },
+    arollToggleAll(on) {
+      // 絞り込み中は**見えている行だけ**を対象にする（見えない行を巻き込まない）
+      for (const p of this.arollRowsFiltered) this.arollChecked[p.line_id] = on;
+    },
+    arollClearChecked() { this.arollChecked = {}; },
+    // 表の小サムネ。割当済みの切り抜き → 生成した絵、の順（QAのfallbackと同じ供給元）
+    arollRowThumb(p) {
+      if (p.cutout_slot_id) {
+        const cid = p.cutout_char_id || (p.characters || [])[0];
+        if (cid) return `${FAPI}/characters/${cid}/panel_library/cutout/${p.cutout_slot_id}.png`;
+      }
+      return p.image ? this.arollImageUrl(p) : '';
+    },
+    // 行をクリック → 1行の詳細（QAモーダル）。編集UIはモーダル1箇所に集約した（§4-a）
+    arollOpenRow(lineId) {
+      const q = this.qaMerged.find(x => x.line_id === lineId);
+      if (q) this.qaDetail = q;
+    },
+    async arollBulkApprove() {
+      const ids = this.arollSelected;
+      if (!ids.length) return;
+      // §13-4「画像の承認は一括だけ確認を挟む」。arollApproveImages は明示idsだと
+      // 確認しない（1行ずつ押す用途のため正しい）ので、一括のこちら側で挟む。
+      if (!confirm(`選択した ${ids.length}行 を承認し、キャラ所有ライブラリへ取り込みます。
+`
+          + '無料です（画像は生成しません）。続行しますか？')) return;
+      this.arollBulkBusy = true;
+      try {
+        await this.arollApproveImages(ids);
+        this.arollBulkMsg = `✔ ${ids.length}行を承認しました`;
+      } finally { this.arollBulkBusy = false; }
+    },
+    async arollBulkRegenerate() {
+      const ids = this.arollSelected;
+      if (!ids.length) return;
+      // 課金＋上書き＋組み直しが要る。まとめて走るので確認は必須
+      if (!confirm(`選択した ${ids.length}行 を生成し直します（概算 $${(ids.length * 0.04).toFixed(2)}・実課金）。
+既存の絵は上書きされ、Photoshopでの組み直しが必要になります。続行しますか？`)) return;
+      this.arollBulkBusy = true;
+      this.arollBulkMsg = '';
+      try {
+        const r = await fetch(`${this.arollApiBase}/generate`, {
+          method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ line_ids: ids, only_missing: false,
+                                 allow_paid_fallback: this.arollPaidFallback,
+                                 aspect: this.arollAspect, style: this.arollStyle }),
+        });
+        if (!r.ok) { const d = await r.json().catch(() => ({})); alert('エラー: ' + (d.detail || r.status)); return; }
+        this.arollBulkMsg = `🎬 ${ids.length}行の生成を開始しました`;
+        await this.pollArollStatus();
+      } finally { this.arollBulkBusy = false; }
+    },
+    async arollBulkBackground() {
+      const ids = this.arollSelected;
+      if (!ids.length) return;
+      this.arollBulkBusy = true;
+      this.arollBulkMsg = '';
+      try {
+        const r = await fetch(`${this.arollApiBase}/backgrounds/auto_assign`, {
+          method: 'POST', headers: { 'Content-Type': 'application/json' },
+          // only_missing:false = 選んだ行は手動選択も含めて割り当て直す
+          body: JSON.stringify({ only_missing: false, line_ids: ids }),
+        });
+        const d = await r.json().catch(() => ({}));
+        if (!r.ok) { alert('エラー: ' + (d.detail || r.status)); return; }
+        this.arollBulkMsg = `🏞️ ${d.assigned ?? 0}行に背景を割り当てました`
+          + ((d.unmatched ?? 0) ? `（候補なし ${d.unmatched}行）` : '');
+        await this.loadArollManifest();
+      } finally { this.arollBulkBusy = false; }
+    },
+    async arollBulkSlot(axis, value) {
+      const ids = this.arollSelected;
+      if (!ids.length || !value) return;
+      this.arollBulkBusy = true;
+      this.arollBulkMsg = '';
+      try {
+        // 1行ずつ既存の行APIを叩く（一括用の口を増やさない＝挙動が枝分かれしない）
+        for (const id of ids) {
+          const p = this.arollPanels.find(x => x.line_id === id);
+          if (p) await this.arollSetSlot(p, axis, value);
+        }
+        this.arollBulkMsg = `🎭 ${ids.length}行の${axis}を変更しました`;
+        await this.loadArollManifest();
+      } finally { this.arollBulkBusy = false; }
+    },
+
+    // ── 工程セクションの開閉（Phase 3） ─────────────────────────────
+    // 「済んだ工程は畳む」を既定にしつつ、手で開いたものは開いたままにする。
+    arollSecIsOpen(key) {
+      if (key in this.arollSecManual) return this.arollSecManual[key];
+      return !this.arollSecDone(key);
+    },
+    arollSecToggle(key) { this.arollSecManual[key] = !this.arollSecIsOpen(key); },
+    // その工程が「もう見なくてよい」か。畳む判断と ✓ 表示の両方がこれを見る。
+    arollSecDone(key) {
+      switch (key) {
+        case 'prep':    return this.arollPrepDone;
+        case 'draw':    return this.arollDrawDone;
+        case 'approve': return !!this.arollManifest && !this.arollApprovalCounts.pending;
+        // 組む/見る は「終わり」を機械で判断できない（目視が要る）ので畳まない
+        default:        return false;
+      }
+    },
+    // プロンプトが全行そろい、背景も割り当て済みで、台本ともズレていない
+    get arollPrepDone() {
+      if (!this.arollManifest) return false;
+      const ps = this.arollPanels;
+      if (!ps.length) return false;
+      return ps.every(p => (p.prompt || '').trim())
+        && ps.every(p => p.background_id || !(p.characters || []).length)
+        && !this.arollDriftCount;
+    },
+    // 生成が要る行が残っていない（在庫割当・生成の両方が終わっている）
+    get arollDrawDone() {
+      if (!this.arollManifest) return false;
+      const ps = this.arollPanels.filter(p => (p.characters || []).length);
+      return ps.length > 0 && ps.every(p => p.status === 'done' || p.cutout_slot_id);
+    },
+    // 見出しの右端に出す一行サマリ。畳んだままでも進捗が分かるようにする
+    arollSecSummary(key) {
+      const c = this.arollCounts, a = this.arollApprovalCounts;
+      switch (key) {
+        case 'prep': {
+          if (!this.arollManifest) return 'まだ何もありません';
+          const noPrompt = this.arollPanels.filter(p => !(p.prompt || '').trim()).length;
+          const noBg = this.arollPanels.filter(p => !p.background_id && (p.characters || []).length).length;
+          const bits = [];
+          if (noPrompt) bits.push(`プロンプト未 ${noPrompt}`);
+          if (noBg) bits.push(`背景未 ${noBg}`);
+          if (this.arollDriftCount) bits.push(`台本とズレ ${this.arollDriftCount}`);
+          return bits.length ? bits.join(' / ') : '✔ そろっています';
+        }
+        case 'draw': {
+          if (!this.arollManifest) return '';
+          const need = this.cutoutPlan ? this.cutoutPlan.need_generation : null;
+          const base = `生成済み ${c.done} / ${c.total}`;
+          return need === null ? base
+            : `${base}　（在庫で ${this.cutoutPlan.from_stock} 行・要生成 ${need} 行）`;
+        }
+        case 'approve':
+          return a.pending ? `未承認 ${a.pending} 件` : '✔ すべて承認済み';
+        case 'build':
+          if (!this.psassistAlive) return 'ホスト工程が停止中';
+          return this.psassistExportTargets.length
+            ? `納品PNGが古い ${this.psassistExportTargets.length} 枚` : '✔ 納品PNGは最新';
+        case 'review': {
+          if (!this.qa) return '未検査';
+          const q = this.qaCounts;
+          return `要対応 ${q.blocking} / 助言 ${q.advisory} / 問題なし ${q.clean}`;
+        }
+        default: return '';
+      }
+    },
+
     async refreshArollTab() {
       if (!this.currentProject) return;
       this.arollMsg = '';
@@ -8730,6 +9055,9 @@ function app() {
       await this.loadArollManifest();
       await this.loadArollSync();
       await this.pollArollStatus();
+      // ★在庫の試算をここで済ませる。押させてから安い数字を出すのは順序が逆で、
+      //   先に「在庫で賄えない分だけの金額」を見せるべき（§3-a）。
+      if (this.arollManifest) await this.loadCutoutPlan();
       await this.loadPsassistQa();
       await this.loadPsassistWorker();   // タブを開いた時だけ（話数を切り替えるたびには叩かない）
       await this.loadPsassistJobs();
