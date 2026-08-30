@@ -28,7 +28,7 @@ CHARACTER_STYLES = ["comic", "realistic", "deformed"]
 
 # character.json の現行スキーマ版。書き込み時に必ずこの値へスタンプし直す（旧ラベルのドリフトを断つ）。
 # 1.3.0: uses_images を追加（画像を使わない＝声だけのキャラの明示。追加のみ・後方互換）
-SCHEMA_VERSION = "1.3.0"
+SCHEMA_VERSION = "1.4.0"
 
 _ID_RE = re.compile(r"^[a-z0-9][a-z0-9_-]{0,63}$")
 
@@ -81,6 +81,15 @@ def normalize_character(char: dict) -> dict:
         char["uses_images"] = bool((char.get("appearance_prompt") or "").strip())
     else:
         char["uses_images"] = bool(char["uses_images"])
+    # 声だけのキャラが「絵は誰から引き継ぐか」を1つだけ指す（1.4.0で追加）。
+    # 空文字＝引き継がない＝ナレーター（キャラ無し・背景のみのコマになる）。
+    # ⚠️ 「声用のキャラ」と「絵の持ち主」を繋ぐ線であって、外見の二重定義ではない。
+    #    これが無いと、声を変えるために作ったキャラで生成が走り、同じ人物の
+    #    並行在庫ができる（CHARACTER_CUTOUT_PLAN.md §15）。
+    char.setdefault("image_source_char_id", "")
+    char["image_source_char_id"] = (char.get("image_source_char_id") or "").strip()
+    if char["image_source_char_id"] == char.get("char_id"):
+        char["image_source_char_id"] = ""   # 自分自身は指せない
     char.setdefault("voice", {"engine": "", "voice_id": ""})
     char.setdefault("provider", "comfy")
     char.setdefault("styles", {s: {"seed": None, "loras": [], "extra_prompt": ""} for s in CHARACTER_STYLES})
@@ -125,6 +134,8 @@ def list_characters() -> list[dict]:
             # 画像を使う意思（キャラ設定の憲法）。False なら画像生成の全経路で弾く。
             # has_appearance と両方返すのは、UIが「なぜ生成できないか」を出し分けるため
             "uses_images": bool(c.get("uses_images")),
+            # 声だけのキャラが絵を借りる先（空＝ナレーター）。UIの表示・編集用
+            "image_source_char_id": c.get("image_source_char_id", ""),
             "references": refs,
             # 参照画像のラベル overlay（存在するファイル分のみ）。フロントは charaRefLabel(fn) で引く。
             "reference_meta": {fn: meta.get(fn, {}) for fn in refs},

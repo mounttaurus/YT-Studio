@@ -1668,6 +1668,26 @@
                               ⚠ このキャラは声が未割当です。<b>この役のセリフは生成されません</b>。
                               <div style="font-size:10px;color:#64748b;margin-top:2px">🎭キャラタブでキャラに声を割り当ててください</div>
                             </div>
+                            <!-- 声だけのキャラを配役に置いた時、Aロールで何が起きるかを
+                                 選んだその場で出す。ここが見えないと「声を試すつもりで
+                                 別キャラを選んだ」ことに気づけない。 -->
+                            <template x-if="sp.character_id && !arollCanShowChar(charas.find(c => c.char_id === sp.character_id))">
+                              <div style="font-size:11px;margin-top:6px;padding:6px 8px;background:#0f172a;border-radius:4px;line-height:1.7">
+                                <template x-if="ttsSpeakerImageSource(sp)">
+                                  <span style="color:#86efac">
+                                    🎨 このキャラは声のみです。Aロールの絵は
+                                    <b x-text="ttsSpeakerImageSource(sp)"></b> から引き継がれます。
+                                  </span>
+                                </template>
+                                <template x-if="!ttsSpeakerImageSource(sp)">
+                                  <span style="color:#93c5fd">
+                                    🎙 このキャラは声のみで、絵の引き継ぎ先が未設定です。
+                                    <b>この役のコマはナレーション（背景のみ）になります。</b>
+                                    <span style="color:#64748b">同じ人物の別の声なら、🎭キャラタブで引き継ぎ先を設定してください。</span>
+                                  </span>
+                                </template>
+                              </div>
+                            </template>
                             <div style="font-size:11px;color:#fbbf24;margin-top:6px" x-show="!sp.character_id">
                               キャラ未割当 → <b>この役のセリフは生成されません</b>。
                               <div style="font-size:10px;color:#64748b;margin-top:2px">🎭キャラタブでキャラに声を割当 → ここで選択</div>
@@ -2807,6 +2827,30 @@
             <div style="font-size:10px;color:#64748b;margin:2px 0 0">
               ONにすると画像生成の全経路（🎭生成・📚キャラ在庫・🖼️Aロールの在庫化）から外れます。
               ナレーターや、既存キャラに声だけ変えて当てたバリアント向け。外見プロンプトは不要になります。
+            </div>
+
+            <!-- 声だけのキャラが「絵は誰から引き継ぐか」を宣言する。
+                 これが無いと、声を変えるために作ったキャラで生成が走り、同じ人物の
+                 並行在庫ができる（配役は声で選び、絵は引き継ぎ先から取る）。
+                 未選択＝ナレーター＝そのコマは背景のみになる。 -->
+            <div x-show="!chara.uses_images" style="margin:10px 0 0;padding:10px;background:#0f172a;border-radius:6px">
+              <label style="font-size:12px;color:#cbd5e1;display:block;margin-bottom:4px">
+                🎨 絵はこのキャラから引き継ぐ
+              </label>
+              <select x-model="chara.image_source_char_id" style="width:100%">
+                <option value="">（引き継がない ＝ ナレーション・背景のみのコマになる）</option>
+                <template x-for="c in charas.filter(c => c.uses_images && c.char_id !== chara.char_id)" :key="c.char_id">
+                  <option :value="c.char_id" x-text="c.name"></option>
+                </template>
+              </select>
+              <div style="font-size:10px;color:#64748b;margin-top:4px;line-height:1.7">
+                <b>声だけ差し替えたキャラ</b>（同じ人物の別の声）は、ここで<b>本体のキャラ</b>を指してください。
+                配役はこのキャラ（＝声）のまま、Aロールは引き継ぎ先の外見・参照画像・在庫を使います。
+                <b>ナレーターなら未選択のまま</b>にします。
+                <span style="color:#4b5563">引き継ぎは1段だけ（引き継ぎ先がさらに引き継ぐ設定は辿りません）。</span>
+              </div>
+              <div x-show="chara.image_source_char_id" style="font-size:11px;color:#86efac;margin-top:6px"
+                   x-text="'この役のコマには「' + (charas.find(c => c.char_id === chara.image_source_char_id)?.name || chara.image_source_char_id) + '」が描かれます'"></div>
             </div>
             <template x-if="chara.uses_images">
               <div>
@@ -7881,6 +7925,8 @@ function app() {
         description: this.chara.description,
         appearance_prompt: this.chara.appearance_prompt,
         uses_images: !!this.chara.uses_images,
+        // 画像を使うキャラでは意味を持たないので送らない（残骸を作らない）
+        image_source_char_id: this.chara.uses_images ? '' : (this.chara.image_source_char_id || ''),
         caption: this.chara.caption || '',
         voice: this.chara.voice || { engine: 'irodori', voice_id: '' },
       };
@@ -8303,6 +8349,15 @@ function app() {
       if (!c.has_appearance) return '外見(appearance_prompt)が未設定';
       if (!(c.references || []).length) return 'リファレンス画像が無い（生成のたびに別人になります）';
       return '';
+    },
+    // 配役の話者について「絵の引き継ぎ先の表示名」を返す（無ければ空＝ナレーション）。
+    // ⚠️ 判定の本籍はバックエンドの aroll_manager.resolve_image_char。ここは表示用の写しで、
+    //    同じく**1段だけ**辿る（連鎖を辿ると答えがバックエンドと食い違う）。
+    ttsSpeakerImageSource(sp) {
+      const c = this.charas.find(x => x.char_id === sp.character_id);
+      if (!c || c.uses_images) return '';
+      const src = this.charas.find(x => x.char_id === c.image_source_char_id);
+      return (src && src.uses_images) ? src.name : '';
     },
     // Aロールで「映すキャラ」として選べるか。
     // ⚠️ charImageBlockReason とは基準が違う（参照画像の有無を見ない）。Aロールは

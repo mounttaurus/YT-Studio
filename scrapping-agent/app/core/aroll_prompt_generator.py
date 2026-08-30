@@ -363,7 +363,10 @@ async def generate_section_prompts(
     for ln in lines:
         lid = ln.get("id")
         speaker = speaker_map.get(ln.get("speaker_id"), {})
-        speaker_char = speaker.get("character_id") or ""
+        # 実際に描くキャラ（声だけキャラなら引き継ぎ先。空文字＝ナレーション）。
+        # 配役の character_id をそのまま使わない ── 声用のキャラで生成が走る
+        # （aroll_manager.resolve_image_char が本籍）。
+        speaker_char = speaker.get("image_char_id") or ""
         p = by_line.get(lid)
         if p is None:
             warnings.append(f"[{section}] LLM応答に {lid} が無いためスキップ")

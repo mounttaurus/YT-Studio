@@ -163,9 +163,59 @@ def get_speaker_map(project_id: str) -> dict[str, dict]:
     pj = project_manager._read_json(pj_dir / "project.json")
     speakers = ((pj.get("config") or {}).get("tts") or {}).get("speakers") or []
     return {
-        s["id"]: {"name": s.get("name", ""), "character_id": s.get("character_id") or ""}
+        s["id"]: {
+            "name": s.get("name", ""),
+            "character_id": s.get("character_id") or "",
+            # 派生値: 実際に描く時に使うキャラ（声だけキャラなら引き継ぎ先）。
+            # ここで一度だけ解決し、全経路が同じ答えを見るようにする。
+            # 空文字 = ナレーション（キャラ無し・背景のみ）。
+            "image_char_id": resolve_image_char(s.get("character_id") or ""),
+        }
         for s in speakers if s.get("id")
     }
+
+
+def is_imageable(char_id: str) -> bool:
+    """そのキャラをコマに映してよいか（＝画像を使う設定か）。
+
+    ⚠️ **見るのは ``uses_images`` だけ。** 参照画像の有無は見ない ── Aロールは
+    「参照が無くても生成を止めない」で決着済み（``CHARACTER_CUTOUT_PLAN.md`` §15-3④）。
+    ここで参照必須にすると台本の途中で話数が完走しなくなる。
+
+    ⚠️ **既定は True。** 旧データ（``uses_images`` を持たない）は従来どおり描ける扱い。
+    """
+    if not char_id:
+        return False
+    c = character_manager.read_character(char_id)
+    return bool(c) and c.get("uses_images", True)
+
+
+def resolve_image_char(char_id: str) -> str:
+    """その話者を**実際に描く時に使うキャラ**を返す。描けないなら空文字。
+
+    声を差し替えるために作ったキャラ（`uses_images:false`）は、
+    ``image_source_char_id`` で「絵はこのキャラから引き継ぐ」と宣言できる。
+    配役は声で選び、絵は引き継ぎ先から取る ── これで**同じ人物の並行在庫**を防ぐ
+    （``CHARACTER_CUTOUT_PLAN.md`` §15 の目的）。
+
+    ⚠️ **辿るのは1段だけ。** 連鎖を許すと循環（A→B→A）と「結局誰の絵か
+    分からない」を生む。引き継ぎ先が自身も描けないなら、そこで諦めて空文字を返す。
+
+    戻り値が空文字 = ナレーション（キャラ無し・背景のみのコマ）。
+    引き継ぎ先を持たない声だけキャラ＝ナレーターは自然にこちらへ落ちる。
+    """
+    if not char_id:
+        return ""
+    c = character_manager.read_character(char_id)
+    if not c:
+        return ""
+    if c.get("uses_images", True):
+        return char_id
+    src = (c.get("image_source_char_id") or "").strip()
+    if not src or src == char_id:
+        return ""
+    # 1段だけ辿る。引き継ぎ先は「描けるキャラ」でなければならない
+    return src if is_imageable(src) else ""
 
 
 def get_cast_characters(project_id: str) -> dict[str, dict]:
@@ -185,13 +235,15 @@ def get_cast_characters(project_id: str) -> dict[str, dict]:
         cid = sp.get("character_id")
         if not cid or cid in chars:
             continue
-        c = character_manager.read_character(cid)
+        # 声だけのキャラは引き継ぎ先へ解決する（無ければナレーション＝候補に出さない）
+        drawn = resolve_image_char(cid)
+        if not drawn or drawn in chars:
+            continue
+        c = character_manager.read_character(drawn)
         if c is None:
             continue
-        if not c.get("uses_images", True):
-            continue  # 声だけのキャラ。除外の告知は cast_warnings が担当
-        chars[cid] = {
-            "name": c.get("name", cid),
+        chars[drawn] = {
+            "name": c.get("name", drawn),
             "appearance_prompt": c.get("appearance_prompt", ""),
         }
     return chars
@@ -212,10 +264,23 @@ def cast_warnings(project_id: str) -> list[str]:
         c = character_manager.read_character(cid)
         if c is None:
             out.append(f"話者 {sid} のキャラ {cid} が見つかりません")
-        elif not c.get("uses_images", True):
+            continue
+        if c.get("uses_images", True):
+            continue  # 正常な役は黙っている
+        name = c.get("name", cid)
+        drawn = resolve_image_char(cid)
+        if drawn:
+            # 引き継ぎは意図された設定なので「警告」ではなく事実の報告にする。
+            # ここを警告口調にすると、正しく設定した人が毎回不安になる。
+            src = character_manager.read_character(drawn) or {}
             out.append(
-                f"話者 {sid} のキャラ「{c.get('name', cid)}」({cid}) は"
-                "『画像を使わない』設定です。この役のコマはナレーション扱い"
+                f"話者 {sid}「{name}」は声だけのキャラです。"
+                f"絵は「{src.get('name', drawn)}」({drawn}) から引き継ぎます"
+            )
+        else:
+            out.append(
+                f"話者 {sid} のキャラ「{name}」({cid}) は『画像を使わない』設定で、"
+                "絵の引き継ぎ先も未設定です。この役のコマはナレーション扱い"
                 "（キャラ無し・背景のみ）になります"
             )
     return out
@@ -262,8 +327,13 @@ def build_or_update_manifest(
         else:
             prompt, source = keep_prompt, keep_source or ("llm" if keep_prompt else "")
             characters = prev.get("characters") or new.get("characters") or []
-            if not characters and speaker.get("character_id"):
-                characters = [speaker["character_id"]]
+            # ⚠️ ここは話者へのフォールバック。**必ず is_imageable を通す。**
+            # 素通しにすると、声だけのキャラが配役に居る役で
+            # get_cast_characters の除外を迂回して characters に入り、
+            # 参照0枚のまま課金生成される（2026-08-30 に塞いだ穴）。
+            drawn = resolve_image_char(speaker.get("character_id", ""))
+            if not characters and drawn:
+                characters = [drawn]
             prompt_text_hash = prev.get("prompt_text_hash", "")
             slot = prev.get("slot")
             slot_source = prev.get("slot_source") or "none"

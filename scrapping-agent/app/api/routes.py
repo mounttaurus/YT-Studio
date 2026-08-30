@@ -1344,6 +1344,9 @@ class CharacterPatchRequest(BaseModel):
     voice: Optional[dict] = None   # {engine, voice_id} 指定時は丸ごと置換
     styles: Optional[dict] = None  # {style: {seed, loras, extra_prompt}} 部分更新
     uses_images: Optional[bool] = None  # 画像を使うキャラか（Falseで画像生成の全経路から外れる）
+    # 声だけのキャラが「絵はこのキャラから引き継ぐ」と宣言する先（空＝ナレーター）。
+    # 配役は声で選び、絵は引き継ぎ先から取る＝同じ人物の並行在庫を防ぐ
+    image_source_char_id: Optional[str] = None
 
 
 class CharacterGenerateRequest(BaseModel):
@@ -1397,7 +1400,8 @@ async def patch_character(char_id: str, req: CharacterPatchRequest):
     char = character_manager.read_character(char_id)
     if char is None:
         raise HTTPException(status_code=404, detail=f"character not found: {char_id}")
-    for field in ("name", "description", "appearance_prompt", "provider", "caption", "uses_images"):
+    for field in ("name", "description", "appearance_prompt", "provider", "caption",
+                  "uses_images", "image_source_char_id"):
         v = getattr(req, field)
         if v is not None:
             char[field] = v
