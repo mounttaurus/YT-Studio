@@ -2407,12 +2407,37 @@
             </div>
 
             <!-- ⑤ 合成チェック（PS-Assist の qa_report.json を読む） -->
-            <div class="card" x-show="arollManifest"
+            <!-- psassistAvailable=false（=shared/_psassist/worker.json が一度も無い）は
+                 psassist/ を使わない環境（公開パッケージ等）。その時はカードごと隠す
+                 （AROLL_TAB_REDESIGN_PLAN.md §1-8・Phase 0-e）。 -->
+            <div class="card" x-show="arollManifest && psassistAvailable"
                  :style="qaCounts.blocking ? 'border-color:#7f1d1d' : ''">
               <h2>🔍 合成チェック
                 <span style="font-weight:400;text-transform:none;color:#4b5563;font-size:11px"
                       x-text="`台本 ${qaCounts.total} 行 — 未生成・未合成・検査結果を1つの一覧で追う`"></span>
               </h2>
+
+              <!-- 🖥️ ホスト工程（host_worker.py）の状態 -->
+              <div style="margin-top:8px">
+                <template x-if="psassistAlive">
+                  <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
+                    <button class="btn btn-primary btn-sm"
+                            :disabled="psassistJobBusy || psassistLatestJob?.status === 'running' || !psassistExportTargets.length"
+                            @click="psassistRunExportJob()"
+                            x-text="psassistLatestJob?.status === 'running' ? '🖼 更新中…' : `🖼 納品PNGを更新（${psassistExportTargets.length}枚）`"></button>
+                    <span x-show="!psassistExportTargets.length" style="font-size:11px;color:#4b5563">古い／未書き出しの行はありません</span>
+                    <span x-show="psassistLatestJob && psassistLatestJob.status !== 'running'"
+                          style="font-size:11px;color:#94a3b8"
+                          x-text="psassistLatestJob.status === 'done' ? `✔ 直近: 成功${psassistLatestJob.result?.exported ?? 0} / 失敗${psassistLatestJob.result?.failed ?? 0}` : `✘ 直近のジョブが失敗しました`"></span>
+                  </div>
+                </template>
+                <template x-if="!psassistAlive">
+                  <div style="font-size:11px;color:#94a3b8;line-height:1.7">
+                    ホスト工程が動いていません。次を実行すると、ここにボタンが出ます。
+                    <div style="margin-top:4px;padding:8px 10px;background:#0f172a;border-radius:6px;font-family:monospace;font-size:11px;color:#a5b4fc;user-select:all;overflow-x:auto">python psassist/scripts/host_worker.py</div>
+                  </div>
+                </template>
+              </div>
 
               <!-- 未検査（一覧は出したまま案内だけ添える。検査前でも進捗は見えるべき） -->
               <div x-show="!qa" style="font-size:11px;color:#94a3b8;margin-top:8px;line-height:1.8">
@@ -4519,6 +4544,10 @@
           <span style="font-size:10px;color:#4b5563">（← → キーでも移動）</span>
           <a x-show="qaDetail.export" :href="qaFileUrl(qaDetail.export)" target="_blank"
              class="btn btn-sm" style="text-decoration:none">🖼 納品PNG（1920×1080）</a>
+          <button class="btn btn-sm" x-show="psassistAlive"
+                  :disabled="psassistJobBusy || psassistLatestJob?.status === 'running'"
+                  @click="psassistRunExportJob([qaDetail.line_id])"
+                  title="この行だけ納品PNGを書き出し直す">🖼 この行だけ更新</button>
         </div>
       </div>
 
@@ -5318,6 +5347,12 @@ function app() {
     qaFilter: 'all',              // all | blocking | advisory | code:<CODE>
     qaDetail: null,               // 詳細ビューで開いているパネル
     qaVersion: 0,                 // 画像のキャッシュバスター
+
+    // 🖥️ ホスト工程ブリッジ（host_worker.py・AROLL_TAB_REDESIGN_PLAN.md Phase 0）
+    psassistWorker: null,         // GET /psassist/worker（プロジェクト非依存・タブを開いた時だけ叩く）
+    psassistJobs: [],             // その話数のジョブ状態（新しい順）
+    psassistJobBusy: false,       // ジョブ投入中
+    psassistJobPollTimer: null,   // ポーリング用 setInterval の id
 
     // 🎞️ 編集情報タブ
     editOk: false,
@@ -7982,6 +8017,66 @@ function app() {
     get qaBase() {
       return `/projects/${this.currentProject?.id}/episodes/${this.activeEpisodeNumber}/psassist`;
     },
+    // ─── 🖥️ ホスト工程ブリッジ（host_worker.py） ──────────────────
+    //
+    // psassistWorker が null のまま＝shared/_psassist/worker.json が一度も
+    // 書かれていない＝host_worker.py を使わない環境（公開パッケージ等）。
+    // その場合はカードごと隠す（psassistAvailable）。alive はワーカーが「今」
+    // 生きているか（心拍が60秒以内）で、止まっていてもカード自体は出す。
+    get psassistAvailable() { return !!this.psassistWorker; },
+    get psassistAlive() { return !!this.psassistWorker?.alive; },
+    async loadPsassistWorker() {
+      try {
+        const r = await fetch(`/psassist/worker`);
+        this.psassistWorker = r.ok ? await r.json() : null;
+      } catch { this.psassistWorker = null; }
+    },
+    // qaMerged から EXPORT_STALE / EXPORT_MISSING を持つ行だけを拾う
+    // （「納品PNGを更新」の対象＝もう計算材料はある。§3-a と同じ考え方）。
+    get psassistExportTargets() {
+      return this.qaMerged
+        .filter(p => (p.issues || []).some(i => i.code === 'EXPORT_STALE' || i.code === 'EXPORT_MISSING'))
+        .map(p => p.line_id);
+    },
+    get psassistLatestJob() { return this.psassistJobs[0] || null; },
+    async loadPsassistJobs() {
+      if (!this.currentProject || !this.activeEpisodeNumber) { this.psassistJobs = []; return; }
+      try {
+        const r = await fetch(`${this.qaBase}/jobs`);
+        this.psassistJobs = r.ok ? (await r.json()).jobs || [] : [];
+      } catch { this.psassistJobs = []; }
+    },
+    // 押した瞬間に1件投げてポーリング開始。lineIds省略時はEXPORT_STALE/MISSING全部。
+    async psassistRunExportJob(lineIds) {
+      const lines = lineIds && lineIds.length ? lineIds : this.psassistExportTargets;
+      if (!lines.length || this.psassistJobBusy) return;
+      this.psassistJobBusy = true;
+      try {
+        const r = await fetch(`${this.qaBase}/jobs`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ kind: 'export_png', lines }),
+        });
+        if (!r.ok) { const d = await r.json().catch(() => ({})); alert('ジョブ投入エラー: ' + (d.detail || r.status)); return; }
+        await this.loadPsassistJobs();
+        this.psassistPollJob();
+      } finally {
+        this.psassistJobBusy = false;
+      }
+    },
+    // 3秒間隔でポーリングし、running でなくなったら止めて合成チェックを再読込する
+    psassistPollJob() {
+      if (this.psassistJobPollTimer) clearInterval(this.psassistJobPollTimer);
+      this.psassistJobPollTimer = setInterval(async () => {
+        await this.loadPsassistJobs();
+        const job = this.psassistLatestJob;
+        if (!job || job.status !== 'running') {
+          clearInterval(this.psassistJobPollTimer);
+          this.psassistJobPollTimer = null;
+          if (job && job.status === 'done') { await this.loadPsassistQa(); }
+        }
+      }, 3000);
+    },
     get qaCounts() {
       const m = this.qaMerged;
       const by = sev => m.filter(p => p.severity === sev).length;
@@ -8545,6 +8640,8 @@ function app() {
       await this.loadArollSync();
       await this.pollArollStatus();
       await this.loadPsassistQa();
+      await this.loadPsassistWorker();   // タブを開いた時だけ（話数を切り替えるたびには叩かない）
+      await this.loadPsassistJobs();
     },
     async loadArollSync() {
       if (!this.currentProject || !this.activeEpisodeNumber) { this.arollSync = null; return; }

@@ -5,6 +5,7 @@ director-agent は他コンテナのファイルを書き換えない（命令�
 import json
 import os
 import re
+import uuid
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -170,3 +171,85 @@ def psassist_file(project_id: str, episode_number: int, rel: str) -> Path | None
     if not f.is_relative_to(base) or not f.is_file():
         return None
     return f
+
+
+# ─── ホスト工程ブリッジ（ジョブキュー・Docs/AROLL_TAB_REDESIGN_PLAN.md Phase 0）───
+#
+# director（コンテナ）→ host_worker.py（ホスト常駐）は一方通行のファイル経由。
+# director は queue/ にだけ書き、state/ を読むだけ（同じファイルを両側から書かない）。
+
+PSASSIST_WORKER_FILE = SHARED_DIR / "_psassist" / "worker.json"
+PSASSIST_WORKER_STALE_SEC = 60
+
+
+def get_psassist_worker() -> dict | None:
+    """host_worker.py が書くハートビート。ファイルが無ければ None（psassist未使用環境）。
+
+    ★`psassist/` が存在しない環境（公開パッケージ）では host_worker.py が一度も
+      走らないため、このファイルは永遠に無い。呼び出し側はこれを「そもそも
+      ホスト工程が使えない環境」として扱う（`worker止まっているだけ`とは区別する）。
+    """
+    if not PSASSIST_WORKER_FILE.exists():
+        return None
+    data = _read_json(PSASSIST_WORKER_FILE)
+    if not data:
+        return None
+    alive = False
+    heartbeat_at = data.get("heartbeat_at")
+    if heartbeat_at:
+        try:
+            hb = datetime.fromisoformat(str(heartbeat_at).replace("Z", "+00:00"))
+            alive = (datetime.now(timezone.utc) - hb).total_seconds() < PSASSIST_WORKER_STALE_SEC
+        except Exception:
+            alive = False
+    return {**data, "alive": alive}
+
+
+def _psassist_jobs_dirs(project_id: str, episode_number: int) -> tuple[Path, Path] | None:
+    ep = episode_dir(project_id, episode_number)
+    if ep is None:
+        return None
+    base = ep / "psassist" / "jobs"
+    return base / "queue", base / "state"
+
+
+def enqueue_psassist_job(project_id: str, episode_number: int, kind: str,
+                          lines: list[str], args: dict | None = None) -> dict | None:
+    """host_worker.py が拾うジョブをキューへ1件書く。エピソードが無ければ None。"""
+    dirs = _psassist_jobs_dirs(project_id, episode_number)
+    if dirs is None:
+        return None
+    queue_dir, _state_dir = dirs
+    queue_dir.mkdir(parents=True, exist_ok=True)
+    now = datetime.now(timezone.utc).replace(microsecond=0)
+    # job_id は作成順にソートできるよう時刻を先頭に置く（host_worker.py が文字列比較で拾う）
+    job_id = f"{now.strftime('%Y%m%d-%H%M%S')}-{uuid.uuid4().hex[:4]}"
+    job = {
+        "job_id": job_id,
+        "project_id": project_id,
+        "episode": episode_number,
+        "kind": kind,
+        "created_at": now.isoformat().replace("+00:00", "Z"),
+        "lines": lines,
+        "args": args or {},
+    }
+    (queue_dir / f"{job_id}.json").write_text(
+        json.dumps(job, ensure_ascii=False, indent=1), encoding="utf-8")
+    return job
+
+
+def list_psassist_jobs(project_id: str, episode_number: int, limit: int = 50) -> list[dict]:
+    """その話数のジョブ状態を新しい順に返す（`jobs/state/` を読むだけ）。"""
+    dirs = _psassist_jobs_dirs(project_id, episode_number)
+    if dirs is None:
+        return []
+    _queue_dir, state_dir = dirs
+    if not state_dir.exists():
+        return []
+    items = []
+    for f in state_dir.glob("*.json"):
+        d = _read_json(f)
+        if d:
+            items.append(d)
+    items.sort(key=lambda d: d.get("job_id", ""), reverse=True)
+    return items[:limit]

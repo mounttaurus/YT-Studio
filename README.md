@@ -74,6 +74,23 @@ docker compose down                         # 停止
 | `tts-agent/irodori-models/` | Irodori HFモデルキャッシュ（数GB） | 初回GPU起動時にHFから自動DL |
 | `shared/` | プロジェクト入出力 | 実行時に生成 |
 
+## Aロール（マンガパネル）合成に Photoshop を使う場合（任意）
+
+AI生成画像をそのまま使わず、キャラ画像＋背景画像＋吹き出しをマンガパネルとして合成する
+機能（🖼️Aロールタブ）は、Windows + Adobe Photoshop がホストに必要（コンテナ化できない
+COM 連携のため）。**使わない場合は何もしなくてよい**——director の🔍合成チェックカードは
+自動的に隠れる。
+
+```powershell
+pip install -r psassist/requirements.txt
+python psassist/scripts/host_worker.py   # ホスト常駐（起動しっぱなしにする）
+```
+
+起動すると、`shared/_psassist/worker.json` のハートビートを director-agent が検知し、
+🖼️Aロールタブに組版・書き出しのボタンが現れる。詳細は `psassist/README.md`。
+バブルのテンプレート（`psassist/assets/bubbles.psd`）は自分で用意する（仕様は同フォルダの
+`README.md`）。
+
 ## ドキュメント
 
 - [データスキーマ](Docs/DATA_SCHEMA.md)

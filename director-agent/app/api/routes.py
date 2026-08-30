@@ -83,6 +83,47 @@ async def get_psassist_file(project_id: str, episode_number: int, rel: str):
                                                                "application/octet-stream"))
 
 
+# ─── ホスト工程ブリッジ（ジョブキュー・AROLL_TAB_REDESIGN_PLAN.md Phase 0）────
+#
+# host_worker.py（ホスト常駐）とは HTTP で繋がない。director は queue/ に
+# ジョブを書くだけ、state/ を読むだけ。ホストの生死は shared/_psassist/worker.json
+# のハートビートで判定する（プロジェクト非依存のグローバル1本）。
+
+_PSASSIST_JOB_KINDS = {"export_png"}  # Phase 0 はこれだけ。残りは Phase 5
+
+
+@router.post("/projects/{project_id}/episodes/{episode_number}/psassist/jobs")
+async def create_psassist_job(project_id: str, episode_number: int, request: Request):
+    """host_worker.py へのジョブをキューへ1件書く（一方通行）。"""
+    body = await request.json()
+    kind = body.get("kind")
+    if kind not in _PSASSIST_JOB_KINDS:
+        raise HTTPException(status_code=400, detail=f"unsupported kind: {kind}")
+    lines = body.get("lines") or []
+    if not isinstance(lines, list) or not lines:
+        raise HTTPException(status_code=400, detail="lines is required (empty = no target)")
+    job = project_manager.enqueue_psassist_job(
+        project_id, episode_number, kind, lines, body.get("args") or {})
+    if job is None:
+        raise HTTPException(status_code=404, detail="episode not found")
+    return job
+
+
+@router.get("/projects/{project_id}/episodes/{episode_number}/psassist/jobs")
+async def get_psassist_jobs(project_id: str, episode_number: int):
+    """その話数のジョブ状態を新しい順に返す（上限50件）。"""
+    return {"jobs": project_manager.list_psassist_jobs(project_id, episode_number)}
+
+
+@router.get("/psassist/worker")
+async def get_psassist_worker():
+    """プロジェクト非依存のホスト常駐ハートビート。無ければ psassist 未使用環境。"""
+    data = project_manager.get_psassist_worker()
+    if data is None:
+        raise HTTPException(status_code=404, detail="worker.json not found")
+    return data
+
+
 # ─── TTS連携 ──────────────────────────────────────────────────────────
 
 @router.post("/projects/{project_id}/episodes/{episode_number}/tts/run")

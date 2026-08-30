@@ -1,0 +1,6 @@
+# psassist/ はホスト実行（コンテナ化しない）。Windows + Photoshop が前提。
+# インストール: pip install -r psassist/requirements.txt
+psd-tools
+numpy
+Pillow
+pywin32
