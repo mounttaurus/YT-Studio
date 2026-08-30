@@ -68,14 +68,28 @@ def now_iso() -> str:
 
 
 def write_json_atomic(path: str, data: dict) -> None:
-    """読み手（director-agent）が書きかけを掴まないよう、tmp→replace で書く。"""
+    """読み手（director-agent）が書きかけを掴まないよう、tmp→replace で書く。
+
+    ⚠️ **Windows の `os.replace` は一時的に `PermissionError` を返すことがある**
+    （読み手が開いた瞬間・ウイルス対策が .tmp を掴んだ瞬間など）。実際に
+    ハートビートの書き込みで `WinError 5` が出て worker ごと落ちた（2026-08-30）。
+    数回リトライし、それでも駄目なら例外を上げる（呼び出し側が握るかを決める）。
+    """
     d = os.path.dirname(path)
     if d:
         os.makedirs(d, exist_ok=True)
     tmp = path + ".tmp"
     with open(tmp, "w", encoding="utf-8") as fh:
         json.dump(data, fh, ensure_ascii=False, indent=1)
-    os.replace(tmp, path)
+    last: Exception | None = None
+    for attempt in range(5):
+        try:
+            os.replace(tmp, path)
+            return
+        except PermissionError as e:      # 掴まれている。少し待って再試行
+            last = e
+            time.sleep(0.2 * (attempt + 1))
+    raise last  # type: ignore[misc]
 
 
 # ── エピソードの発見 ────────────────────────────────────────────────────
@@ -235,17 +249,22 @@ def run_qa_check_job(ep_dir: str, job: dict, log: list[str]) -> dict:
     if ctx is None:
         raise RuntimeError("検査の準備ができません（psd_final が見つかりません）")
     lines = job.get("lines") or []
-    files = None
     if lines:
         files = ["panel_%s.psd" % lid for lid in lines]
         files = [f for f in files if os.path.exists(os.path.join(ctx["psd_dir"], f))]
-        if not files:
-            raise RuntimeError("対象のPSDが1枚もありません")
+    else:
+        # ⚠️ `run_pass(ctx, files)` は files を**必ず反復する**。None を渡せない
+        #    （全件のつもりで None にして `'NoneType' object is not iterable` で落ちた）。
+        #    全件検査は自分でファイル一覧を作る。
+        files = sorted(f for f in os.listdir(ctx["psd_dir"])
+                       if f.startswith("panel_") and f.endswith(".psd"))
+    if not files:
+        raise RuntimeError("対象のPSDが1枚もありません")
     rep = qa_check.run_pass(ctx, files, verbose=False)
     summary = (rep or {}).get("summary", {})
     # ⚠️ `run_pass` は**マージ後のレポート全体**を返す。`panels` の数は検査した枚数では
     #    ないので、そのまま「検査N件」と書くと1行だけ指定した時に196と出て嘘になる。
-    checked = len(files) if files else len((rep or {}).get("panels", []))
+    checked = len(files)
     log.append("検査 %d 枚（レポート全体 %d 行）: %s"
                % (checked, len((rep or {}).get("panels", [])), summary))
     return {"checked": checked, "total": len((rep or {}).get("panels", [])),
@@ -266,7 +285,21 @@ def run_build_panel_job(ep_dir: str, job: dict, log: list[str]) -> dict:
     plan = os.path.join(ep_dir, "psassist", "panel_plan.json")
     if not os.path.exists(plan):
         raise RuntimeError("panel_plan.json がありません（先に build_plan を実行してください）")
-    argv = [sys.executable, os.path.join("host-bridge", "bridge.py"), "--plan", plan]
+    # ⚠️ **bubbles.psd は配布物に含まれない**（ユーザー自作の資産で、見た目がそのまま
+    #    出力になるため意図的に非公開）。worker を公開リポの clone から起動すると
+    #    ここが無く、JSX が `Expected a reference to an existing File/Folder` という
+    #    原因の分からないエラーで落ちる。**先に見て、読める言葉で止める。**
+    #    対処: 資産を持つチェックアウトから `--shared <稼働側>/shared` で起動する。
+    bubbles = (os.environ.get("PSA_BUBBLES_PSD") or "").strip() or \
+        os.path.join(PSASSIST_ROOT, "assets", "bubbles.psd")
+    if not os.path.exists(bubbles):
+        raise RuntimeError(
+            "吹き出しテンプレート bubbles.psd が見つかりません: %s\n"
+            "これは配布物に含まれないユーザー資産です。"
+            "資産を持つチェックアウトから `--shared` で起動するか、"
+            "ルート .env の PSA_BUBBLES_PSD で場所を指定してください。" % bubbles)
+    argv = [sys.executable, os.path.join("host-bridge", "bridge.py"), "--plan", plan,
+            "--bubbles", bubbles]
     lines = job.get("lines") or []
     if lines:
         argv += ["--lines", ",".join(lines)]
@@ -420,10 +453,16 @@ def main() -> None:
     try:
         while True:
             episodes = find_episodes(shared_dir)
-            write_json_atomic(worker_file, {
-                "pid": pid, "started_at": started_at, "heartbeat_at": now_iso(),
-                "watching": len(episodes), "capabilities": CAPABILITIES,
-            })
+            # ⚠️ **心拍が1回書けないくらいで常駐を殺さない。** 次の周期で書き直せば
+            #    済むものに、動いているワーカーを落とす価値は無い（1周期落ちても
+            #    director 側は 60秒の猶予を見て alive を判定する）。
+            try:
+                write_json_atomic(worker_file, {
+                    "pid": pid, "started_at": started_at, "heartbeat_at": now_iso(),
+                    "watching": len(episodes), "capabilities": CAPABILITIES,
+                })
+            except OSError as e:
+                print("  [heartbeat] 書き込み失敗（次の周期で再試行）: %s" % e)
 
             # ── ジョブを1件だけ処理（作成順） ──
             picked = pick_oldest_job(episodes)
