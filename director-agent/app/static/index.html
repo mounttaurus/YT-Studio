@@ -8955,9 +8955,13 @@ function app() {
       return `${this.arollApiBase}/image/${p.image}?v=${this.arollImgVersion}`;
     },
     // ── コマ一覧（表）と一括操作（Phase 4） ─────────────────────────
-    get arollRowsFiltered() {
+    // 絞り込みの本籍。**純関数にする**（引数の f だけで決まり、状態を触らない）。
+    // ⚠️ かつて件数を数えるために `this.arollRowFilter` を一時的に書き換えて戻していたが、
+    //    Alpine のリアクティビティは getter 内の代入も依存として拾うため、
+    //    「描画 → 状態変更 → 再描画」のループを招きうる書き方だった（2026-08-30 修正）。
+    arollRowsFor(f) {
       const ps = this.arollPanels;
-      switch (this.arollRowFilter) {
+      switch (f) {
         case 'ungenerated': return ps.filter(p => p.status !== 'done' && !p.cutout_slot_id);
         case 'unapproved':  return ps.filter(p => p.status === 'done' && p.image && !p.image_approved_at);
         case 'narration':   return ps.filter(p => !(p.characters || []).length);
@@ -8965,13 +8969,8 @@ function app() {
         default:            return ps;
       }
     },
-    arollRowFilterCount(f) {
-      const prev = this.arollRowFilter;
-      this.arollRowFilter = f;
-      const n = this.arollRowsFiltered.length;
-      this.arollRowFilter = prev;
-      return n;
-    },
+    get arollRowsFiltered() { return this.arollRowsFor(this.arollRowFilter); },
+    arollRowFilterCount(f) { return this.arollRowsFor(f).length; },
     // 選択中の line_id。⚠️ ここが空なら一括操作は押せない（`line_ids: []` は「対象ゼロ」）
     get arollSelected() {
       return this.arollPanels.filter(p => this.arollChecked[p.line_id]).map(p => p.line_id);
