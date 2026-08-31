@@ -2258,8 +2258,34 @@ function app() {
       await this.loadLocales();
     },
 
+    // ⚠️ **フル再生成は line_id を振り直す** ＝ Aロールの絵とTTSの音声の紐付けが全滅する
+    //    （CLAUDE.md 鉄則）。行単位の編集は line_id を保つので安全だが、ここだけは別物。
+    //    ⚠️ **台本UIは director と scripting の二重実装**（memory scripting-director-dual-ui）。
+    //       片方だけに入れると、もう片方から素通りできてしまうので**必ず両方**に置く。
+    //    初回生成（失うものが無い）では警告しない ── 毎回出すと狼少年になる。
+    confirmFullRegenerate(what) {
+      const ep = this.episodes.find(e => e.number === (this.activeEpisodeNumber || 1));
+      const hasScript = !!ep?.has_script;
+      const hasDraft = !!ep?.has_draft;
+      if (!hasScript && !hasDraft) return true;   // 初回＝失うものが無い
+
+      const lines = [`⚠️ ${what}は台本を最初から作り直します。`, ''];
+      lines.push('・いまのドラフトの内容と手直しは失われます');
+      if (hasScript) {
+        lines.push('・全セリフに新しい行ID（line_id）が振られます');
+        lines.push('・承認するとAロールの絵とTTSの音声の紐付けが' +
+                   '【すべて】切れます（作り直しになります）');
+        lines.push('');
+        lines.push('言い回しを直すだけなら、行を選んで「✎ 選択行を再生成」を使ってください' +
+                   '（こちらは行IDを保つので安全です）。');
+      }
+      lines.push('', '続行しますか？');
+      return confirm(lines.join('\n'));
+    },
+
     async generateScript() {
       if (!this.currentProject || !this.selectedStyleId) return;
+      if (!this.confirmFullRegenerate('「台本を生成」')) return;
       this.generating = true;
       this.warnings = [];
       await this.maybeRunSeoAutoOptimize();
@@ -2289,6 +2315,8 @@ function app() {
 
     async regenerateScript() {
       if (!this.currentProject || !this.feedbackText.trim()) return;
+      // フィードバック再生成も /regenerate ＝ フル再生成。line_id は保たれない
+      if (!this.confirmFullRegenerate('「↺ 再生成」')) return;
       this.generating = true;
       this.warnings = [];
       try {
