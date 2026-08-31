@@ -55,13 +55,14 @@ async def edit_generate(
         return {"error": f"episode not found: {project_id} ep{episode}"}
 
     tts = project_manager.get_episode_tts(project_id, episode, lang=lang)
-    footage = project_manager.get_episode_footage(project_id, episode)
-    if tts is None or footage is None:
-        return {"error": "tts.json or footage.json not found"}
+    if tts is None:
+        return {"error": "tts.json not found"}
+    footage = project_manager.get_episode_footage(project_id, episode)  # 任意（Aロールのみ運用では無い）
 
     tts_status = project_manager.get_episode_status(project_id, episode, lang=lang)
     footage_status = project_manager.get_episode_status(project_id, episode)
-    if not force and (tts_status.get("tts") != "done" or footage_status.get("footage") != "done"):
+    footage_done = footage is None or footage_status.get("footage") == "done"
+    if not force and (tts_status.get("tts") != "done" or not footage_done):
         return {
             "error": f"prerequisite not done: tts={tts_status.get('tts')}, footage={footage_status.get('footage')} "
                      f"(force=true で上書き実行可能)",

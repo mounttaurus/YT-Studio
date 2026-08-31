@@ -210,21 +210,43 @@ for entry in timeline:  # tts.json timeline[] をorder順に処理
    トラックではなく**タイムライン直下のstack由来でなくV1トラックの該当クリップ**…ではなく、
    実装簡略化のため **V1トラック上の各セクション先頭クリップに marked_range=クリップ先頭** で付与する
 
-### 5-2b. 映像トラック V2「Aロール」（kind=Video・任意・2026-07-27追加）
+### 5-2b. 映像トラック V2「Aロール」（kind=Video・任意・2026-07-27追加・2026-08-31 納品PNG優先へ改修）
 
 `a_roll/aroll.json`（§6d）がある場合のみ、V1の**上**にV2を追加する（無ければV1のみ＝
 Aロール未導入プロジェクトへの後方互換）。
 
+**現運用（psassist組版・2026-08-24〜）ではAロールだけで話数を埋めるため `footage.json` が
+存在しない。V1トラックは省略せず、全編Gapの空トラックとして出す**（省略するとResolve上で
+V2が最下層に落ち、将来Bロールを足す時にトラック番号が動くため。`footage.json` が無い/`clips`が
+空でも例外にはならず、warnings `FOOTAGE_ABSENT` を1件足すのみ）。
+
 1. tts.json の `timeline[]` をA1音声トラックと同じ順序・同じ絶対秒（`start_sec`/`end_sec`）で辿る
    （§5-1のGap埋め込みロジックをそのまま流用＝音声と1フレーム単位で同期する）
-2. 各行について `aroll.json panels[].line_id` を引き、`image` ファイル（`a_roll/{image}`）が
-   実在すればその行の区間フルにClipを1枚配置
-3. panelが無い（台本追加でAロール未生成のまま行が増えた）、または`image`ファイルが
+2. 各行の画像は次の順で解決する（Docs/EDITING_AROLL_PARITY_PLAN.md 2章）:
+
+   | 順 | 参照先 | 意味 | `aroll_source` |
+   |---|---|---|---|
+   | 1 | `psassist/export/panel_{line_id}.png` | psassistが組版した納品PNG（1920x1080・現行の正解） | `"psassist"` |
+   | 2 | `a_roll/{panel["image"]}` | 合成前の生成画像（後方互換） | `"raw"` |
+   | 3 | — | Gap（V1が透ける） | `"missing"` |
+
+   1の判定はファイル存在で行う。`psassist/export/export_log.json` があれば読み、
+   その `line_id` が `ok:false` なら1を飛ばして2へ落とす（log が無ければ存在確認だけで通す）。
+   ファイル名は `aroll.json` の `image` ではなく `panel_{line_id}.png` を組み立てる
+   （`image` は生成画像側の名前で命名規約が異なる）。
+   クリップの `metadata.youtube_auto.aroll_source` にどちらの絵を使ったかを記録し、
+   `edit.json` の `timeline` 統計にも `aroll_psassist_count` / `aroll_raw_count` として出す
+   （「196枚あるのに全部rawだった」に数字で気づけるようにするため）。
+3. panelが無い（台本追加でAロール未生成のまま行が増えた）、または画像が
    見つからない（バッチ未完了・失敗）場合は、その行の区間を**Gap**にする
-   （エラーにしない。warnings `AROLL_MISSING` に列挙するのみ）
+   （エラーにしない。warnings `AROLL_MISSING` に列挙するのみ。`panel["status"]` を見て
+   「未生成」「生成済みのはずが欠損」を理由文言で分ける）
 4. V2はV1より**上**に重なる前提（Resolve側のトラック合成順）。したがって、
    Gapになった行はResolve上でV1のBロールがそのまま透けて見える＝
    「Aロールが一部欠けても編集データ生成自体は破綻しない」設計になっている
+5. 納品PNGを使った行は、対応する `psassist/psd_final/panel_{line_id}.psd` のmtimeと比較し、
+   PSDの方が新しければ「納品PNGが古い可能性」を warnings `EXPORT_STALE` で知らせる（止めない。
+   psassistの `qa_check.py` が持つ判定と同じ考え方）
 
 ### 5-3. SRT字幕（subtitles.srt）
 

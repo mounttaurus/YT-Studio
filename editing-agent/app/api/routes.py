@@ -57,16 +57,22 @@ def run_edit(project_id: str, episode_number: int, req: EditRunRequest):
         raise HTTPException(status_code=404, detail=f"episode not found: {project_id} ep{episode_number}")
 
     tts = project_manager.get_episode_tts(project_id, episode_number, lang=req.lang)
+    if tts is None:
+        raise HTTPException(status_code=422, detail="tts.json not found")
+    if "schema_version" not in tts:
+        raise HTTPException(status_code=422, detail="tts.json missing schema_version")
+
+    # footage.jsonは任意（Aロールのみで埋める現運用ではそもそも存在しない。
+    # Docs/EDITING_AROLL_PARITY_PLAN.md P1）。あればschema_versionだけ検証する。
     footage = project_manager.get_episode_footage(project_id, episode_number)
-    if tts is None or footage is None:
-        raise HTTPException(status_code=422, detail="tts.json or footage.json not found")
-    if "schema_version" not in tts or "schema_version" not in footage:
-        raise HTTPException(status_code=422, detail="tts.json or footage.json missing schema_version")
+    if footage is not None and "schema_version" not in footage:
+        raise HTTPException(status_code=422, detail="footage.json missing schema_version")
 
     # tts の完了判定は対象言語（lang）で見るが、footage は言語別に持たない（原語と共有）ため常に原語で見る。
     tts_status = project_manager.get_episode_status(project_id, episode_number, lang=req.lang)
     footage_status = project_manager.get_episode_status(project_id, episode_number)
-    if not req.force and (tts_status.get("tts") != "done" or footage_status.get("footage") != "done"):
+    footage_done = footage is None or footage_status.get("footage") == "done"
+    if not req.force and (tts_status.get("tts") != "done" or not footage_done):
         raise HTTPException(
             status_code=409,
             detail=f"prerequisite not done: tts={tts_status.get('tts')}, footage={footage_status.get('footage')} (use force=true to override)",

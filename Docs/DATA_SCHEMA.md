@@ -972,9 +972,15 @@ $概算を確認できる。`GET .../aroll/status` の `job.total` は実生成�
 考え方で反復感を機械側が抑える。手動での上書きは`PUT .../aroll/lines/{line_id}`に
 `background_id`を渡す（空文字で未割当に戻せる）。
 
-⚠️ 実体は合成しない。`a_roll/panel_{line_id}.png`はキャラ単体のまま、背景は別ファイル
-（`shared/backgrounds/images/{bg_id}.png`）として存在し、ユーザーがPhotoshopで手作業合成する
-運用は変えない。
+⚠️ ここでの実体（`a_roll/panel_{line_id}.png`）はキャラ単体のまま合成しない。背景は別ファイル
+（`shared/backgrounds/images/{bg_id}.png`）として存在する。
+
+**合成後の納品物は別の場所にある**（psassist自動組版・2026-08-24〜。詳細 `psassist/README.md`）:
+吹き出し・背景を合成した完成PSDは `{episode_dir}/psassist/psd_final/panel_{line_id}.psd`、
+1920x1080で書き出したPNGは `{episode_dir}/psassist/export/panel_{line_id}.png`（ファイル名は
+`a_roll/panel_{line_id}.png` と同じ `line_id` 命名だが、置き場所と実体が違う）。
+editing-agent は後者（納品PNG）を優先して使い、無ければここの生成画像（キャラ単体）へ
+フォールバックする（`Docs/06_editing.md` §5-2b、`Docs/EDITING_AROLL_PARITY_PLAN.md`）。
 
 ### 台本との同期判定（2026-08-09 新規）
 

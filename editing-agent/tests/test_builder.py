@@ -73,6 +73,14 @@ def _add_aroll(episode_dir: Path, *, omit_image: str | None = None) -> dict:
     return aroll
 
 
+def _add_psassist_export(episode_dir: Path, line_ids: list[str]) -> None:
+    """episode_dir/psassist/export/panel_{line_id}.png を作る（psassist組版済みの納品PNGの体）。"""
+    export_dir = episode_dir / "psassist" / "export"
+    export_dir.mkdir(parents=True, exist_ok=True)
+    for lid in line_ids:
+        (export_dir / f"panel_{lid}.png").touch()
+
+
 def _audio_clip_starts(audio_track) -> dict:
     cursor = 0
     starts = {}
@@ -249,6 +257,116 @@ def test_aroll_missing_panel_or_image_falls_back_to_gap(tmp_path, monkeypatch):
 
     assert any(w["code"] == "AROLL_MISSING" and "line_020" in w["message"] for w in warnings)
     assert any(w["code"] == "AROLL_MISSING" and "line_010" in w["message"] for w in warnings)
+
+
+def test_aroll_prefers_psassist_export_png(tmp_path, monkeypatch):
+    """納品PNG(psassist/export/)があればそちらを使う。無い行は合成前の生成画像へ落ちる。"""
+    tts, footage, project_dir, episode_dir = _build_layout(tmp_path, monkeypatch)
+    aroll = _add_aroll(episode_dir)
+    _add_psassist_export(episode_dir, ["line_001", "line_002", "line_003", "line_004", "line_005"])
+
+    timeline, _ = build_timeline(
+        "ラリーの秘密", 1, tts, footage, project_dir, episode_dir, fps=FPS, aroll=aroll,
+    )
+
+    aroll_track = _video_tracks(timeline)[1]
+    clips = {item.name: item for item in aroll_track if isinstance(item, otio.schema.Clip)}
+    for lid in ["line_001", "line_002", "line_003", "line_004", "line_005"]:
+        assert clips[lid].metadata["youtube_auto"]["aroll_source"] == "psassist"
+    # line_020 は納品PNGが無いので合成前の生成画像(a_roll/)へフォールバック
+    assert clips["line_020"].metadata["youtube_auto"]["aroll_source"] == "raw"
+
+    stats = timeline_stats(timeline)
+    assert stats["aroll_psassist_count"] == 5
+    assert stats["aroll_raw_count"] == 1
+
+
+def test_aroll_falls_back_to_raw_without_psassist_export(tmp_path, monkeypatch):
+    """psassist/export/自体が無い（旧プロジェクト）なら全行が合成前の生成画像を使う。"""
+    tts, footage, project_dir, episode_dir = _build_layout(tmp_path, monkeypatch)
+    aroll = _add_aroll(episode_dir)
+
+    timeline, _ = build_timeline(
+        "ラリーの秘密", 1, tts, footage, project_dir, episode_dir, fps=FPS, aroll=aroll,
+    )
+
+    aroll_track = _video_tracks(timeline)[1]
+    clips = [item for item in aroll_track if isinstance(item, otio.schema.Clip)]
+    assert clips
+    assert all(c.metadata["youtube_auto"]["aroll_source"] == "raw" for c in clips)
+
+    stats = timeline_stats(timeline)
+    assert stats["aroll_psassist_count"] == 0
+    assert stats["aroll_raw_count"] == len(clips)
+
+
+def test_aroll_export_log_ok_false_falls_back_to_raw(tmp_path, monkeypatch):
+    """export_log.jsonでok:falseの行は納品PNGが存在しても使わず、rawへ落ちる。"""
+    tts, footage, project_dir, episode_dir = _build_layout(tmp_path, monkeypatch)
+    aroll = _add_aroll(episode_dir)
+    _add_psassist_export(episode_dir, ["line_001"])
+    export_log = [{"line_id": "line_001", "ok": False, "src_size": "1376x768", "out_size": "0x0"}]
+
+    timeline, _ = build_timeline(
+        "ラリーの秘密", 1, tts, footage, project_dir, episode_dir, fps=FPS, aroll=aroll,
+        psassist_export_log=export_log,
+    )
+
+    aroll_track = _video_tracks(timeline)[1]
+    clips = {item.name: item for item in aroll_track if isinstance(item, otio.schema.Clip)}
+    assert clips["line_001"].metadata["youtube_auto"]["aroll_source"] == "raw"
+
+
+def test_export_stale_warns_when_psd_newer_than_export(tmp_path, monkeypatch):
+    """psd_final/のPSDが納品PNGより新しければEXPORT_STALEを警告する(止めない)。"""
+    import os
+    import time
+
+    tts, footage, project_dir, episode_dir = _build_layout(tmp_path, monkeypatch)
+    aroll = _add_aroll(episode_dir)
+    _add_psassist_export(episode_dir, ["line_001"])
+
+    psd_dir = episode_dir / "psassist" / "psd_final"
+    psd_dir.mkdir(parents=True, exist_ok=True)
+    psd_path = psd_dir / "panel_line_001.psd"
+    psd_path.touch()
+
+    export_png = episode_dir / "psassist" / "export" / "panel_line_001.png"
+    now = time.time()
+    os.utime(export_png, (now - 100, now - 100))
+    os.utime(psd_path, (now, now))
+
+    timeline, warnings = build_timeline(
+        "ラリーの秘密", 1, tts, footage, project_dir, episode_dir, fps=FPS, aroll=aroll,
+    )
+
+    assert any(w["code"] == "EXPORT_STALE" and "line_001" in w["message"] for w in warnings)
+    # 止めない: line_001はGapにならずクリップとして配置されたまま
+    aroll_track = _video_tracks(timeline)[1]
+    clip_names = [item.name for item in aroll_track if isinstance(item, otio.schema.Clip)]
+    assert "line_001" in clip_names
+
+
+def test_footage_absent_produces_empty_v1_and_warning(tmp_path, monkeypatch):
+    """footage.jsonが無くても例外にならず、空のV1トラック(全編Gap)が出る。"""
+    tts, _footage, project_dir, episode_dir = _build_layout(tmp_path, monkeypatch)
+
+    timeline, warnings = build_timeline(
+        "ラリーの秘密", 1, tts, None, project_dir, episode_dir, fps=FPS,
+    )
+
+    video_tracks = _video_tracks(timeline)
+    assert [t.name for t in video_tracks] == ["V1_Footage"]
+    v1 = video_tracks[0]
+    assert not any(isinstance(item, otio.schema.Clip) for item in v1)
+    assert any(isinstance(item, otio.schema.Gap) for item in v1)
+    # 他トラック(音声)と尺が揃う
+    assert v1.duration().value == _audio_tracks(timeline)[0].duration().value
+
+    assert any(w["code"] == "FOOTAGE_ABSENT" for w in warnings)
+
+    stats = timeline_stats(timeline)
+    assert stats["video_clip_count"] == 0
 
 
 def test_otio_roundtrip_and_stats(tmp_path, monkeypatch):

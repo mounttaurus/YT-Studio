@@ -36,17 +36,18 @@ def run_edit(
         raise FileNotFoundError(f"episode directory not found: {project_id} ep{episode_number}")
 
     tts = project_manager.get_episode_tts(project_id, episode_number, lang=lang)
+    if tts is None:
+        raise FileNotFoundError(f"{'locales/' + lang + '/' if lang else ''}tts.json not found")
     footage = project_manager.get_episode_footage(project_id, episode_number)
-    if tts is None or footage is None:
-        raise FileNotFoundError(f"{'locales/' + lang + '/' if lang else ''}tts.json or footage.json not found")
     aroll = project_manager.get_episode_aroll(project_id, episode_number)
+    psassist_export_log = project_manager.get_psassist_export_log(project_id, episode_number)
 
     project_manager.update_episode_status(project_id, episode_number, lang=lang, editing="running")
 
     try:
         timeline, warnings = timeline_builder.build_timeline(
             project_id, episode_number, tts, footage, project_dir, episode_dir, fps=fps, path_style=path_style,
-            aroll=aroll,
+            aroll=aroll, psassist_export_log=psassist_export_log,
         )
         otio_text = otio.adapters.write_to_string(timeline, adapter_name="otio_json")
         srt_text = srt_writer.build_srt(tts, speaker_prefix=speaker_prefix)

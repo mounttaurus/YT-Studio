@@ -25,6 +25,8 @@ from app.core import path_mapper
 MEDIA_NOT_FOUND = "MEDIA_NOT_FOUND"
 LINE_NOT_IN_TIMELINE = "LINE_NOT_IN_TIMELINE"
 AROLL_MISSING = "AROLL_MISSING"
+FOOTAGE_ABSENT = "FOOTAGE_ABSENT"
+EXPORT_STALE = "EXPORT_STALE"
 
 
 def _sec_to_frame(sec: float, fps: int) -> int:
@@ -180,6 +182,34 @@ def _place_footage_clip(
     return clip
 
 
+def _resolve_aroll_media(
+    line_id: str,
+    panel: dict | None,
+    project_dir: Path,
+    episode_dir: Path,
+    export_ok_by_line: dict[str, bool],
+) -> tuple[Path | None, str]:
+    """納品PNG → 生成画像 → 無し の順で解決する（Docs/EDITING_AROLL_PARITY_PLAN.md 2章）。
+
+    戻り値: (実ファイルの絶対パス|None, "psassist"|"raw"|"missing")
+    export_ok_by_line に line_id が無ければ export_log.json 自体が無い（旧プロジェクト）
+    とみなし、存在確認だけで通す。ok:false の行だけ1を飛ばして2へ落とす。
+    """
+    if export_ok_by_line.get(line_id, True):
+        resolved = path_mapper.resolve_media_path(
+            f"psassist/export/panel_{line_id}.png", project_dir, episode_dir,
+        )
+        if resolved is not None:
+            return resolved, "psassist"
+
+    if panel and panel.get("image"):
+        resolved = path_mapper.resolve_media_path(f"a_roll/{panel['image']}", project_dir, episode_dir)
+        if resolved is not None:
+            return resolved, "raw"
+
+    return None, "missing"
+
+
 def _build_aroll_track(
     aroll: dict,
     tts: dict,
@@ -188,14 +218,17 @@ def _build_aroll_track(
     fps: int,
     path_style: str,
     warnings: list[dict],
+    psassist_export_log: list[dict] | None = None,
 ) -> "otio.schema.Track":
     """Aロール（セリフ1行=1コマ）をA1音声トラックと同じ絶対秒でV2に配置する。
 
+    優先順位は 納品PNG(psassist/export/) → 合成前の生成画像(a_roll/) → Gap。
     未生成/画像欠損の行はGapにする。V2はV1(Bロール)より上に重なる前提のため、
     Gap区間はResolve上でV1がそのまま透けて見える＝欠損の自然なフォールバックになる。
     """
     track = otio.schema.Track(name="V2_Aroll", kind=otio.schema.TrackKind.Video)
     panels_by_line = {p.get("line_id"): p for p in aroll.get("panels", [])}
+    export_ok_by_line = {r["line_id"]: r.get("ok", True) for r in (psassist_export_log or [])}
 
     prev_end_frame = 0
     for entry in tts.get("timeline", []):
@@ -214,12 +247,15 @@ def _build_aroll_track(
 
         tr = _frame_range(0, dur, fps)
         panel = panels_by_line.get(line_id)
-        resolved = None
-        if panel and panel.get("image"):
-            resolved = path_mapper.resolve_media_path(f"a_roll/{panel['image']}", project_dir, episode_dir)
+        resolved, source = _resolve_aroll_media(line_id, panel, project_dir, episode_dir, export_ok_by_line)
 
         if resolved is None:
-            reason = "aroll.jsonに存在しません" if panel is None else "画像が未生成/見つかりません"
+            if panel is None:
+                reason = "aroll.jsonに存在しません（台本追加後の未生成）"
+            elif panel.get("status") != "done":
+                reason = f"画像が未生成です（status: {panel.get('status') or 'unknown'}）"
+            else:
+                reason = "画像ファイルが見つかりません（生成済みのはずが欠損）"
             warnings.append({
                 "code": AROLL_MISSING,
                 "message": f"{line_id} のAロールが{reason}（Bロールへフォールバック）",
@@ -233,10 +269,25 @@ def _build_aroll_track(
             clip = otio.schema.Clip(name=line_id, media_reference=ref, source_range=tr)
             clip.metadata["youtube_auto"] = {
                 "line_id": line_id,
-                "speaker_name": panel.get("speaker_name", ""),
-                "text": panel.get("text", ""),
+                "speaker_name": panel.get("speaker_name", "") if panel else "",
+                "text": panel.get("text", "") if panel else "",
+                "aroll_source": source,
             }
             track.append(clip)
+
+            if source == "psassist":
+                psd_path = path_mapper.resolve_media_path(
+                    f"psassist/psd_final/panel_{line_id}.psd", project_dir, episode_dir,
+                )
+                if psd_path is not None:
+                    try:
+                        if psd_path.stat().st_mtime > resolved.stat().st_mtime + 1:
+                            warnings.append({
+                                "code": EXPORT_STALE,
+                                "message": f"{line_id} の納品PNGが古い可能性があります（PSDの方が新しい）",
+                            })
+                    except OSError:
+                        pass
 
         prev_end_frame = end_f
 
@@ -254,11 +305,21 @@ def _build_video_track(
 ) -> "otio.schema.Track":
     track = otio.schema.Track(name="V1_Footage", kind=otio.schema.TrackKind.Video)
 
+    clips_list = footage.get("clips", [])
+    if not clips_list:
+        # footage.json が無い/空（Aロールのみの現運用）でもV1を省略しない。
+        # 省略するとResolve上でV2が最下層に落ち、将来Bロールを足す時にトラック番号が動く
+        # （Docs/EDITING_AROLL_PARITY_PLAN.md P1）。全編Gapで他トラックと尺を揃える。
+        total_f = max((_sec_to_frame(e["end_sec"], fps) for e in tts.get("timeline", [])), default=0)
+        if total_f > 0:
+            track.append(otio.schema.Gap(source_range=_frame_range(0, total_f, fps)))
+        return track
+
     tts_by_line = {e["line_id"]: e for e in tts.get("timeline", [])}
 
     # sectionでグループ化（出現順保持）
     groups: dict[str, list[dict]] = {}
-    for clip in footage.get("clips", []):
+    for clip in clips_list:
         groups.setdefault(clip.get("section", ""), []).append(clip)
 
     blocks = []
@@ -325,14 +386,22 @@ def build_timeline(
     project_id: str,
     episode_number: int,
     tts: dict,
-    footage: dict,
+    footage: dict | None,
     project_dir: Path,
     episode_dir: Path,
     fps: int = 30,
     path_style: str = "file_uri",
     aroll: dict | None = None,
+    psassist_export_log: list[dict] | None = None,
 ) -> tuple["otio.schema.Timeline", list[dict]]:
     warnings: list[dict] = []
+
+    if footage is None:
+        warnings.append({
+            "code": FOOTAGE_ABSENT,
+            "message": "Bロール素材が無いためV1は空です（Aロールのみで構成）",
+        })
+        footage = {"clips": []}
 
     video_track = _build_video_track(footage, tts, project_dir, episode_dir, fps, path_style, warnings)
     audio_tracks = _build_audio_tracks(tts, project_dir, episode_dir, fps, path_style, warnings)
@@ -340,7 +409,10 @@ def build_timeline(
     timeline = otio.schema.Timeline(name=f"{project_id}_ep{episode_number:02d}")
     timeline.tracks.append(video_track)
     if aroll is not None:
-        timeline.tracks.append(_build_aroll_track(aroll, tts, project_dir, episode_dir, fps, path_style, warnings))
+        timeline.tracks.append(_build_aroll_track(
+            aroll, tts, project_dir, episode_dir, fps, path_style, warnings,
+            psassist_export_log=psassist_export_log,
+        ))
     for t in audio_tracks:
         timeline.tracks.append(t)
 
@@ -359,10 +431,14 @@ def timeline_stats(timeline: "otio.schema.Timeline") -> dict:
 
     video_clip_count はV1(Bロール)+V2(Aロール、有れば)の合算（後方互換のため既存キーは維持）。
     aroll_clip_count はV2単独の内訳（Aロール未導入プロジェクトでは0）。
+    aroll_psassist_count / aroll_raw_count はV2内訳のさらに内訳（納品PNG/合成前の生成画像）。
+    「196枚あるのに全部rawだった」に数字で気づけるようにする（Docs/EDITING_AROLL_PARITY_PLAN.md 2章）。
     """
     durations_sec = []
     video_clip_count = 0
     aroll_clip_count = 0
+    aroll_psassist_count = 0
+    aroll_raw_count = 0
     audio_clip_count = 0
     marker_count = 0
 
@@ -374,6 +450,11 @@ def timeline_stats(timeline: "otio.schema.Timeline") -> dict:
                     video_clip_count += 1
                     if track.name == "V2_Aroll":
                         aroll_clip_count += 1
+                        source = item.metadata.get("youtube_auto", {}).get("aroll_source")
+                        if source == "psassist":
+                            aroll_psassist_count += 1
+                        elif source == "raw":
+                            aroll_raw_count += 1
                 else:
                     audio_clip_count += 1
             marker_count += len(item.markers)
@@ -382,6 +463,8 @@ def timeline_stats(timeline: "otio.schema.Timeline") -> dict:
         "duration_sec": max(durations_sec) if durations_sec else 0.0,
         "video_clip_count": video_clip_count,
         "aroll_clip_count": aroll_clip_count,
+        "aroll_psassist_count": aroll_psassist_count,
+        "aroll_raw_count": aroll_raw_count,
         "audio_clip_count": audio_clip_count,
         "marker_count": marker_count,
     }

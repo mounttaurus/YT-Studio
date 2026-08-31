@@ -175,6 +175,25 @@ def get_episode_aroll(project_id: str, episode_number: int) -> dict | None:
     return _read_json(f)
 
 
+def get_psassist_export_log(project_id: str, episode_number: int) -> list[dict] | None:
+    """psassist/export/export_log.json を返す（無ければNone＝ファイル存在確認のみで通す）。
+
+    `out` はホスト絶対パスのためコンテナからは使えない。line_id/ok の判定にのみ使う
+    （Docs/EDITING_AROLL_PARITY_PLAN.md 1章）。
+    """
+    ep_dir = episode_dir(project_id, episode_number)
+    if ep_dir is None:
+        return None
+    f = ep_dir / "psassist" / "export" / "export_log.json"
+    if not f.exists():
+        return None
+    try:
+        data = json.loads(f.read_text(encoding="utf-8"))
+    except Exception:
+        return None
+    return data if isinstance(data, list) else None
+
+
 def write_edit_outputs(project_id: str, episode_number: int, otio_text: str, srt_text: str,
                        edit_json: dict, fcpxml_text: str | None = None,
                        lang: str | None = None) -> Path | None:
