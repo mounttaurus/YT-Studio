@@ -60,7 +60,14 @@ NEEDS_PHOTOSHOP = {"cutout", "build_panel", "export_png"}
 JOB_KINDS = set(CAPABILITIES)
 DEFAULT_INTERVAL = 1.5
 
+# P2b（AROLL_TAB_REDESIGN_PLAN.md §6-d）: build_panel を何行ずつに割って
+# `bridge.py --lines` を繰り返し呼ぶか。チャンクの切れ目でだけ中断を確認する
+# （Photoshop はチャンク内では単一プロセスの整合を保つが、途中で kill すると壊れる）。
+DEFAULT_CHUNK_SIZE = 20
+
 _EP_RE = re.compile(r"^ep(\d+)$")
+# bridge.py / batch_cutout.py の進捗行 "  [  3/196] …" を拾う（P2a）。
+_PROGRESS_RE = re.compile(r"\[\s*(\d+)\s*/\s*(\d+)\s*\]")
 
 
 def now_iso() -> str:
@@ -187,13 +194,34 @@ def pick_oldest_job(episodes: list[dict]) -> tuple[str, str] | None:
     return (best[0], best[1]) if best else None
 
 
-def _run_script(argv: list[str], env_extra: dict, log: list[str], label: str) -> int:
+def _cancel_marker_path(ep_dir: str, job_id: str) -> str:
+    return os.path.join(ep_dir, "psassist", "jobs", "cancel", job_id)
+
+
+def is_cancel_requested(ep_dir: str, job_id: str) -> bool:
+    """director が `POST …/psassist/jobs/{job_id}/cancel` で置くマーカーの有無。"""
+    return os.path.exists(_cancel_marker_path(ep_dir, job_id))
+
+
+def clear_cancel_marker(ep_dir: str, job_id: str) -> None:
+    try:
+        os.remove(_cancel_marker_path(ep_dir, job_id))
+    except OSError:
+        pass
+
+
+def _run_script(argv: list[str], env_extra: dict, log: list[str], label: str,
+                 on_line=None) -> int:
     """psassist の CLI スクリプトを子プロセスで回す。
 
     ⚠️ **Photoshop を触るスクリプトは import して呼ばない。** モジュール先頭で
     `PSA_EPISODE_DIR` を読む作りで、しかも win32com の状態を持つ。1プロセスで
     複数エピソードを回す worker から import すると env の付け替えが効かない。
     子プロセスなら env をそのジョブ用に閉じ込められる。
+
+    `on_line`（P2a）: 標準出力を1行読むごとに呼ぶ。進捗行（`[ n/N]`）の抽出と
+    state.json への反映は呼び出し側（process_job）の責務にする
+    （ここは子プロセスを回すことだけに専念する）。
     """
     env = dict(os.environ)
     env.update(env_extra)
@@ -206,6 +234,8 @@ def _run_script(argv: list[str], env_extra: dict, log: list[str], label: str) ->
         if line:
             print("    | %s" % line)
             log.append(line)
+            if on_line:
+                on_line(line)
     proc.wait()
     if proc.returncode != 0:
         raise RuntimeError("%s が失敗しました（exit %d）" % (label, proc.returncode))
@@ -271,20 +301,29 @@ def run_qa_check_job(ep_dir: str, job: dict, log: list[str]) -> dict:
             "summary": summary}
 
 
-def run_cutout_job(ep_dir: str, job: dict, log: list[str]) -> dict:
+def run_cutout_job(ep_dir: str, job: dict, log: list[str], on_line=None) -> dict:
     """工程1(素材): 背景抜き。⚠️ Photoshop を占有する。"""
     _run_script([sys.executable, os.path.join("scripts", "batch_cutout.py")],
-                {"PSA_EPISODE_DIR": ep_dir}, log, "batch_cutout")
+                {"PSA_EPISODE_DIR": ep_dir}, log, "batch_cutout", on_line=on_line)
     cut = os.path.join(ep_dir, "psassist", "cutout")
     n = len([f for f in os.listdir(cut)]) if os.path.isdir(cut) else 0
     return {"cutouts": n}
 
 
-def run_build_panel_job(ep_dir: str, job: dict, log: list[str]) -> dict:
-    """工程2-4: バブル配置・セリフ流し込み・背景合成。⚠️ Photoshop を占有する。"""
-    plan = os.path.join(ep_dir, "psassist", "panel_plan.json")
-    if not os.path.exists(plan):
+def run_build_panel_job(ep_dir: str, job: dict, log: list[str], on_line=None) -> dict:
+    """工程2-4: バブル配置・セリフ流し込み・背景合成。⚠️ Photoshop を占有する。
+
+    P2b（AROLL_TAB_REDESIGN_PLAN.md §6-d）: `--all` を一括で投げず、
+    `--lines` を `DEFAULT_CHUNK_SIZE` 件ずつに割って `bridge.py` を繰り返し呼ぶ。
+    チャンクの切れ目でだけ中断マーカーを見る（Photoshop単一プロセスの整合を
+    保ったまま止められる場所がそこしかない）。**子プロセスを kill しない**
+    ── 今のチャンクは最後まで終えてから止まる（Aロールの `arollStop` と同じ約束）。
+    """
+    plan_path = os.path.join(ep_dir, "psassist", "panel_plan.json")
+    if not os.path.exists(plan_path):
         raise RuntimeError("panel_plan.json がありません（先に build_plan を実行してください）")
+    with open(plan_path, encoding="utf-8") as fh:
+        plan = json.load(fh)
     # ⚠️ **bubbles.psd は配布物に含まれない**（ユーザー自作の資産で、見た目がそのまま
     #    出力になるため意図的に非公開）。worker を公開リポの clone から起動すると
     #    ここが無く、JSX が `Expected a reference to an existing File/Folder` という
@@ -298,19 +337,41 @@ def run_build_panel_job(ep_dir: str, job: dict, log: list[str]) -> dict:
             "これは配布物に含まれないユーザー資産です。"
             "資産を持つチェックアウトから `--shared` で起動するか、"
             "ルート .env の PSA_BUBBLES_PSD で場所を指定してください。" % bubbles)
-    argv = [sys.executable, os.path.join("host-bridge", "bridge.py"), "--plan", plan,
-            "--bubbles", bubbles]
-    lines = job.get("lines") or []
-    if lines:
-        argv += ["--lines", ",".join(lines)]
-    else:
-        argv += ["--all"]
-        if (job.get("args") or {}).get("resume"):
+    # ⚠️ P1（AROLL_TAB_REDESIGN_PLAN.md §6-d）: bridge.py の既定出力先は `psd`、
+    #    qa_check.build_ctx の既定読み込み先は `psd_final`。既存エピソードは
+    #    手作業で両方に196枚を置いていたため露呈しなかったが、新規エピソードでは
+    #    ③→④の間で必ず止まる。ここで明示して揃える。
+    psd_final_dir = os.path.join(ep_dir, "psassist", "psd_final")
+
+    lines = job.get("lines") or [p["line_id"] for p in plan.get("panels", [])]
+    total = len(lines)
+    job_args = job.get("args") or {}
+    chunk_size = int(job_args.get("chunk_size") or DEFAULT_CHUNK_SIZE)
+    resume = bool(job_args.get("resume"))
+    job_id = job.get("job_id") or ""
+
+    done_count = 0
+    cancelled = False
+    for i in range(0, total, chunk_size):
+        chunk = lines[i:i + chunk_size]
+        argv = [sys.executable, os.path.join("host-bridge", "bridge.py"), "--plan", plan_path,
+                "--bubbles", bubbles, "--out", psd_final_dir, "--lines", ",".join(chunk)]
+        if resume:
             argv.append("--resume")
-    _run_script(argv, {"PSA_EPISODE_DIR": ep_dir}, log, "bridge")
-    psd = os.path.join(ep_dir, "psassist", "psd")
-    n = len([f for f in os.listdir(psd) if f.endswith(".psd")]) if os.path.isdir(psd) else 0
-    return {"psd": n, "lines": len(lines) or None}
+        _run_script(argv, {"PSA_EPISODE_DIR": ep_dir}, log, "bridge", on_line=on_line)
+        done_count += len(chunk)
+        if job_id and is_cancel_requested(ep_dir, job_id):
+            clear_cancel_marker(ep_dir, job_id)
+            cancelled = True
+            log.append("中断マーカーを検出しました（%d/%d 完了）。次のチャンクへは進みません。"
+                       % (done_count, total))
+            break
+
+    n = len([f for f in os.listdir(psd_final_dir) if f.endswith(".psd")]) if os.path.isdir(psd_final_dir) else 0
+    result = {"psd": n, "lines": done_count, "total": total}
+    if cancelled:
+        result["cancelled"] = True
+    return result
 
 
 def run_export_png_job(ep_dir: str, job: dict, log: list[str]) -> dict:
@@ -369,23 +430,53 @@ def process_job(ep_dir: str, job_path: str) -> None:
         return
 
     job_id = job.get("job_id") or os.path.splitext(os.path.basename(job_path))[0]
+    job["job_id"] = job_id  # run_build_panel_job が中断マーカーを引くのに使う
     kind = job.get("kind")
     label = "%s/ep%02d/%s" % (job.get("project_id", "?"), job.get("episode", 0) or 0, job_id)
     state_path = os.path.join(ep_dir, "psassist", "jobs", "state", "%s.json" % job_id)
     started_at = now_iso()
 
     write_json_atomic(state_path, {
-        "job_id": job_id, "status": "running", "log": [], "started_at": started_at,
+        "job_id": job_id, "kind": kind, "status": "running", "log": [], "started_at": started_at,
     })
     # ⚠️ ここで queue/ を消す（director→host の一方通行・単一プロセスなので再処理の心配はない）。
     try:
         os.remove(job_path)
     except OSError:
         pass
+    # ⚠️ **ここで中断マーカーを掃除しない。** job_id はタイムスタンプ+uuid4で
+    #   ジョブごとに一意なので、この時点で既に置かれているマーカーは「実行開始と
+    #   ほぼ同時に中断が押された」ものであり、消していい古いゴミではない。
+    #   掃除すると「起動直後にキャンセルを押すと効かない」レースを生む。
 
     print("[job] %s (%s) 開始" % (label, kind))
     log: list[str] = []
     result: dict = {}
+
+    # P2a: 子プロセスの出力から進捗（`[ n/N]`）を拾い、state.json へ逐次反映する。
+    # ⚠️ 毎行 write すると I/O が重いので、1秒に1回程度へ絞る
+    #   （`write_json_atomic` は既にリトライ付きだが、頻度そのものを抑える）。
+    progress: dict = {}
+    last_write = [0.0]
+
+    def on_line(line: str) -> None:
+        m = _PROGRESS_RE.search(line)
+        if m:
+            progress["done"] = int(m.group(1))
+            progress["total"] = int(m.group(2))
+            progress["current"] = line
+        now = time.time()
+        if now - last_write[0] < 1.0:
+            return
+        last_write[0] = now
+        try:
+            write_json_atomic(state_path, {
+                "job_id": job_id, "kind": kind, "status": "running", "log": log,
+                "started_at": started_at, "progress": dict(progress) if progress else None,
+            })
+        except OSError as e:
+            print("  [progress] 書き込み失敗（次の更新で再試行）: %s" % e)
+
     try:
         if kind not in JOB_KINDS:
             raise ValueError("未対応のkind: %s" % kind)
@@ -396,17 +487,18 @@ def process_job(ep_dir: str, job_path: str) -> None:
         elif kind == "qa_check":
             result = run_qa_check_job(ep_dir, job, log)
         elif kind == "cutout":
-            result = run_cutout_job(ep_dir, job, log)
+            result = run_cutout_job(ep_dir, job, log, on_line=on_line)
         elif kind == "build_panel":
-            result = run_build_panel_job(ep_dir, job, log)
-        status = "done"
+            result = run_build_panel_job(ep_dir, job, log, on_line=on_line)
+        status = "cancelled" if result.get("cancelled") else "done"
     except Exception as e:
         log.append("エラー: %s" % e)
         status = "failed"
 
     write_json_atomic(state_path, {
-        "job_id": job_id, "status": status, "log": log,
+        "job_id": job_id, "kind": kind, "status": status, "log": log,
         "started_at": started_at, "finished_at": now_iso(), "result": result,
+        "progress": dict(progress) if progress else None,
     })
     print("[job] %s → %s  %s" % (label, status, result))
 

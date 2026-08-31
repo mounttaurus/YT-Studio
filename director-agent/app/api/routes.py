@@ -123,6 +123,19 @@ async def get_psassist_jobs(project_id: str, episode_number: int):
     return {"jobs": project_manager.list_psassist_jobs(project_id, episode_number)}
 
 
+@router.post("/projects/{project_id}/episodes/{episode_number}/psassist/jobs/{job_id}/cancel")
+async def cancel_psassist_job(project_id: str, episode_number: int, job_id: str):
+    """P2b: build_panel のチャンク境界での中断をマーカーで要求する。
+
+    ⚠️ 子プロセスを kill しない約束（Photoshop にドキュメントが開いたまま残る）ので、
+    「今のチャンクを終えてから止まる」＝即座には止まらない。
+    """
+    ok = project_manager.request_psassist_job_cancel(project_id, episode_number, job_id)
+    if not ok:
+        raise HTTPException(status_code=404, detail="episode not found")
+    return {"requested": True}
+
+
 @router.get("/psassist/worker")
 async def get_psassist_worker():
     """プロジェクト非依存のホスト常駐ハートビート。無ければ psassist 未使用環境。"""
@@ -197,12 +210,41 @@ async def approve_and_prepare(project_id: str, episode_number: int, request: Req
         out["aroll"] = None
         out["aroll_error"] = f"{type(e).__name__}: {e}"
 
+    # P3（AROLL_TAB_REDESIGN_PLAN.md §6-d）: 背景の自動割当もプロンプトと同じ扱いで
+    # 承認時に自動化する。プロンプトの後に続けるのは、割当が slot（shot/emotion）を
+    # 見るため（`aroll_manager.auto_assign_backgrounds`）── その slot はプロンプト
+    # 生成が書く。ここも「失敗しても承認は成功」で、`background_error` に理由を載せる。
+    # ⚠️ **`only_missing=True` 固定。** 手で選び直した背景を承認のたびに壊さない
+    #   （プロンプトの `overwrite=False` と同じ理屈）。
+    out["background"] = None
+    if out.get("aroll") is None:
+        # プロンプトが無ければ割り当てる slot も無い（aroll.json 自体が無い）。
+        # 呼ぶだけ無駄なので明示してスキップする（HTTPで404を踏むのを待たない）。
+        out["background_error"] = "aroll のプロンプトが無いためスキップしました"
+    else:
+        try:
+            async with httpx.AsyncClient(timeout=60.0) as client:
+                r3 = await client.post(
+                    f"{SCRAPPING_AGENT_URL}/projects/{project_id}"
+                    f"/episodes/{episode_number}/aroll/backgrounds/auto_assign",
+                    json={"only_missing": True},
+                )
+            if r3.status_code >= 400:
+                out["background_error"] = f"HTTP {r3.status_code}: {r3.text[:300]}"
+            else:
+                out["background"] = r3.json()
+                out["background_error"] = None
+        except Exception as e:
+            out["background_error"] = f"{type(e).__name__}: {e}"
+
     # 承認を200で返す以上、失敗は監査ログに残さないと「静かに起きなかった」ことになる
     project_manager.append_director_log(project_id, {
         "action": "approve-and-prepare",
         "episode": episode_number,
         "aroll_panels": (out.get("aroll") or {}).get("panel_count"),
         "aroll_error": out.get("aroll_error"),
+        "background_assigned": (out.get("background") or {}).get("assigned"),
+        "background_error": out.get("background_error"),
     })
     return out
 

@@ -2499,6 +2499,23 @@
                     <div x-show="psassistLatestJob" style="margin-top:8px;font-size:11px"
                          :style="psassistLatestJob?.status === 'failed' ? 'color:#f87171' : 'color:#94a3b8'">
                       <span x-text="`直近のジョブ: ${psassistLatestJob?.job_id ?? ''} — ${psassistLatestJob?.status ?? ''}`"></span>
+                      <!-- P2a: 進捗（build_panel/cutout が [n/N] を書くたびに反映） -->
+                      <template x-if="psassistLatestJob?.status === 'running' && psassistLatestJob?.progress?.total">
+                        <div style="margin-top:4px">
+                          <div class="progress-bar">
+                            <div class="progress-fill"
+                                 :style="`width:${Math.round((psassistLatestJob.progress.done / psassistLatestJob.progress.total) * 100)}%`"></div>
+                          </div>
+                          <div style="font-size:11px;color:#64748b;margin-top:2px"
+                               x-text="`${psassistLatestJob.progress.done} / ${psassistLatestJob.progress.total}`"></div>
+                        </div>
+                      </template>
+                      <!-- P2b: 中断（build_panel のみ。子プロセスは kill せず、今のチャンクを終えてから止まる） -->
+                      <button class="btn btn-sm" style="margin-top:6px"
+                              x-show="psassistLatestJob?.status === 'running' && psassistLatestJob?.kind === 'build_panel'"
+                              :disabled="psassistCancelRequested"
+                              @click="psassistCancelJob()"
+                              x-text="psassistCancelRequested ? '⏸ 中断要求済み（今のチャンクを終えたら止まります）' : '⏸ 中断する（今のチャンクを終えてから）'"></button>
                       <div class="log-area" x-show="(psassistLatestJob?.log || []).length" style="margin-top:4px;max-height:140px">
                         <template x-for="(l, i) in (psassistLatestJob.log || []).slice(-40)" :key="i">
                           <div class="log-line" x-text="l"></div>
@@ -5582,6 +5599,7 @@ function app() {
     psassistJobs: [],             // その話数のジョブ状態（新しい順）
     psassistJobBusy: false,       // ジョブ投入中
     psassistJobPollTimer: null,   // ポーリング用 setInterval の id
+    psassistCancelRequested: false, // P2b: 中断ボタンを押した後の二重押下防止
 
     // 🎞️ 編集情報タブ
     editOk: false,
@@ -6386,6 +6404,16 @@ function app() {
           // 承認そのものは成功している。ここを混ぜて「失敗した」と読ませない
           msg += `\n\n⚠️ Aロールのプロンプト生成は失敗しました（承認は完了しています）\n`
                + `${data.aroll_error}\n🖼️Aロールタブから手動で実行できます。`;
+        }
+        // P3（AROLL_TAB_REDESIGN_PLAN.md §6-d）: 背景の自動割当もプロンプトと同じ扱いで
+        // 承認時に走る。only_missing 固定なので手で選び直した行は上書きされない。
+        if (data.background) {
+          const b = data.background;
+          if (b.assigned) msg += `\n🏞️ 背景を${b.assigned}行に割り当てました`;
+          if (b.unmatched) msg += `\n⚠️ 背景が見つからなかった行: ${b.unmatched}件`;
+        } else if (data.background_error && data.aroll) {
+          // aroll 自体が無い場合のスキップ理由はノイズなので出さない（aroll_errorで既に説明済み）
+          msg += `\n\n⚠️ 背景の自動割当は失敗しました（承認は完了しています）\n${data.background_error}`;
         }
         alert(msg);
         await this.loadEpisodes();
@@ -8345,6 +8373,7 @@ function app() {
       }
       if (!confirm(msg + `\n\n続行しますか？`)) return;
       this.psassistJobBusy = true;
+      this.psassistCancelRequested = false;   // 新しいジョブなので前回の中断要求状態を捨てる
       try {
         const r = await fetch(`${this.qaBase}/jobs`, {
           method: 'POST', headers: { 'Content-Type': 'application/json' },
@@ -8354,6 +8383,25 @@ function app() {
         await this.loadPsassistJobs();
         this.psassistPollJob();
       } finally { this.psassistJobBusy = false; }
+    },
+    // P2b: build_panel のチャンク境界での中断を要求する（子プロセスは kill しない）。
+    async psassistCancelJob() {
+      const job = this.psassistLatestJob;
+      if (!job || job.status !== 'running' || this.psassistCancelRequested) return;
+      if (!confirm('中断を要求します。今のチャンク（最大20行）を終えてから止まります。\n'
+                  + 'Photoshop のドキュメントはそのまま残ります。続行しますか？')) return;
+      this.psassistCancelRequested = true;
+      try {
+        const r = await fetch(`${this.qaBase}/jobs/${job.job_id}/cancel`, { method: 'POST' });
+        if (!r.ok) {
+          const d = await r.json().catch(() => ({}));
+          alert('中断要求エラー: ' + (d.detail || r.status));
+          this.psassistCancelRequested = false;
+        }
+      } catch (e) {
+        alert('中断要求に失敗しました: ' + e);
+        this.psassistCancelRequested = false;
+      }
     },
     async psassistRunExportJob(lineIds) {
       const lines = lineIds && lineIds.length ? lineIds : this.psassistExportTargets;
@@ -8381,7 +8429,9 @@ function app() {
         if (!job || job.status !== 'running') {
           clearInterval(this.psassistJobPollTimer);
           this.psassistJobPollTimer = null;
-          if (job && job.status === 'done') { await this.loadPsassistQa(); }
+          this.psassistCancelRequested = false;
+          // cancelled も build_panel が途中まで進んでいる＝新しいPSDができている
+          if (job && (job.status === 'done' || job.status === 'cancelled')) { await this.loadPsassistQa(); }
         }
       }, 3000);
     },

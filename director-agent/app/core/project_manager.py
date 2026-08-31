@@ -253,3 +253,19 @@ def list_psassist_jobs(project_id: str, episode_number: int, limit: int = 50) ->
             items.append(d)
     items.sort(key=lambda d: d.get("job_id", ""), reverse=True)
     return items[:limit]
+
+
+def request_psassist_job_cancel(project_id: str, episode_number: int, job_id: str) -> bool:
+    """`jobs/cancel/<job_id>` にマーカーを置く（P2b・AROLL_TAB_REDESIGN_PLAN.md §6-d）。
+
+    host_worker.py は build_panel のチャンクの切れ目でだけこれを見る。
+    ⚠️ **子プロセスを kill しない設計**なので、押した瞬間に止まるわけではなく
+    「今のチャンクを終えてから止まる」。エピソードが無ければ False。
+    """
+    ep = episode_dir(project_id, episode_number)
+    if ep is None:
+        return False
+    cancel_dir = ep / "psassist" / "jobs" / "cancel"
+    cancel_dir.mkdir(parents=True, exist_ok=True)
+    (cancel_dir / job_id).write_text("", encoding="utf-8")
+    return True
