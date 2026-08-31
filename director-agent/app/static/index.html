@@ -2523,7 +2523,12 @@
                     <template x-if="!psassistAlive">
                       <div style="font-size:11px;color:#94a3b8;line-height:1.7">
                         ホスト工程が動いていません。次を実行すると、ここにボタンが出ます。
-                        <div style="margin-top:4px;padding:8px 10px;background:#0f172a;border-radius:6px;font-family:monospace;font-size:11px;color:#a5b4fc;user-select:all;overflow-x:auto">python psassist/scripts/host_worker.py</div>
+                        <div style="margin-top:4px;padding:8px 10px;background:#0f172a;border-radius:6px;font-family:monospace;font-size:11px;color:#a5b4fc;user-select:all;overflow-x:auto"
+                             x-text="psassistStartCommand"></div>
+                        <div style="margin-top:4px;color:#4b5563">
+                          ⚠️ <b>psassist の資産（bubbles.psd 等）を持つチェックアウトから実行してください。</b>
+                          資産は配布物に含まれないため、含まれない場所から起動すると<b>組版だけが失敗します</b>。
+                        </div>
                       </div>
                     </template>
                   </div>
@@ -8372,6 +8377,26 @@ function app() {
       // qa_report.json に記録しているので、あればそれを使う。
       return this.qa?.episode_dir
         || `<エピソードのフォルダ>\\episodes\\ep${String(this.activeEpisodeNumber).padStart(2, '0')}`;
+    },
+    // ホスト常駐の起動コマンド。
+    // ⚠️ **`--shared` を省いた形を案内しない。** psassist の組版には配布物に含まれない
+    //    ユーザー資産（bubbles.psd 等）が要るので、資産を持つチェックアウトから
+    //    **稼働側の shared を指して**起動する必要がある。素の
+    //    `python psassist/scripts/host_worker.py` を案内していたため、実機で
+    //    `Expected a reference to an existing File/Folder` という原因の分からない
+    //    エラーになった（2026-08-30）。shared は検査レポートの episode_dir から導く
+    //    （`<shared>/projects/<pid>/episodes/epNN` の4段上）。
+    get psassistSharedDir() {
+      const ep = this.qa?.episode_dir;
+      if (!ep) return '';
+      const parts = ep.replace(/[\\/]+$/, '').split(/[\\/]/);
+      return parts.length >= 4 ? parts.slice(0, -4).join('\\') : '';
+    },
+    get psassistStartCommand() {
+      const shared = this.psassistSharedDir;
+      return shared
+        ? `python psassist/scripts/host_worker.py --shared "${shared}"`
+        : 'python psassist/scripts/host_worker.py --shared "<稼働中のsharedフォルダ>"';
     },
     get qaCheckCommand() {
       return `python psassist/scripts/qa_check.py --episode "${this.qaEpisodeDir}"`;
