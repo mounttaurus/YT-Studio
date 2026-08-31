@@ -186,6 +186,11 @@ async def generate_script(project_id: str, episode_number: int, style_id: str,
     OpenRouter経由(openrouter/...)を指定する場合は無料モデル限定（有料は拒否される）。有料モデルを
     使いたい場合は anthropic/... , openai/... , gemini/... のオリジナルAPIを直接指定すること
     （OpenRouterは中間業者でマージンが乗るため、同じモデルを直接叩く方が安い）。
+
+    ⚠️ **承認済み台本がある話でこれを呼び直すと、次の approve_script で line_id が
+    振り直され、Aロールの絵とTTSの音声の紐付けが全滅する。** 言い回しの修正だけなら
+    regenerate_lines を使うこと。呼ぶ前に project_status で当該話の生成物の有無を確認する
+    （UIにはこの確認ダイアログがあるが、MCP経由はガードが無い＝ここが唯一の歯止め）。
     """
     body = {"style_id": style_id, "episode_number": episode_number}
     if extra_instruction is not None:
@@ -200,10 +205,17 @@ async def generate_script(project_id: str, episode_number: int, style_id: str,
 
 
 async def approve_script(project_id: str, episode_number: int) -> dict:
-    """指定話のドラフトを承認し script.json として確定する（次工程の前提）。"""
+    """指定話のドラフトを承認し script.json として確定し、続けてAロールのプロンプトと
+    背景の自動割当まで用意する（director:8005 🖼️Aロールタブの「承認」ボタンと同じ挙動）。
+
+    戻り値は台本確定の結果に加えて aroll（panel_count/warnings）・aroll_error・
+    background（assigned等）・background_error を含む。**プロンプト生成/背景割当が
+    失敗しても台本の承認自体は成功する**（各 *_error に理由が入るだけ）。
+    ⚠️ 承認のたびにLLM呼び出しが挟まるぶん、以前よりわずかに遅くなる。
+    """
     return await dc.request(
-        "POST", f"api/scripting/projects/{project_id}/approve",
-        params={"episode_number": episode_number},
+        "POST", f"projects/{project_id}/episodes/{episode_number}/approve-and-prepare",
+        json={},
     )
 
 
@@ -285,6 +297,10 @@ async def generate_series_script(project_id: str, style_id: str,
     llm_model省略時は既定(直接Anthropic API経由のSonnet 4.6)を使用。OpenRouter経由(openrouter/...)を
     指定する場合は無料モデル限定（有料は拒否される）。有料で使うなら anthropic/... , openai/... ,
     gemini/... のオリジナルAPIを直接指定すること。
+
+    ⚠️ **承認済み台本がある話をこれで作り直すと、次の approve_script で line_id が
+    振り直され、Aロールの絵とTTSの音声の紐付けが全滅する。** 事前に project_status で
+    各話の生成物の有無を確認すること（generate_script と同じ注意）。
     """
     body = {"style_id": style_id}
     if episode_count is not None:
@@ -812,6 +828,10 @@ async def run_aroll_batch(project_id: str, episode_number: int,
     only_missing=True(既定)は生成済みをスキップ＝中断後の再開・失敗行の再試行を兼ねる。
     allow_paid_fallback は既定False＝Gemini失敗時もOpenRouter(Free表示でも課金)へ退避しない。
     実行前に aroll_status で対象枚数を確認し、概算コストをユーザーに提示してから呼ぶこと。
+
+    ⚠️ **課金の前に必ず aroll_cutout_plan → aroll_apply_cutout_plan を試すこと。**
+    既存の切り抜き在庫で賄える行は無料で埋まる（実データでは196行中172行が在庫で賄えた
+    ＝それを飛ばすと最大7倍の課金になりうる）。在庫適用後に残った行だけをこれで生成する。
     """
     body: dict = {"only_missing": only_missing, "allow_paid_fallback": allow_paid_fallback}
     if line_ids is not None:
@@ -844,8 +864,114 @@ async def aroll_sync(project_id: str, episode_number: int) -> dict:
     return await dc.get(f"api/scrapping/projects/{project_id}/episodes/{episode_number}/aroll/sync")
 
 
+# ── Aロールの仕上げ工程（在庫からの割当・承認→在庫化・背景一括割当・行編集） ────
+#
+# generate_aroll_prompts/run_aroll_batch だけでは話数が完走しない
+# （Docs/MCP_PARITY_PLAN.md）。ここから先が UI の🖼️Aロールタブが持つ仕上げの口。
+
+async def aroll_cutout_plan(project_id: str, episode_number: int) -> dict:
+    """切り抜き在庫で全行を賄えるかを試算する（検査のみ・生成も保存もしない・課金なし）。
+
+    各行が in-stock かどうかと候補 slot_id を返す（items[].slot_id が null なら在庫では
+    賄えない＝新規生成が要る行）。**run_aroll_batch で課金する前に必ずこれを呼ぶこと。**
+    在庫で埋まる行を先に aroll_apply_cutout_plan で確定してから、残りだけ生成する。
+    """
+    return await dc.get(f"api/scrapping/projects/{project_id}/episodes/{episode_number}/aroll/cutout-plan")
+
+
+async def aroll_apply_cutout_plan(project_id: str, episode_number: int,
+                                  line_ids: Optional[list[str]] = None) -> dict:
+    """aroll_cutout_plan の試算結果を実際に書き込む（在庫で賄える行だけ・無料・画像生成なし）。
+
+    在庫で賄えない行は触らない（そこは run_aroll_batch の担当）。
+    line_ids は **省略で在庫が効く全行が対象・空リスト[]で対象ゼロ**。
+    """
+    body: dict = {}
+    if line_ids is not None:
+        body["line_ids"] = line_ids
+    return await dc.request(
+        "POST", f"api/scrapping/projects/{project_id}/episodes/{episode_number}/aroll/cutout-plan/apply",
+        json=body)
+
+
+async def aroll_approve_images(project_id: str, episode_number: int,
+                               line_ids: Optional[list[str]] = None,
+                               register: bool = True) -> dict:
+    """Aロール画像を承認し、その時点でキャラ所有ライブラリ(在庫)へ取り込む(可逆WRITE・課金なし)。
+
+    生成の瞬間ではなく承認の瞬間に在庫化する(作り直して捨てた絵を在庫に入れないため)。
+    在庫に積めない行(キャラ未確定・slot不足・切り抜き失敗等)は skipped に理由が入るだけで
+    承認自体は通る(その行の絵はそのまま使われる)。register=False で承認だけして在庫化は
+    見送る。
+
+    ⚠️ **line_ids は省略で全行・空リスト[]で対象ゼロ**（falsy判定で同一視しないこと。
+    `CHARACTER_CUTOUT_PLAN.md` §13-4）。1行だけの再承認にも同じ口を使う。
+    """
+    body: dict = {"register": register}
+    if line_ids is not None:
+        body["line_ids"] = line_ids
+    return await dc.request(
+        "POST", f"api/scrapping/projects/{project_id}/episodes/{episode_number}/aroll/approve-images",
+        json=body)
+
+
+async def aroll_assign_backgrounds(project_id: str, episode_number: int,
+                                   only_missing: bool = True,
+                                   line_ids: Optional[list[str]] = None) -> dict:
+    """全行の背景を背景アーカイブから自動割当する(無料・画像は一切生成しない・可逆WRITE)。
+
+    行の(shot→framing, emotion→mood)から既存アーカイブより1件選んで割り当てる。
+    approve_script(=approve-and-prepare)がonly_missing=True固定で自動的にも呼ぶので、
+    通常は明示的に呼ぶ必要はない。手で選び直した行をまとめて割当し直したい時や、
+    aroll_sync で missing が出た時にこれで使う。
+
+    only_missing=True(既定): 既にbackground_idを持つ行はスキップ(手動選択を保護)。
+    False: 全行を割当し直す(既存の手動選択も上書きする)。
+    ⚠️ **line_ids は省略で全行・空リスト[]で対象ゼロ**（`CHARACTER_CUTOUT_PLAN.md` §13-4）。
+    """
+    body: dict = {"only_missing": only_missing}
+    if line_ids is not None:
+        body["line_ids"] = line_ids
+    return await dc.request(
+        "POST",
+        f"api/scrapping/projects/{project_id}/episodes/{episode_number}/aroll/backgrounds/auto_assign",
+        json=body)
+
+
+async def aroll_update_line(project_id: str, episode_number: int, line_id: str,
+                            prompt: Optional[str] = None,
+                            slot: Optional[dict] = None,
+                            characters: Optional[list[str]] = None,
+                            background_id: Optional[str] = None) -> dict:
+    """Aロール1行のプロンプト/演技スロット/登場キャラ/背景を手直しする(可逆WRITE・課金なし)。
+
+    prompt を書くと prompt_source="user" になる(以後の一括上書きから保護される)。
+    slot={emotion,shot,angle,pose?} を渡すと slot_source="user" になり、演技スロットに
+    紐づく在庫/背景の照合キーだけを画像生成LLMの散文と独立に差し替えられる。
+    background_id は空文字""で未割当に戻す(Noneは「変更しない」の意味＝他の引数と同じ)。
+    line_id は get_script/aroll_sync の行id。この編集だけでは画像は再生成されない
+    (絵を作り直したい時は run_aroll_batch や1行再生成の別口を使う)。
+    """
+    body: dict = {}
+    if prompt is not None:
+        body["prompt"] = prompt
+    if slot is not None:
+        body["slot"] = slot
+    if characters is not None:
+        body["characters"] = characters
+    if background_id is not None:
+        body["background_id"] = background_id
+    return await dc.request(
+        "PUT", f"api/scrapping/projects/{project_id}/episodes/{episode_number}/aroll/lines/{line_id}",
+        json=body)
+
+
 async def aroll_export(project_id: str, episode_number: int) -> dict:
     """Photoshop等の手作業向けに a_roll/export/ へ行番号付きコピー＋script_lines.txtを書き出す。
+
+    ⚠️ **旧・手作業用の書き出し**（現行の psassist ホスト工程は a_roll/ を直接読むため
+    通常は不要）。Photoshopでの組版・検査・納品PNGは psassist_run(kind="build_plan"/
+    "cutout"/"build_panel"/"qa_check"/"export_png") を使うこと。
 
     正本(a_roll/*.png)はリネームしない。export/フォルダは毎回全消去して作り直すため、
     台本を編集した後はもう一度呼ぶだけで良い。stale(絵が古い)行と未生成行はコピーされず
@@ -853,6 +979,64 @@ async def aroll_export(project_id: str, episode_number: int) -> dict:
     """
     return await dc.request(
         "POST", f"api/scrapping/projects/{project_id}/episodes/{episode_number}/aroll/export")
+
+
+# ── ホスト工程（psassist・Photoshop） ────────────────────────────────
+#
+# psassist/ はコンテナではない（Photoshop / win32com のホスト常駐工程）。director は
+# queue/ にジョブを書き state/ を読むだけで、host_worker.py とはHTTPで繋がらない
+# （psassist/README.md）。組む/検査/納品PNGまでの全工程がここで揃う。
+
+async def psassist_worker_status() -> dict:
+    """host_worker.py（ホスト常駐・Photoshop）の生死をハートビートで返す（プロジェクト非依存）。
+
+    alive=False またはこの呼び出し自体が404なら、psassist_run でジョブを積んでも
+    キューに溜まるだけで何も起きない。**psassist_run の前に必ずこれを確認すること。**
+    """
+    return await dc.get("psassist/worker")
+
+
+async def psassist_qa(project_id: str, episode_number: int) -> dict:
+    """Photoshop合成結果の検査レポート（psassist/scripts/qa_check.py が書いたもの）を読む。
+
+    psassist_run(kind="qa_check") の実行後に確認する。まだ検査していなければ404。
+    """
+    return await dc.get(f"projects/{project_id}/episodes/{episode_number}/psassist/qa")
+
+
+async def psassist_jobs(project_id: str, episode_number: int) -> dict:
+    """その話数のホスト工程ジョブを新しい順に返す（上限50件・status/progress/logを含む）。
+
+    psassist_run の後はこれをポーリングして進捗を追う。
+    """
+    return await dc.get(f"projects/{project_id}/episodes/{episode_number}/psassist/jobs")
+
+
+async def psassist_run(project_id: str, episode_number: int, kind: str,
+                       lines: Optional[list[str]] = None) -> dict:
+    """host_worker.py（ホスト常駐のPhotoshop工程）へジョブを1件キューに積む。
+
+    ⚠️ **`cutout` / `build_panel` / `export_png` は Photoshop を占有する。** 他の用途で
+    Photoshopを使っていると衝突する。**実行前に必ずユーザーへ確認を取ってから呼ぶこと。**
+
+    kind: "build_plan"（配置計画）| "cutout"（キャラ切り抜き・Photoshop占有）|
+    "build_panel"（コマ合成・Photoshop占有）| "qa_check"（検査・結果はpsassist_qaで読む）|
+    "export_png"（納品PNG書き出し・Photoshop占有）。
+
+    lines: 対象行のline_id配列。build_plan/cutout/build_panel/qa_checkは省略で「全件」。
+    ⚠️ **export_png だけは lines 省略不可**（空/省略はエラーになる）。理由: 進捗の
+    `--resume` はファイルの更新日時を見ないため、全件指定だと直した行だけ描き出すつもりが
+    古い版のまま飛ばされる。直した行のline_idを明示すること。
+
+    ⚠️ **先に psassist_worker_status() で alive を確認すること。** worker が動いていないと
+    ジョブはキューに積まれるだけで何も実行されない（無言で放置される）。
+    進捗は psassist_jobs をポーリングして status/log を見る。
+    """
+    body: dict = {"kind": kind}
+    if lines is not None:
+        body["lines"] = lines
+    return await dc.request(
+        "POST", f"projects/{project_id}/episodes/{episode_number}/psassist/jobs", json=body)
 
 
 # ── レジストリ（server.py / 後継ループ が参照する単一の出所） ──────────
@@ -898,6 +1082,16 @@ TOOLS = [
     {"fn": aroll_status,         "side_effects": [S.READ]},
     {"fn": aroll_sync,           "side_effects": [S.READ]},
     {"fn": aroll_export,         "side_effects": [S.WRITE]},
+    {"fn": aroll_cutout_plan,    "side_effects": [S.READ]},
+    {"fn": aroll_apply_cutout_plan, "side_effects": [S.WRITE]},
+    {"fn": aroll_approve_images, "side_effects": [S.WRITE]},
+    {"fn": aroll_assign_backgrounds, "side_effects": [S.WRITE]},
+    {"fn": aroll_update_line,    "side_effects": [S.WRITE]},
+    # ホスト工程（psassist・Photoshop）
+    {"fn": psassist_worker_status, "side_effects": [S.READ]},
+    {"fn": psassist_qa,          "side_effects": [S.READ]},
+    {"fn": psassist_jobs,        "side_effects": [S.READ]},
+    {"fn": psassist_run,         "side_effects": [S.WRITE, S.ASYNC]},
     # 背景アーカイブ（台本非依存の再利用可能な背景ライブラリ）
     {"fn": list_background_presets, "side_effects": [S.READ]},
     {"fn": list_backgrounds,     "side_effects": [S.READ]},

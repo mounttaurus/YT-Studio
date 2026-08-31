@@ -1691,12 +1691,16 @@ def apply_cutout_plan(project_id: str, episode: int, line_ids: list[str] | None 
 
     賄えない行は触らない ── そこは新規生成の担当で、無理に在庫から埋めると
     ワンパターンの発生源になる（在庫から選ばないこと自体が設計）。
+
+    ⚠️ **空リストは「対象ゼロ」**（省略＝None が「全行」）。falsy 判定にすると、
+    1行も選んでいないのに在庫で賄える全行へ適用してしまう
+    （``CHARACTER_CUTOUT_PLAN.md`` §13-4 と同じ規則。approve_images/auto_assign_backgrounds と揃える）。
     """
     plan = cutout_plan(project_id, episode)
-    targets = set(line_ids) if line_ids else None
+    targets = None if line_ids is None else set(line_ids)
     applied, skipped = [], 0
     for line in plan["lines"]:
-        if not line["slot_id"] or (targets and line["line_id"] not in targets):
+        if not line["slot_id"] or (targets is not None and line["line_id"] not in targets):
             skipped += 1
             continue
         set_cutout_selection(project_id, episode, line["line_id"], line["slot_id"])
