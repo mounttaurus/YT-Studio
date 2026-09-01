@@ -3,12 +3,17 @@ Gemini の Google検索グラウンディングで関連記事/言及を補助�
 引用URLを確実に取るため google-genai ネイティブSDKを使う（LiteLLM経由のグラウンディングは不安定）。
 """
 import logging
+import os
 
 from app.core.llm_client import gemini_api_key
 
 logger = logging.getLogger(__name__)
 
-GROUNDING_MODEL = "gemini-2.5-flash"  # 検索＝速い・安いflashで十分
+# 罠: Gemini直接叩きのモデル名は提供終了で404になる（memory/gemini-direct-model-names-go-stale）。
+# 2026-09-01: gemini-2.5-flash が404「no longer available to new users」で失敗し、
+# 検索が常にcount:0を返す事故を起こした（silent failでログにしか出ない）。
+# 環境変数で上書きできるようにし、古い保存値の先頭固定に頼らないようにする。
+GROUNDING_MODEL = os.getenv("RESEARCH_GROUNDING_MODEL", "gemini-3.6-flash")
 
 
 async def search(query: str, max_results: int = 6) -> list[dict]:
