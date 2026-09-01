@@ -8471,10 +8471,12 @@ function app() {
       return parts.length >= 4 ? parts.slice(0, -4).join('\\') : '';
     },
     get psassistStartCommand() {
+      // start-psassist-worker.ps1（リポ直下・refresh-user-folders.ps1と同じ「ダブルクリックで
+      // 起動・ウィンドウを閉じて終了」運用）が host_worker.py の起動を肩代わりする。
       const shared = this.psassistSharedDir;
       return shared
-        ? `python psassist/scripts/host_worker.py --shared "${shared}"`
-        : 'python psassist/scripts/host_worker.py --shared "<稼働中のsharedフォルダ>"';
+        ? `.\\start-psassist-worker.ps1 -Shared "${shared}"`
+        : '.\\start-psassist-worker.ps1 -Shared "<稼働中のsharedフォルダ>"';
     },
     get qaCheckCommand() {
       return `python psassist/scripts/qa_check.py --episode "${this.qaEpisodeDir}"`;
