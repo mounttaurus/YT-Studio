@@ -35,7 +35,8 @@ from app.core import (
     style_manager,
 )
 
-SCHEMA_VERSION = "1.2.0"  # 1.2.0: rebless_log / diversity を追加（追加のみ・後方互換）
+SCHEMA_VERSION = "1.3.0"  # 1.3.0: mask を追加（analyze_alpha実測・psassistの採寸本籍。追加のみ・後方互換）
+#                          1.2.0: rebless_log / diversity を追加
 #                          1.1.0: kind="cutout" / cutout / measured / fingerprint を追加
 
 BACKGROUND_FRAGMENT = panel_presets.BACKGROUND_MODES["flat"]  # 本籍は panel_presets
@@ -470,7 +471,7 @@ MAX_ATTEMPTS = 3   # 初回＋再試行2回。落ちるたびに課金される�
 
 async def _generate_and_measure(
     char_id: str, prompt: str, refs: list, model: str,
-) -> tuple[bytes, bytes | None, dict | None, str]:
+) -> tuple[bytes, bytes | None, dict | None, dict | None, str]:
     """生成 → 背景除去 → 指紋。**弾かない・作り直さない。**
 
     ⚠️ **2026-08-29: 受け入れ検査（既存と近すぎたら作り直す）を撤去した。**
@@ -500,10 +501,15 @@ async def _generate_and_measure(
     fp = fingerprint.for_entry(rgba)
     if not fp.get("dhash"):
         # アルファが空＝切り抜きに失敗。絵自体は課金済みなので捨てない（パネルとしては使える）
-        return data, None, None, "背景を抜くとアルファが空だった（切り抜き方式=%s）" % info.get("effective")
+        return data, None, None, None, "背景を抜くとアルファが空だった（切り抜き方式=%s）" % info.get("effective")
+    # ⚠️ psassist の採寸（バブルの左右・キャラ移動量）はここで測った mask を使う。
+    # mask_stats.json（その話数で生成した絵）と混同しないこと ── 混同すると
+    # 在庫の絵を貼った行でも生成画像の採寸で左右が決まり、バブルが逆側に出る
+    # （2026-09-02実測: ep01 28行中11行で発生。詳細 Docs/AROLL_PSASSIST_REFACTOR_PLAN.md §0-1）
+    mask = cutout_engine.analyze_alpha(rgba)
     buf = io.BytesIO()
     rgba.save(buf, "PNG")
-    return data, buf.getvalue(), fp, ""
+    return data, buf.getvalue(), fp, mask, ""
 
 
 async def generate_and_register(
@@ -556,7 +562,7 @@ async def generate_and_register(
     prompt = f"{body}, {BACKGROUND_FRAGMENT}. {PROMPT_SUFFIX}"
     refs = _resolve_refs(char_id)
 
-    data, cut_png, fp, cut_note = await _generate_and_measure(char_id, prompt, refs, model)
+    data, cut_png, fp, mask, cut_note = await _generate_and_measure(char_id, prompt, refs, model)
 
     ver = appearance_version(char_id)
     idx = load_index(char_id)
@@ -602,7 +608,7 @@ async def generate_and_register(
         "times_used": 0,
     }
     if cut_png:
-        entry |= {"cutout": f"cutouts/{slot_id}.png", "fingerprint": fp}
+        entry |= {"cutout": f"cutouts/{slot_id}.png", "fingerprint": fp, "mask": mask}
     idx["entries"].append(entry)
     save_index(char_id, idx)
     return entry
@@ -642,6 +648,9 @@ def register_from_image(
         # 切り抜きに失敗した絵だけは積まない（cutout も指紋も無い entry は用途が無い）
         return {"registered": False,
                 "reason": "背景を抜くとアルファが空だった（方式=%s）" % info.get("effective")}
+    # ⚠️ psassist の採寸（バブルの左右等）はここで測る mask を使う。詳細は
+    # _generate_and_measure の同種コメント参照。
+    mask = cutout_engine.analyze_alpha(rgba)
 
     ver = appearance_version(char_id)
     slot_id = _next_slot_id(emotion, shot, angle, {e["slot_id"] for e in idx["entries"]})
@@ -656,7 +665,7 @@ def register_from_image(
         "slot_id": slot_id, "emotion": emotion, "shot": shot, "angle": angle,
         "pose": pose or None, "appearance_version": ver, "aspect": "16:9",
         "image": f"images/{slot_id}.png", "cutout": f"cutouts/{slot_id}.png",
-        "fingerprint": fp, "cutout_method": info.get("effective"),
+        "fingerprint": fp, "mask": mask, "cutout_method": info.get("effective"),
         "style": style_name, "model": model or None, "prompt": prompt,
         "provider": provider, "source": src, "created_at": _now(), "note": "",
         "review_status": review_status, "times_used": 0,

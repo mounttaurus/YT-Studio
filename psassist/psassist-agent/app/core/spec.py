@@ -91,9 +91,44 @@ class SpeakerDefault:
     bubble_key: str
     side: str  # left / right
     note: str
+    # 2026-09-02新規（S3）: 記号による行ごとの形状上書き。両方 None なら旧来どおり
+    # bubble_key 固定（後方互換）。
+    question_bubble_key: str | None = None  # 文中に ？/? があればこちら
+    exclaim_bubble_key: str | None = None    # 文中に ！/! があればこちら（？と両方あれば優先）
 
 
 FALLBACK_DEFAULT = SpeakerDefault("rect_a", "left", "話者不明時")
+
+QUESTION_CHARS = "？?"
+EXCLAIM_CHARS = "！!"
+
+
+def bubble_key_for(default: SpeakerDefault, text: str) -> tuple[str, str]:
+    """行のテキストから使うバブルの形状キーを決める。(key, 決定根拠) を返す。
+
+    ⚠️ **LLMの感情ラベルではなく、文字そのもの（！/？の有無）で決める。**
+    129枚の実測で「emotion label → 形状」は約60%しか当たらず（最頻値決め打ち47%と
+    大差ない）、当てにいかない方針にした経緯がある（`assets/README.md`）。
+    一方これは**感情推定を経由しない、文中記号という決定的な信号**であり、
+    まだ試していなかった材料に当たる（`memory/psd-layout-has-no-rule` の
+    「材料を増やせば予測できるようになるものもある」と同じ理屈。左右判定が
+    話者既定64%→顔マスク82%に上がった前例）。
+
+    ⚠️ **129枚の元データは現存しない**（`A-roll-SpeachBubble/` に残るのは初期の
+    試作6枚のみで構造もバラバラ・全数解析済みの原本は既に整理済み）。よってこの
+    ルールは**実測で再検証できていない**。既存の「既定を置いて人が一瞬で直せる」
+    方針（`PATCH /plan/{line_id}`）は変えていないので、外れても実害はそこで吸収される。
+
+    優先順位: **！が最優先**（雲=強い疑問より、スパイク=激しい反応の方が強い反応と
+    判断）。次に？。どちらも無ければ話者既定（旧来の固定値）。
+    `question_bubble_key`/`exclaim_bubble_key` が設定されていない話者（例: 常に四角の
+    話者）は、記号があっても無視して既定のまま＝**後方互換**。
+    """
+    if default.exclaim_bubble_key and any(c in text for c in EXCLAIM_CHARS):
+        return default.exclaim_bubble_key, "exclaim"
+    if default.question_bubble_key and any(c in text for c in QUESTION_CHARS):
+        return default.question_bubble_key, "question"
+    return default.bubble_key, "speaker_default"
 
 
 def load_speaker_defaults(path: str | None = None) -> dict[str, SpeakerDefault]:
@@ -107,8 +142,9 @@ def load_speaker_defaults(path: str | None = None) -> dict[str, SpeakerDefault]:
     警告が出るだけ。しかも左右は `side_from_mask`（実測82%）が優先されるので、
     このテーブルが効くのはマスクが無い行の左右と、バブル形状の初期値だけ。
 
-    形状は**そもそも当てられない**ことが実証済み（129枚: emotion を使っても約60%で、
-    最頻値決め打ち47%と大差ない）。当てにいかず、既定を置いて人が直す方針。
+    形状は感情ラベル等の間接的な推定では**そもそも当てられない**ことが実証済み
+    （129枚: emotion を使っても約60%で、最頻値決め打ち47%と大差ない）。
+    行ごとの上書きは`bubble_key_for`（文中記号ベース）が別に担当する。
     """
     if path is None:
         path = os.environ.get("PSA_SPEAKER_DEFAULTS") or os.path.join(
@@ -122,8 +158,14 @@ def load_speaker_defaults(path: str | None = None) -> dict[str, SpeakerDefault]:
         key = v.get("bubble_key") or FALLBACK_DEFAULT.bubble_key
         if key not in BUBBLE_BY_KEY:
             continue  # 知らないシェイプ名は黙って捨てる（既定へ落ちる）
+        qkey = v.get("question_bubble_key")
+        if qkey is not None and qkey not in BUBBLE_BY_KEY:
+            qkey = None
+        ekey = v.get("exclaim_bubble_key")
+        if ekey is not None and ekey not in BUBBLE_BY_KEY:
+            ekey = None
         out[name] = SpeakerDefault(key, v.get("side") or FALLBACK_DEFAULT.side,
-                                   v.get("note", ""))
+                                   v.get("note", ""), qkey, ekey)
     return out
 
 

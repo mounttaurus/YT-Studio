@@ -17,11 +17,11 @@
 # 初回セットアップは install.ps1 を実行してください。
 # ===================================================
 
-name: yt-studio
+name: ${COMPOSE_PROJECT_NAME:-yt-studio}
 
 networks:
   youtube-auto-net:
-    name: youtube-auto-net
+    name: ${COMPOSE_NETWORK_NAME:-youtube-auto-net}
     driver: bridge
 
 services:

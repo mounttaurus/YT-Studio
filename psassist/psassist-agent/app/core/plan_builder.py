@@ -17,7 +17,7 @@ from typing import Any
 
 from . import kinsoku, spec
 
-SCHEMA_VERSION = "1.1.0"
+SCHEMA_VERSION = "1.2.0"  # 1.2.0: bubble.key_source を追加（記号ベースの行ごと形状上書き・S3）
 
 # そのまま組めるが知らせておきたいもの（needs_attention にはしない）。
 # ここを増やさないと、本当に見るべき件が助言に埋もれる。
@@ -183,6 +183,37 @@ def _library_cutout_path(panel: dict, backgrounds_dir: str) -> str | None:
     # 決まっている。Paths.from_env と同じ前提）。新しい env を増やさない。
     shared = os.path.dirname(backgrounds_dir.rstrip("/\\"))
     return os.path.join(shared, "characters", char_id, "panel_library", "cutouts", "%s.png" % slot_id)
+
+
+def _library_entry(panel: dict, backgrounds_dir: str, cache: dict[str, dict]) -> dict | None:
+    """`cutout_slot_id` が指す在庫エントリ本体（``library.json`` 1件）。採寸(``mask``)を取るためだけに使う。
+
+    ⚠️ **在庫の絵を貼る行は、採寸もこのエントリの ``mask`` を使うこと。**
+    ``mask_stats.json``（``load_mask_stats``）はこの話数で**生成した**絵の採寸であって、
+    在庫から選ばれた絵とは別物。混同すると、貼った絵と違う絵の顔位置でバブルの左右・
+    キャラの移動量を決めることになる（2026-09-02実測: ep01 28行中11行(39%)で左右が
+    逆になっていた。詳細 ``Docs/AROLL_PSASSIST_REFACTOR_PLAN.md`` §0-1）。
+
+    ``mask`` を持たないエントリ（バックフィル前の在庫）では None を返す。
+    呼び出し側は ``mask_stats.json`` へフォールバックせず、``spec.side_from_mask(None)``
+    の既定経路（``NO_MASK`` 警告→話者既定の左右）に委ねること。
+
+    cache: char_id → {slot_id: entry} のインデックス（1話数内で複数行が同じキャラを
+    指すので、行ごとに ``library.json`` を読み直さない）。
+    """
+    slot_id = panel.get("cutout_slot_id")
+    char_id = panel.get("cutout_char_id") or (panel.get("characters") or [None])[0]
+    if not slot_id or not char_id:
+        return None
+    if char_id not in cache:
+        shared = os.path.dirname(backgrounds_dir.rstrip("/\\"))
+        path = os.path.join(shared, "characters", char_id, "panel_library", "library.json")
+        idx: dict[str, dict] = {}
+        if os.path.exists(path):
+            with open(path, encoding="utf-8") as fh:
+                idx = {e["slot_id"]: e for e in json.load(fh).get("entries", []) if e.get("slot_id")}
+        cache[char_id] = idx
+    return cache[char_id].get(slot_id)
 
 
 def load_overrides() -> dict[str, dict]:
@@ -480,6 +511,7 @@ def build(paths: Paths | None = None) -> dict[str, Any]:
         aroll = json.load(fh)
     backgrounds = load_backgrounds(paths.backgrounds_dir)
     masks = load_mask_stats(paths.out_dir)
+    library_entry_cache: dict[str, dict] = {}
     cfg = load_config(paths.out_dir)
     overrides = load_overrides()
     # 話者ごとの既定バブルはチャンネル固有データ。import時ではなくここで読む
@@ -504,10 +536,16 @@ def build(paths: Paths | None = None) -> dict[str, Any]:
         if speaker not in speaker_defaults:
             warnings.append("UNKNOWN_SPEAKER")
 
-        shape = spec.BUBBLE_BY_KEY[default.bubble_key]
+        # 形状は文中記号（！/？）で行ごとに上書きできる（未設定の話者は既定のまま＝後方互換）。
+        bubble_key, bubble_key_source = spec.bubble_key_for(default, text)
+        shape = spec.BUBBLE_BY_KEY[bubble_key]
         # 左右はマスク（顔の位置）から決めるのが最良（82%）。マスクが無ければ
         # 話者別の最頻値へフォールバック（64%）。
-        mask = masks.get(p["line_id"])
+        # ⚠️ 在庫の絵を貼る行（cutout_slot_id あり）は、貼る絵と同じ絵の mask を使う。
+        # mask_stats.json はこの話数で生成した別の絵の採寸なので、ここでは使わない
+        # （黙って流用すると貼った絵と違う顔位置でバブル左右が決まる。詳細は _library_entry）。
+        lib_entry = _library_entry(p, paths.backgrounds_dir, library_entry_cache)
+        mask = lib_entry.get("mask") if lib_entry is not None else masks.get(p["line_id"])
         side = spec.side_from_mask(mask)
         side_source = "mask"
         if side is None:
@@ -624,11 +662,12 @@ def build(paths: Paths | None = None) -> dict[str, Any]:
                     ),
                 },
                 "bubble": {
-                    "key": default.bubble_key,
+                    "key": bubble_key,
+                    "key_source": bubble_key_source,  # speaker_default / question / exclaim
                     "layer": shape.layer,
                     "kind": shape.kind,
                     "rect": rect,
-                    "flip_h": spec.default_flip_h(default.bubble_key, side),
+                    "flip_h": spec.default_flip_h(bubble_key, side),
                     "flip_v": spec.FLIP_V_DEFAULT,
                     "side": side,
                     "side_source": side_source,

@@ -42,7 +42,23 @@ SRC_DIR = os.path.join(EP, "a_roll")
 OUT_DIR = os.path.join(EP, "psassist")
 CUT_DIR = os.path.join(OUT_DIR, "cutout")
 STATS = os.path.join(OUT_DIR, "mask_stats.json")
+AROLL_JSON = os.path.join(SRC_DIR, "aroll.json")
 WORK = os.path.join(os.environ.get("TEMP", "."), "psa_work.png")
+
+
+def stocked_line_ids() -> set:
+    """在庫の切り抜き（``cutout_slot_id``）を適用済みの行。ここでは切り抜き直さない。
+
+    scrapping-agent 側が在庫の透過PNG（shared/characters/.../panel_library/cutouts/）を
+    既に持っている行を、Photoshop でもう一度切り抜くのは時間の無駄（1枚 約10秒）。
+    実測: 31行中28行が適用済みでも全31行を処理し5.3分かかっていた
+    （詳細 memory/psassist-cutout-duplicates-python-removal）。
+    """
+    if not os.path.exists(AROLL_JSON):
+        return set()
+    with open(AROLL_JSON, encoding="utf-8") as fh:
+        ar = json.load(fh)
+    return {p["line_id"] for p in ar.get("panels", []) if p.get("cutout_slot_id")}
 
 JSX = r"""
 (function () {
@@ -101,8 +117,15 @@ def main() -> None:
         with open(STATS, encoding="utf-8") as fh:
             stats = json.load(fh)
 
+    stocked = stocked_line_ids()
     srcs = sorted(glob.glob(os.path.join(SRC_DIR, "panel_line_*.png")))
-    print("対象 %d 枚 / 済み %d 枚" % (len(srcs), len(stats)))
+    todo = [s for s in srcs
+            if os.path.basename(s)[len("panel_") : -len(".png")] not in stocked]
+    print("対象 %d 枚 / 済み %d 枚 / 在庫適用済み(スキップ) %d 枚"
+          % (len(srcs), len(stats), len(srcs) - len(todo)))
+    if not todo:
+        print("Photoshop を起動する対象がありません。")
+        return
 
     ps = win32com.client.Dispatch("Photoshop.Application")
     ps.DisplayDialogs = 3
@@ -113,7 +136,7 @@ def main() -> None:
 
     t_start = time.time()
     done = err = skip = 0
-    for i, src in enumerate(srcs, 1):
+    for i, src in enumerate(todo, 1):
         line_id = os.path.basename(src)[len("panel_") : -len(".png")]
         out = os.path.join(CUT_DIR, "panel_%s.png" % line_id)
         if os.path.exists(out) and line_id in stats:
@@ -138,12 +161,12 @@ def main() -> None:
         with open(STATS, "w", encoding="utf-8") as fh:
             json.dump(stats, fh, ensure_ascii=False, indent=1)
 
-        if i % 10 == 0 or i == len(srcs):
+        if i % 10 == 0 or i == len(todo):
             el = time.time() - t_start
             rate = el / max(1, done)
             print(
                 "  [%3d/%3d] 完了%d 失敗%d スキップ%d  経過%.0f分  残り約%.0f分"
-                % (i, len(srcs), done, err, skip, el / 60, rate * (len(srcs) - i) / 60)
+                % (i, len(todo), done, err, skip, el / 60, rate * (len(todo) - i) / 60)
             )
 
     if prev is not None:

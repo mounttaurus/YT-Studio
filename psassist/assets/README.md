@@ -88,16 +88,38 @@ bubbles.psd を直して再生成すればよい。
 （`background_overrides.json` と同じ扱い）。
 
 ```json
-{ "speakers": { "<話者名>": { "bubble_key": "rect_a", "side": "right", "note": "" } } }
+{
+  "speakers": {
+    "<話者名>": {
+      "bubble_key": "rect_a", "side": "right", "note": "",
+      "question_bubble_key": "cloud_a", "exclaim_bubble_key": "spike_a"
+    }
+  }
+}
 ```
 
 `bubble_key` は `spec.BUBBLES` のキー（`rect_a` / `round_a` / `cloud_a` / `spike_a` …）。
 知らないキーは黙って捨てられ、既定へ落ちる。
 
 ⚠️ **無くても動く。** 未知の話者は `spec.FALLBACK_DEFAULT` に落ち、`UNKNOWN_SPEAKER`
-警告が出るだけ。しかも**左右は `mask_stats` があればそちらが優先される**（実測82%で、
-話者別の最頻値64%より正確）。効くのはマスクが無い行の左右と、バブル形状の初期値だけ。
+警告が出るだけ。しかも**左右は在庫の`mask`/`mask_stats`があればそちらが優先される**
+（実測82%で、話者別の最頻値64%より正確）。効くのはマスクが無い行の左右と、
+バブル形状の既定値（記号による上書きが無い行）だけ。
 
-形状は**そもそも当てられない** ── 129枚の実測で、emotion を使っても約60%にしかならず
-最頻値の決め打ち47%と大差なかった。当てにいかず、既定を置いて人が直す方針
-（`psd-layout-has-no-rule`）。
+⚠️ **このファイルが無い環境では全行が`rect_a`・全行`UNKNOWN_SPEAKER`になる。**
+「無くても動く」は安全に縮退するという意味で、「無くてもチャンネルらしい見た目になる」
+という意味ではない。新しい環境で組版を始める前に実在を確認すること
+（`bubbles.psd`と同じ同期の穴。`Docs/AROLL_PSASSIST_REFACTOR_PLAN.md` S4参照）。
+
+### 形状は感情推定では当てられない・記号なら別（2026-09-02新規・S3）
+
+話者固定の`bubble_key`（形状の初期値）は**そもそも当てられない** ── 129枚の実測で、
+emotion を使っても約60%にしかならず最頻値の決め打ち47%と大差なかった。当てにいかず、
+既定を置いて人が直す方針（`psd-layout-has-no-rule`）は変えていない。
+
+一方 `question_bubble_key`/`exclaim_bubble_key`（任意）は**LLMの感情推定を経由しない**、
+文中の記号（？/！）という決定的な信号で行ごとに上書きする。「材料を増やせば予測できる
+ようになるものもある」（`psd-layout-has-no-rule`の左右判定64%→82%と同じ理屈）を
+試したもの。**元の129枚データは既に整理済みで現存しないため実測での再検証はできていない**
+──`bubble_key_for()`のdocstring参照。設定しない話者（例: 常に四角の話者）は
+これまでどおり`bubble_key`固定のまま（後方互換）。優先順位は！＞？＞既定。

@@ -1236,7 +1236,13 @@ def request_stop(project_id: str, episode: int) -> bool:
 def select_targets(
     manifest: dict, line_ids: list[str] | None, only_missing: bool,
 ) -> list[dict]:
-    """バッチ対象パネルを選ぶ。only_missing=True なら done を除外（＝レジューム/失敗再試行）。
+    """バッチ対象パネルを選ぶ。only_missing=True なら「もう絵が決まっている」行を除外する
+    （＝レジューム/失敗再試行）。
+
+    「もう決まっている」＝ ``status=="done"``（実生成済み）または ``cutout_slot_id``
+    あり（在庫の切り抜きを適用済み）。後者を見ないと、``aroll_apply_cutout_plan`` で
+    在庫を適用した行にも課金生成が走る（実測: 承認3行のつもりが11行課金・約$0.32過剰。
+    詳細 memory/aroll-batch-ignores-cutout-plan）。
 
     台本から消えた行（orphan）は明示指定を含め常に除外する（消えたセリフの絵に課金しない）。
 
@@ -1252,7 +1258,7 @@ def select_targets(
         wanted = set(line_ids)
         panels = [p for p in panels if p.get("line_id") in wanted]
     if only_missing:
-        panels = [p for p in panels if p.get("status") != "done"]
+        panels = [p for p in panels if p.get("status") != "done" and not p.get("cutout_slot_id")]
     return [p for p in panels if (p.get("prompt") or "").strip()]
 
 
