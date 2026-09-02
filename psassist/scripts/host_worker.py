@@ -99,6 +99,47 @@ def write_json_atomic(path: str, data: dict) -> None:
     raise last  # type: ignore[misc]
 
 
+# ── ユーザー資産の起動時チェック ────────────────────────────────────────
+
+def check_user_assets() -> list[str]:
+    """組版に要るユーザー資産（非公開・チャンネル固有）の実在を起動時に確認する。
+
+    ⚠️ **どちらも「無くても動く」設計だが、動き方が違う**:
+      - `bubbles.psd` が無いと `build_panel` ジョブだけが実行時エラーで失敗する
+        （`cutout`/`qa_check`等は無関係に動く）。原因は既存のガード
+        （`run_build_panel_job`）が正しく説明するが、**ジョブを投げるまで気づけない**。
+        新しい起動経路を試すたびに同じ穴で失敗を再発していた
+        （`Docs/AROLL_PSASSIST_REFACTOR_PLAN.md` S4参照）。
+      - `speaker_defaults.json` が無いと**エラーにならず**全行が
+        `spec.FALLBACK_DEFAULT`（`rect_a`・左・`UNKNOWN_SPEAKER`警告）になる。
+        エラーが出ない分、気づくのがもっと遅れる（2026-09-02実測: 本番31行全滅で発覚）。
+    どちらも起動直後に一度だけ知らせるだけで、常駐自体は止めない
+    （`cutout`/`qa_check`等の他ジョブは資産が無くても動くため）。
+    """
+    bubbles = (os.environ.get("PSA_BUBBLES_PSD") or "").strip() or \
+        os.path.join(PSASSIST_ROOT, "assets", "bubbles.psd")
+    speaker_defaults = (os.environ.get("PSA_SPEAKER_DEFAULTS") or "").strip() or \
+        os.path.join(PSASSIST_ROOT, "assets", "speaker_defaults.json")
+
+    warnings: list[str] = []
+    if not os.path.exists(bubbles):
+        warnings.append(
+            "[!] bubbles.psd が見つかりません: %s\n"
+            "    build_panel ジョブだけが失敗します（cutout/qa_check等は無関係）。\n"
+            "    資産を持つチェックアウトから --shared で起動するか、\n"
+            "    ルート .env の PSA_BUBBLES_PSD で場所を指定してください。" % bubbles
+        )
+    if not os.path.exists(speaker_defaults):
+        warnings.append(
+            "[!] speaker_defaults.json が見つかりません: %s\n"
+            "    エラーにはなりませんが、全行が既定（rect_a・左・UNKNOWN_SPEAKER警告）\n"
+            "    になります（話者ごとの吹き出し使い分けが効きません）。\n"
+            "    資産を持つチェックアウトからコピーするか、ルート .env の\n"
+            "    PSA_SPEAKER_DEFAULTS で場所を指定してください。" % speaker_defaults
+        )
+    return warnings
+
+
 # ── エピソードの発見 ────────────────────────────────────────────────────
 
 def resolve_shared_dir(cli_value: str | None) -> tuple[str, str]:
@@ -540,7 +581,14 @@ def main() -> None:
           % (len(found), "" if found else "  ⚠️ 0件です。--shared で向き先を確認してください"))
     for info in found:
         print("  - %s" % ep_label(info))
-    print("Ctrl+C で終了\n")
+
+    asset_warnings = check_user_assets()
+    if asset_warnings:
+        print()
+        for w in asset_warnings:
+            print(w)
+
+    print("\nCtrl+C で終了\n")
 
     try:
         while True:
