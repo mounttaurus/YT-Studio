@@ -21,11 +21,18 @@ PRESETS_FILE = SHARED_DIR / "imagegen" / "panel_presets.json"
 # 対策は彩度を上げること（グリーンバック）ではない ── きつい色はフチへの色移りが増える。
 # **パステルのまま色相だけ肌から離す**のが正解。cutout_engine は背景色を実測で
 # 推定するので、特定のカラーコードを守らせる必要は無く、肌と衝突しないことだけが要件。
+#
+# ⚠️ 2026-09-05追記: 「肌から離れていれば何でもいい」ではなかった。sky blue/lavender
+# （青紫系）は瞳の色（本キャラ群は青系・紫系の瞳が多い）とアニメ塗りの陰影トーンに衝突し、
+# 抜け残り(leftover_ratio)が緑系の10倍以上に悪化することを実測（0.015〜0.023 vs 0.0000〜0.0018、
+# 2キャラ・flat/ai両方式で再現）。青紫を候補から外しミント/グリーン系に絞ったところ
+# leftover_ratioが0.0付近まで改善した。詳細は memory/pastel-hue-collides-with-eye-color。
 BACKGROUND_MODES = {
     "scene": "in a simple anime-style background scene",
     "flat": ("plain solid pastel background, flat single color, no scenery, "
-             "in a cool pastel hue such as mint, sky blue, or lavender; "
-             "never peach, pink, cream, beige or any skin-like tone"),
+             "in a cool green pastel hue such as mint, seafoam, or sage green; "
+             "never blue, indigo, violet, lavender, sky blue, peach, pink, cream, "
+             "beige or any skin-like tone"),
     "transparent": "isolated subject on a plain white background",
 }
 
