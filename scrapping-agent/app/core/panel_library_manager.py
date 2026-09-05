@@ -497,7 +497,7 @@ async def _generate_and_measure(
     data = await nanobanana_client.generate_one(
         prompt, refs, aspect="16:9", allow_fallback=False, model=(model.strip() or None),
     )
-    rgba, info = cutout_engine.cut_out(Image.open(io.BytesIO(data)))
+    rgba, info = cutout_engine.cut_out(Image.open(io.BytesIO(data)), method="ai")
     fp = fingerprint.for_entry(rgba)
     if not fp.get("dhash"):
         # アルファが空＝切り抜きに失敗。絵自体は課金済みなので捨てない（パネルとしては使える）
@@ -642,7 +642,7 @@ def register_from_image(
             return {"registered": False, "reason": "同じ画像が既に在庫にある",
                     "slot_id": e.get("slot_id")}
 
-    rgba, info = cutout_engine.cut_out(Image.open(io.BytesIO(data)))
+    rgba, info = cutout_engine.cut_out(Image.open(io.BytesIO(data)), method="ai")
     fp = fingerprint.for_entry(rgba)
     if not fp.get("dhash"):
         # 切り抜きに失敗した絵だけは積まない（cutout も指紋も無い entry は用途が無い）

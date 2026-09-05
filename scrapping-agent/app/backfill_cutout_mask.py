@@ -4,9 +4,9 @@
   A) cutout はあるが mask が無い（このS2導入より前に登録された分）:
      既存の透過PNGを測るだけ（re-generate不要・一瞬）
   B) image はあるが cutout が無い（2026-08-27の背景除去導入より前の世代。死蔵）:
-     cutout_engine.cut_out() で新たに切り抜き・指紋・maskを作り、
+     cutout_engine.cut_out(method="ai") で新たに切り抜き・指紋・maskを作り、
      cutouts/{slot_id}.png へ保存する。**画像は既にある生成物を再利用するだけ
-     ＝API課金ゼロ**（約0.74秒/枚）。slot_id は変えない（既存参照を壊さない）。
+     ＝API課金ゼロ**（約2.2秒/枚・Rembg）。slot_id は変えない（既存参照を壊さない）。
 
 冪等: 既に mask を持つエントリ（かつ cutout もある）はスキップする。既定はドライラン
 （何も書き込まない）。--apply で実際に書き込む。1キャラ処理し終えるごとに保存するので、
@@ -64,7 +64,7 @@ def _process_char(char_id: str, apply: bool) -> dict:
                 if not img_path.exists():
                     stats["errors"].append(f"{slot_id}: image ファイルが無い ({e['image']})")
                     continue
-                rgba, info = cutout_engine.cut_out(Image.open(img_path))
+                rgba, info = cutout_engine.cut_out(Image.open(img_path), method="ai")
                 fp = fingerprint.for_entry(rgba)
                 if not fp.get("dhash"):
                     stats["errors"].append(

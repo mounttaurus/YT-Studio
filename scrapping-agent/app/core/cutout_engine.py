@@ -403,7 +403,7 @@ def cut_out(
             "bg_residual_p95": bg["residual_p95"], "bg_coverage": bg["coverage"],
             "bg_flat": bg["flat"],
             "bg_tol": (round(bg["tol_poly"], 1) if bg["model"] == "poly"
-                       else [round(t, 1) for t in bg["tols"]]),
+                       else [round(t, 1) for t in bg.get("tols", [])]),
             "fg_blob": bg.get("fg_blob"), "enclosed": bg.get("enclosed"),
         }
 
