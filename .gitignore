@@ -69,3 +69,19 @@ reference/*.png
 
 # 使い捨てスパイク・スクラッチ（FCPXML忠実度調査の再現用ローカルファイル）
 editing-agent/tmp/
+
+# ─── 公開リポへの誤コミット防止（非公開資産・自作資産） ─────────────────
+# 除外の正本は scripts/public-manifest.json の forbidden_paths_must_be_absent。
+# ここはその「保険」で、公開側リポでの `git add -A` 事故を止めるためにある。
+#
+# ⚠️ この開発リポ（YT-Studio-dev = private）はこれらを**意図的に追跡している**。
+#    .gitignore は追跡済みファイルには効かないので、ここに書いても開発側の追跡は壊れない。
+#    一方 .gitignore 自体が公開リリースに含まれて公開リポ側へコピーされるため、
+#    向こう（未追跡）では確実に無視される＝これが狙い。
+psassist/assets/bubbles.psd
+psassist/assets/background_overrides.json
+psassist/assets/speaker_defaults.json
+# models/ 直下は拡張子ルール（上記）でモデル本体だけを弾いていたが、
+# README 等の非バイナリが公開リポ側で未追跡のまま残り、誤って混入しうる。
+# 公開マニフェストの include にも入っていないのでディレクトリごと無視する。
+imagegen-agent/models/
