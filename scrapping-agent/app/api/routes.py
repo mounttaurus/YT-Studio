@@ -538,9 +538,15 @@ async def similar_panel_library_entries(char_id: str, slot_id: str, limit: int =
 
 @router.delete("/characters/{char_id}/panel_library/{slot_id}")
 async def delete_panel_library_entry(char_id: str, slot_id: str):
-    """索引から除去し実体ファイルも削除する（pending中の却下にも使う）。"""
-    if not panel_library_manager.delete_entry(char_id, slot_id):
-        raise HTTPException(status_code=404, detail=f"panel library entry not found: {slot_id}")
+    """索引から除去し実体ファイルも削除する（pending中の却下にも使う）。
+
+    使用中（used_by）のentryは400で拒否される（panel_library_manager.delete_entry参照）。
+    """
+    try:
+        if not panel_library_manager.delete_entry(char_id, slot_id):
+            raise HTTPException(status_code=404, detail=f"panel library entry not found: {slot_id}")
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
     return {"deleted": slot_id}
 
 
@@ -2236,9 +2242,21 @@ class CutoutSelectRequest(BaseModel):
 
 @router.post("/projects/{project_id}/episodes/{episode_number}/aroll/lines/{line_id}/cutout")
 async def aroll_set_cutout(project_id: str, episode_number: int, line_id: str, req: CutoutSelectRequest):
-    """その行で使う切り抜きを決める（パネル画像の差し替えではなく合成素材の指定）。"""
+    """その行で使う切り抜きを決める（パネル画像の差し替えではなく合成素材の指定）。
+
+    slot_id=null で「✕ この絵を外す」（在庫には残す・主操作。T2 §4-2）。
+    """
     try:
         return aroll_manager.set_cutout_selection(project_id, episode_number, line_id, req.slot_id)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+@router.post("/projects/{project_id}/episodes/{episode_number}/aroll/lines/{line_id}/cutout/reject")
+async def aroll_reject_cutout(project_id: str, episode_number: int, line_id: str):
+    """「🗑 この絵は失敗」（副操作・T2 §4-2）: 割当を外した上で在庫からも削除する（可逆）。"""
+    try:
+        return aroll_manager.reject_current_image(project_id, episode_number, line_id)
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
 

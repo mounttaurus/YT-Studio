@@ -273,29 +273,53 @@ def find_current(char_id: str, emotion: str, shot: str, angle: str) -> dict | No
     return candidates[0]
 
 
-def record_usage(char_id: str, slot_id: str) -> None:
+def _touch_usage(entry: dict, delta: int, *, project_id: str | None = None,
+                 episode: int | None = None, line_id: str | None = None) -> None:
+    """times_used を delta 増減し、行が分かれば used_by も同期する（T2 §4-3）。
+
+    used_by は「今どの行がこの絵を直接指しているか」の逆引き。キャラ在庫タブが
+    使用中のentryを削除できなくするために読む（delete_entry参照）。
+    project_id/line_id が無い呼び出し（後方互換）は times_used だけ動かす。
+    """
+    entry["times_used"] = max(0, entry.get("times_used", 0) + delta)
+    if not (project_id and line_id):
+        return
+    used_by = entry.setdefault("used_by", [])
+    ref = {"project_id": project_id, "episode": episode, "line_id": line_id}
+    if delta > 0:
+        if ref not in used_by:
+            used_by.append(ref)
+    else:
+        entry["used_by"] = [u for u in used_by if u != ref]
+
+
+def record_usage(char_id: str, slot_id: str, *, project_id: str | None = None,
+                 episode: int | None = None, line_id: str | None = None) -> None:
     """ライブラリentryの使用回数(times_used)を+1する。find_currentのローテーションが参照する。
 
+    project_id/episode/line_id を渡すと、どの行が使っているかを ``used_by`` にも記録する。
     実際に画像を消費した時だけ呼ぶ（ドライランでは呼ばない）。
     """
     data = load_index(char_id)
     for e in data.get("entries", []):
         if e.get("slot_id") == slot_id:
-            e["times_used"] = e.get("times_used", 0) + 1
+            _touch_usage(e, 1, project_id=project_id, episode=episode, line_id=line_id)
             save_index(char_id, data)
             return
 
 
-def release_usage(char_id: str, slot_id: str) -> None:
+def release_usage(char_id: str, slot_id: str, *, project_id: str | None = None,
+                  episode: int | None = None, line_id: str | None = None) -> None:
     """times_used を-1する（0未満にはしない）。選び直しで前の1枚を解放する時に使う。
 
+    project_id/episode/line_id を渡すと ``used_by`` から該当行も取り除く。
     record_usage と対で使わないと、ピッカーで選び直すたびに前の絵の使用回数が
     増えっぱなしになり、生涯上限に嘘の消費で早く到達する。
     """
     data = load_index(char_id)
     for e in data.get("entries", []):
         if e.get("slot_id") == slot_id:
-            e["times_used"] = max(0, e.get("times_used", 0) - 1)
+            _touch_usage(e, -1, project_id=project_id, episode=episode, line_id=line_id)
             save_index(char_id, data)
             return
 
@@ -419,12 +443,21 @@ def delete_entry(char_id: str, slot_id: str) -> bool:
     trash/ は機械が読まない（`load_index` は索引しか見ないので、退避した絵が
     自動配布に復活することはない）。戻したい時は人がファイルを戻して再取り込みする。
     容量が気になったら trash/ を手で空にすればよい。
+
+    ⚠️ **使用中（`used_by` が空でない）の entry は削除しない**（T2 §4-3）。
+    自動在庫化で採用中の絵がキャラ在庫タブから消せると、その行の `cutout_slot_id` が
+    宙に浮く。先に該当行で在庫割当を外してから削除すること（呼び出し側は
+    ``ValueError`` を捕まえて使用箇所を案内する）。
     """
     data = load_index(char_id)
     entries = data.get("entries", [])
     target = next((e for e in entries if e.get("slot_id") == slot_id), None)
     if not target:
         return False
+    used_by = target.get("used_by") or []
+    if used_by:
+        where = "、".join(f"{u.get('project_id')} ep{u.get('episode')} {u.get('line_id')}" for u in used_by)
+        raise ValueError(f"使用中のため削除できません（{where}）。先に該当行で在庫割当を外してください")
     data["entries"] = [e for e in entries if e.get("slot_id") != slot_id]
     save_index(char_id, data)
 

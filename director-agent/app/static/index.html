@@ -2409,65 +2409,14 @@
               </div>
             </template>
 
-            <!-- ═══ 3. 承認して在庫へ ═══ -->
-            <template x-if="arollManifest">
-              <div style="display:flex;flex-direction:column;gap:16px">
-                <button class="aroll-sec-head" :data-done="!arollApprovalCounts.pending ? 1 : 0" @click="arollSecToggle('approve')">
-                  <span class="num" x-text="!arollApprovalCounts.pending ? '✓' : '3'"></span>
-                  <span x-text="arollSecIsOpen('approve') ? '▼ 承認して在庫へ' : '▶ 承認して在庫へ'"></span>
-                  <span class="sum" x-text="arollSecSummary('approve')"></span>
-                </button>
-                <template x-if="arollSecIsOpen('approve')">
-                  <div style="display:flex;flex-direction:column;gap:16px">
-                    <div style="font-size:11px;color:#64748b;line-height:1.7">目視して<b>採用と決めた絵だけ</b>を在庫に積みます。次の話数から自動で配られるようになります。</div>
-                <!-- 画像の承認（②で作った絵のうち、採用と決めたものだけを在庫へ積む） -->
-                <div class="card" x-show="arollManifest"
-                     :style="arollApprovalCounts.pending ? 'border-color:#a16207' : ''">
-                  <h2>✓ 画像の承認
-                    <span style="font-weight:400;text-transform:none;color:#4b5563;font-size:11px"
-                          x-text="`承認済み ${arollApprovalCounts.approved} / 未承認 ${arollApprovalCounts.pending}（生成済み ${arollApprovalCounts.done}コマ）`"></span>
-                  </h2>
-                  <div style="font-size:11px;color:#94a3b8;margin-top:6px;line-height:1.7">
-                    目視して<b>採用と決めた絵だけ</b>をキャラ所有ライブラリへ積みます（<b>無料</b>・画像生成なし）。
-                    生成した瞬間に積まないのは、<b>作り直して捨てた絵まで在庫に入れないため</b>です。
-                    積んだ絵は次の話数から在庫として自動で配られます。
-                  </div>
-                  <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-top:10px">
-                    <button class="btn btn-primary"
-                            :disabled="arollApproveBusy || arollRunning || !arollApprovalCounts.pending"
-                            @click="arollApproveImages(null)">
-                      <template x-if="arollApproveBusy"><span class="spinner"></span></template>
-                      <span x-text="arollApproveBusy ? '承認中...' : `✓ 未承認 ${arollApprovalCounts.pending} 件を承認して在庫へ`"></span>
-                    </button>
-                    <span x-show="!arollApprovalCounts.pending && arollApprovalCounts.done"
-                          style="font-size:11px;color:#4ade80">✔ 生成済みの絵はすべて承認済みです</span>
-                  </div>
-                  <div x-show="arollApproveResult" style="font-size:11px;color:#94a3b8;margin-top:8px;line-height:1.7">
-                    <div x-text="`✔ ${arollApproveResult?.approved ?? 0}件を承認 — うち ${arollApproveResult?.registered ?? 0}件を在庫へ取り込みました`"></div>
-                    <div x-show="arollApproveSkipReasons.length" style="margin-top:4px">
-                      <div style="color:#64748b">在庫に積まなかった内訳（その行の絵はそのまま使われます・課金ゼロ）:</div>
-                      <template x-for="[why, n] in arollApproveSkipReasons" :key="why">
-                        <div><span style="color:#fbbf24" x-text="n + '件'"></span> <span x-text="why"></span></div>
-                      </template>
-                    </div>
-                  </div>
-                  <div style="font-size:10px;color:#4b5563;margin-top:8px;line-height:1.7;border-top:1px solid #2d3748;padding-top:8px">
-                    ⚠️ <b>絵を作り直すと承認は外れます。</b>さらに、その行から取り込んだ在庫は「未承認」へ降格し、
-                    以後は自動で配られなくなります（気に入らなくて描き直した絵が、後の話数で出てくるのを防ぐため）。
-                    削除ではないので、良い絵なら<b>✂️切り抜きタブで承認し直せば戻ります</b>。
-                    在庫から差し替えた場合・台本テキストが変わった場合は降格しません。
-                  </div>
-                </div>
-                  </div>
-                </template>
-              </div>
-            </template>
-
-            <!-- ═══ 4. 組む（Photoshop） ═══ -->
+            <!-- ═══ 3. 組む（Photoshop） ═══ -->
+            <!-- T2: 旧「3. 承認して在庫へ」専用カードは撤去した（AROLL_TAB_REDESIGN_PLAN.md §6-b）。
+                 絵の隣で判断できるコマ一覧の「✓この絵で確定」「✓まとめて確定」に一本化済み。
+                 在庫登録はT1で生成の瞬間に完了しており、ここで改めて積む必要が無くなったため。 -->
             <template x-if="arollManifest && psassistAvailable">
               <div style="display:flex;flex-direction:column;gap:16px">
                 <button class="aroll-sec-head" @click="arollSecToggle('build')">
-                  <span class="num" x-text="'4'"></span>
+                  <span class="num" x-text="'3'"></span>
                   <span x-text="arollSecIsOpen('build') ? '▼ 組む（Photoshop）' : '▶ 組む（Photoshop）'"></span>
                   <span class="sum" x-text="arollSecSummary('build')"></span>
                 </button>
@@ -2607,11 +2556,11 @@
               </div>
             </template>
 
-            <!-- ═══ 5. 仕上がりを見る ═══ -->
+            <!-- ═══ 4. 仕上がりを見る ═══ -->
             <template x-if="arollManifest && psassistAvailable">
               <div style="display:flex;flex-direction:column;gap:16px">
                 <button class="aroll-sec-head" @click="arollSecToggle('review')">
-                  <span class="num" x-text="'5'"></span>
+                  <span class="num" x-text="'4'"></span>
                   <span x-text="arollSecIsOpen('review') ? '▼ 仕上がりを見る' : '▶ 仕上がりを見る'"></span>
                   <span class="sum" x-text="arollSecSummary('review')"></span>
                 </button>
@@ -2658,8 +2607,8 @@
                         <span style="font-size:12px;color:#a1a1aa" x-show="qaCounts.ungenerated"
                               x-text="`○ 未生成 ${qaCounts.ungenerated}`"></span>
                         <span style="font-size:12px;color:#fde68a" x-show="arollApprovalCounts.pending"
-                              title="絵はあるがまだ承認していない＝在庫に積まれていない行"
-                              x-text="`✓ 未承認 ${arollApprovalCounts.pending}`"></span>
+                              title="絵はあるがまだ「この絵で確定」していない行"
+                              x-text="`✓ 未確定 ${arollApprovalCounts.pending}`"></span>
                         <span style="font-size:11px;color:#4b5563;margin-left:auto" x-show="qa"
                               x-text="`最終検査 ${qaCheckedAt}　/　検査元 ${qa?.source || '—'}`"></span>
                         <button class="btn btn-sm" @click="loadPsassistQa()" :disabled="qaBusy">🔄 再読込</button>
@@ -2687,7 +2636,7 @@
                         <button class="btn btn-sm" x-show="arollApprovalCounts.pending"
                                 :style="qaFilter === 'unapproved' ? 'background:#78350f;color:#fde68a' : ''"
                                 @click="qaFilter = 'unapproved'"
-                                x-text="`未承認 ${arollApprovalCounts.pending}`"></button>
+                                x-text="`未確定 ${arollApprovalCounts.pending}`"></button>
                         <template x-for="[code, n] in Object.entries(qa?.summary?.by_code || {})" :key="code">
                           <button class="btn btn-sm" :style="qaFilter === 'code:' + code ? 'background:#1e3a8a;color:#bfdbfe' : ''"
                                   @click="qaFilter = 'code:' + code"
@@ -2744,7 +2693,7 @@
             <div class="card" x-show="arollManifest">
               <h2>コマ一覧
                 <span style="font-weight:400;text-transform:none;color:#4b5563;font-size:11px"
-                      x-text="`${arollPanels.length}行 — 行をクリックすると1行の詳細（生成・在庫から選ぶ・承認）が開きます`"></span>
+                      x-text="`${arollPanels.length}行 — 行をクリックすると1行の詳細（生成・在庫から選ぶ・確定）が開きます`"></span>
               </h2>
 
               <!-- ── 一括操作 ──────────────────────────────────────────
@@ -2761,7 +2710,8 @@
                 <span style="font-size:12px;color:#a5b4fc" x-text="`${arollSelected.length} 行を選択中`"></span>
 
                 <button class="btn btn-sm" :disabled="!arollSelected.length || arollBulkBusy"
-                        @click="arollBulkApprove()">✓ まとめて承認</button>
+                        @click="arollBulkApprove()"
+                        title="選択行の絵はこれでいい、と確定します（無料・在庫の再利用許可とは別）">✓ まとめて確定</button>
 
                 <button class="btn btn-sm" :disabled="!arollSelected.length || arollBulkBusy || arollRunning"
                         @click="arollBulkRegenerate()"
@@ -2787,7 +2737,7 @@
 
               <!-- ── 絞り込み ────────────────────────────────────────── -->
               <div style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:8px">
-                <template x-for="f in [['all','すべて'],['ungenerated','未生成'],['unapproved','未承認'],['narration','ナレーション'],['drift','台本とズレ']]" :key="f[0]">
+                <template x-for="f in [['all','すべて'],['ungenerated','未生成'],['unapproved','未確定'],['narration','ナレーション'],['drift','台本とズレ']]" :key="f[0]">
                   <button class="btn btn-sm" :style="arollRowFilter === f[0] ? 'background:#4c1d95;color:#ede9fe' : ''"
                           @click="arollRowFilter = f[0]"
                           x-text="`${f[1]} ${arollRowFilterCount(f[0])}`"></button>
@@ -2860,7 +2810,7 @@
                                   x-text="p.status === 'done' ? '✔ 生成済' : (p.status === 'failed' ? '✘ 失敗' : '未生成')"></span>
                             <span class="status-badge" x-show="p.status === 'done' && p.image"
                                   :style="p.image_approved_at ? 'background:#14532d;color:#bbf7d0' : 'background:#78350f;color:#fde68a'"
-                                  x-text="p.image_approved_at ? '✓ 承認済' : '未承認'"></span>
+                                  x-text="p.image_approved_at ? '✓ 確定済' : '未確定'"></span>
                             <span class="status-badge" x-show="p.sync && p.sync !== 'ok' && p.sync !== 'missing'"
                                   :style="arollSyncStyle(p.sync)" x-text="arollSyncLabel(p.sync)"></span>
                             <span x-show="p.cutout_slot_id" style="font-size:9px;color:#a5f3fc">✂️ 在庫</span>
@@ -3503,7 +3453,7 @@
                 <div>
                   <!-- 1枚だけ生成 -->
                   <div style="background:#0f172a;border-radius:8px;padding:14px;margin:14px 0">
-                    <h3 style="font-size:13px;color:#e2e8f0;margin:0 0 8px">1枚だけ生成（即承認・背景除去も自動・必ず在庫に入る）</h3>
+                    <h3 style="font-size:13px;color:#e2e8f0;margin:0 0 8px">1枚だけ生成（即許可・背景除去も自動・必ず在庫に入る）</h3>
                     <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:12px">
                       <label style="font-size:12px;color:#cbd5e1">表情
                         <select x-model="charLib.gen.emotion" style="width:100%;margin-top:4px">
@@ -3547,12 +3497,12 @@
 
                   <!-- バリアント一括生成 -->
                   <div style="background:#0f172a;border-radius:8px;padding:14px;margin-bottom:16px">
-                    <h3 style="font-size:13px;color:#e2e8f0;margin:0 0 4px">バリアント一括生成（承認待ちで登録）</h3>
+                    <h3 style="font-size:13px;color:#e2e8f0;margin:0 0 4px">バリアント一括生成（未許可で登録）</h3>
                     <p style="font-size:11px;color:#f59e0b;margin:0 0 10px">
-                      ⚠ 同じ表情×ショット×アングルのままposeだけ変えて複数生成する。生成物は承認待ちで登録され、
-                      下の一覧（「未承認」チップ）で目視確認してから承認するまでAロールからは引かれない
+                      ⚠ 同じ表情×ショット×アングルのままposeだけ変えて複数生成する。生成物は未許可で登録され、
+                      下の一覧（「未許可」チップ）で目視確認して再利用を許可するまでAロールからは引かれない
                       （色ブレ等の個体差対策）。角度と競合するpose（見上げる/見下ろす等）は避けること。
-                      承認すれば🖼️パネル・✂️切り抜きの両方として使える（2026-08-29から切り抜きも作る）。
+                      許可すれば🖼️パネル・✂️切り抜きの両方として使える（2026-08-29から切り抜きも作る）。
                     </p>
                     <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:12px">
                       <label style="font-size:12px;color:#cbd5e1">表情
@@ -3603,8 +3553,8 @@
                     <h3 style="font-size:13px;color:#e2e8f0;margin:0 0 4px">🎲 バッチ生成（先回りで在庫に厚みを持たせる）</h3>
                     <p style="font-size:11px;color:#94a3b8;margin:0 0 10px">
                       表情・ショット・アングル・ポーズごとに、<b>固定する値</b>か<b>🎲ランダム</b>かを選んで複数枚まとめて生成する。
-                      1枚ずつ「1枚だけ生成」を呼ぶのと同じ経路 ── <b>受け入れ検査つき・即承認・✂️切り抜きも作る</b>
-                      （バリアント一括生成とは違い、承認待ちにはならない）。同時1枚ずつ・間隔を空けて送るのでレート制限には配慮する。
+                      1枚ずつ「1枚だけ生成」を呼ぶのと同じ経路 ── <b>受け入れ検査つき・即許可・✂️切り抜きも作る</b>
+                      （バリアント一括生成とは違い、未許可にはならない）。同時1枚ずつ・間隔を空けて送るのでレート制限には配慮する。
                     </p>
                     <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:12px">
                       <template x-for="axis in [['emotion','表情'],['shot','ショット'],['angle','アングル'],['pose','ポーズ']]" :key="axis[0]">
@@ -3681,16 +3631,17 @@
 
               <!-- 集計バー -->
               <div style="display:flex;gap:16px;align-items:center;flex-wrap:wrap;margin-top:14px">
-                <span style="font-size:12px;color:#86efac" x-text="`● 承認済み ${charLibCounts.approved}`"></span>
+                <span style="font-size:12px;color:#86efac" x-text="`● 許可済み ${charLibCounts.approved}`"></span>
                 <span style="font-size:12px;color:#fde68a" x-show="charLibCounts.unapproved"
-                      x-text="`● 未承認 ${charLibCounts.unapproved}`"></span>
+                      x-text="`● 未許可 ${charLibCounts.unapproved}`"></span>
                 <span style="font-size:12px;color:#fecaca" x-show="charLibCounts.stale"
                       x-text="`● 世代違い ${charLibCounts.stale}`"></span>
                 <span style="font-size:11px;color:#4b5563;margin-left:auto"
                       x-text="`✂️生涯上限 ${cutoutThresholds.max_uses ?? 3}回 / 使い回し判定 距離 ${cutoutThresholds.repetitive_below ?? 0.073} 未満`"></span>
                 <button class="btn btn-primary btn-sm" x-show="charLibCounts.unapproved"
                         :disabled="charLib.busy" @click="approveAllCharLib()"
-                        x-text="`✔ 未承認 ${charLibCounts.unapproved} 件をまとめて承認`"></button>
+                        title="他の行にも使い回してよいと許可する（在庫登録自体は生成時に済んでいる）"
+                        x-text="`✔ 未許可 ${charLibCounts.unapproved} 件に再利用を許可`"></button>
                 <button class="btn btn-sm" x-show="charLibCounts.stale"
                         style="background:#7f1d1d;color:#fecaca"
                         :disabled="charLib.busy" @click="reblessCharLib()"
@@ -3718,7 +3669,7 @@
                         @click="charLibSetFilter('status', 'all')">すべて</button>
                 <button class="btn btn-sm" x-show="charLibCounts.unapproved"
                         :style="charLib.status === 'unapproved' ? 'background:#78350f;color:#fde68a' : ''"
-                        @click="charLibSetFilter('status', 'unapproved')" x-text="`未承認 ${charLibCounts.unapproved}`"></button>
+                        @click="charLibSetFilter('status', 'unapproved')" x-text="`未許可 ${charLibCounts.unapproved}`"></button>
                 <button class="btn btn-sm" x-show="charLibCounts.unused"
                         :style="charLib.status === 'unused' ? 'background:#164e63;color:#a5f3fc' : ''"
                         @click="charLibSetFilter('status', 'unused')" x-text="`未使用 ${charLibCounts.unused}`"></button>
@@ -3753,7 +3704,7 @@
               </div>
 
               <div style="font-size:11px;color:#64748b;margin-top:10px;line-height:1.7">
-                <b>未承認のものは台本行に割り当てられません</b>（安全弁）。<b>新しい順</b>に並びます。
+                <b>未許可のものは台本行に割り当てられません</b>（安全弁）。<b>新しい順</b>に並びます。
                 クリックで詳細（背景付き/切り抜きの両方・実測値・由来・ラベル編集）。
                 サムネの地色に注意 ── <b>実背景色＝🖼️パネル</b>／<b>灰色地＝✂️切り抜きのみ</b>
                 （切り抜きは背景を持たないので、そのままでは合成できません）。
@@ -4323,7 +4274,7 @@
           <span style="font-size:14px;font-weight:700;color:#c4b5fd" x-text="charLib.detail.slot_id"></span>
           <span class="status-badge"
                 :style="charLib.detail.review_status === 'pending' ? 'background:#78350f;color:#fde68a' : 'background:#166534;color:#bbf7d0'"
-                x-text="charLib.detail.review_status === 'pending' ? '未承認' : '承認済み'"></span>
+                x-text="charLib.detail.review_status === 'pending' ? '未許可' : '許可済み'"></span>
           <span class="status-badge" x-show="charLib.detail.is_stale"
                 style="background:#7f1d1d;color:#fecaca">世代違い</span>
           <button class="btn btn-sm" style="margin-left:auto" @click="charLib.detail = null">✕</button>
@@ -4332,6 +4283,13 @@
         <div style="font-size:11px;color:#94a3b8;line-height:1.9">
           <div><span style="color:#64748b">使用回数</span>:
             <span x-text="`${charLib.detail.times_used || 0}${charLib.detail.usable?.cutout ? ' / ' + (cutoutThresholds.max_uses ?? 3) + '（切り抜きの生涯上限）' : ''}`"></span></div>
+          <!-- T2 §4-3: 今どの行が直接指しているか（逆引き）。使用中は削除ボタンを無効化する -->
+          <div x-show="(charLib.detail.used_by || []).length" style="color:#fbbf24">
+            <span style="color:#64748b">使用中</span>:
+            <template x-for="u in charLib.detail.used_by" :key="`${u.project_id}-${u.episode}-${u.line_id}`">
+              <span style="display:inline-block;margin-right:6px" x-text="`${u.project_id} ep${u.episode} ${u.line_id}`"></span>
+            </template>
+          </div>
           <div><span style="color:#64748b">slot_id</span>:
             <span style="font-family:monospace;color:#c4b5fd" x-text="charLib.detail.slot_id"></span></div>
           <div style="font-size:10px;color:#4b5563;line-height:1.6">
@@ -4432,9 +4390,12 @@
         <div style="display:flex;gap:6px;margin-top:auto;padding-top:10px;border-top:1px solid #2d3748">
           <button class="btn btn-primary btn-sm" style="flex:1"
                   x-show="charLib.detail.review_status === 'pending'"
-                  :disabled="charLib.busy" @click="approveCharLibEntry(charLib.detail)">✔ 承認する</button>
+                  :disabled="charLib.busy" @click="approveCharLibEntry(charLib.detail)"
+                  title="この絵を他の行にも使い回してよいと許可する">✔ 再利用を許可</button>
           <button class="btn btn-danger btn-sm" style="flex:1"
-                  :disabled="charLib.busy" @click="deleteCharLibEntry(charLib.detail)">🗑 削除</button>
+                  :disabled="charLib.busy || (charLib.detail.used_by || []).length"
+                  :title="(charLib.detail.used_by || []).length ? '使用中のため削除できません（先に該当行で外してください）' : ''"
+                  @click="deleteCharLibEntry(charLib.detail)">🗑 削除</button>
         </div>
         <div style="font-size:10px;color:#4b5563;line-height:1.7">
           削除した絵は <code>panel_library/trash/</code> へ退避します（索引からは外れ、自動配布もされません）。
@@ -4741,7 +4702,7 @@
           <template x-if="arollPanelOf(qaDetail.line_id)?.status === 'done' && arollPanelOf(qaDetail.line_id)?.image">
             <span class="status-badge"
                   :style="arollPanelOf(qaDetail.line_id).image_approved_at ? 'background:#14532d;color:#bbf7d0' : 'background:#78350f;color:#fde68a'"
-                  x-text="arollPanelOf(qaDetail.line_id).image_approved_at ? '✓ 承認済' : '未承認'"></span>
+                  x-text="arollPanelOf(qaDetail.line_id).image_approved_at ? '✓ 確定済' : '未確定'"></span>
           </template>
           <button class="btn btn-sm" style="margin-left:auto" @click="qaDetail = null">✕</button>
         </div>
@@ -4833,13 +4794,19 @@
                       @change="arollSavePrompt(arollPanelOf(qaDetail.line_id), $event.target.value)"></textarea>
             <div style="font-size:9px;color:#4b5563">英語で書いてください（画像モデルに渡すため）。</div>
 
-            <!-- 割当中の切り抜き -->
+            <!-- 割当中の切り抜き。外す(在庫に残す・主操作)と失敗として捨てる(副操作)は別物（T2 §4-2） -->
             <div x-show="arollPanelOf(qaDetail.line_id).cutout_slot_id"
                  style="font-size:10px;color:#a5f3fc;display:flex;align-items:center;gap:6px">
               <span x-text="'✂️ ' + (arollPanelOf(qaDetail.line_id).cutout_slot_id || '')"
                     style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap"></span>
               <button class="btn btn-ghost btn-sm" style="font-size:9px;padding:0 4px"
-                      @click="arollClearCutout(arollPanelOf(qaDetail.line_id))" title="割り当てを外す">×</button>
+                      :disabled="arollLineBusy"
+                      @click="arollClearCutout(arollPanelOf(qaDetail.line_id))"
+                      title="この行から外す（絵は在庫に残り、他の行では使える）">✕ 外す</button>
+              <button class="btn btn-ghost btn-sm" style="font-size:9px;padding:0 4px;color:#f87171"
+                      :disabled="arollLineBusy"
+                      @click="arollRejectImage(arollPanelOf(qaDetail.line_id))"
+                      title="絵そのものが失敗（指が6本など・どの行でも使えない）。在庫からも削除します（ゴミ箱へ・復元可）">🗑 失敗</button>
             </div>
 
             <!-- 生成と選択は同じ列に置く（ユーザーから見れば「この行の絵を決める」1つの操作） -->
@@ -4887,16 +4854,17 @@
               </div>
             </div>
 
-            <!-- 採用と決めた絵だけを在庫へ積む（生成の瞬間ではなく承認の瞬間に積む） -->
+            <!-- T2: 「この行の絵はこれでいい」の確定。在庫登録は生成の瞬間に済んでいる（T1）ので、
+                 ここは image_approved_at を立てるだけ。再利用の許可は📚キャラ在庫タブの別操作 -->
             <div x-show="arollPanelOf(qaDetail.line_id).status === 'done' && arollPanelOf(qaDetail.line_id).image"
                  style="display:flex;gap:6px;align-items:center;flex-wrap:wrap">
               <button class="btn btn-primary btn-sm" style="flex:1 1 140px"
                       x-show="!arollPanelOf(qaDetail.line_id).image_approved_at"
                       :disabled="arollApproveBusy || arollRunning || arollLineBusy"
                       @click="arollApproveImages([qaDetail.line_id])"
-                      title="この絵を採用と決めてキャラ所有ライブラリへ積む（無料・画像生成なし）">✓ 承認して在庫へ</button>
+                      title="この行の絵はこれでいい、と確定します（無料）">✓ この絵で確定</button>
               <span x-show="arollPanelOf(qaDetail.line_id).image_approved_at"
-                    style="font-size:10px;color:#86efac">✓ 承認済み — 在庫へ取り込み済みです</span>
+                    style="font-size:10px;color:#86efac">✓ 確定済み</span>
             </div>
 
             <!-- 在庫ピッカー（コマ一覧と同じ供給元・同じ並び） -->
@@ -4921,8 +4889,8 @@
             </div>
 
             <div style="font-size:9px;color:#4b5563;line-height:1.6">
-              生成し直した絵は<b>まだ背景付き</b>です。素材にするには切り抜き工程が要ります。
-              在庫から選んだ場合はそのまま合成に進めます。
+              単独キャラの行は、生成した瞬間に自動で背景を抜いて在庫へ登録します（無料）。
+              2人以上写る行だけは<b>まだ背景付き</b>のままで、素材にするには切り抜き工程が要ります。
             </div>
           </div>
         </template>
@@ -5577,7 +5545,6 @@ function app() {
     arollExportBusy: false,
     arollExportResult: null,      // 直近の /aroll/export レスポンス
     arollApproveBusy: false,
-    arollApproveResult: null,     // 直近の /aroll/approve-images レスポンス
 
     // 🔍 合成チェック（PS-Assist が書いた qa_report.json を読むだけ）
     qa: null,                     // psassist/qa_report.json
@@ -7846,7 +7813,7 @@ function app() {
           body: JSON.stringify({ emotion: g.emotion, shot: g.shot, angle: g.angle, pose: g.pose, model: g.model }),
         });
         if (!r.ok) { const e = await r.json().catch(() => ({})); this.charLib.msg = `生成失敗: ${e.detail || r.status}`; return; }
-        this.charLib.msg = '1枚生成しました（承認済み・即座にAロールから引かれます）';
+        this.charLib.msg = '1枚生成しました（許可済み・即座にAロールから引かれます）';
         await this.loadCharLib();
       } catch (e) {
         this.charLib.msg = `生成失敗: ${e}`;
@@ -7867,7 +7834,7 @@ function app() {
         });
         if (!r.ok) { const e = await r.json().catch(() => ({})); this.charLib.msg = `生成失敗: ${e.detail || r.status}`; return; }
         const d = await r.json();
-        this.charLib.msg = `${(d.entries || []).length}枚生成しました（承認待ち・「未承認」チップで確認してください）`;
+        this.charLib.msg = `${(d.entries || []).length}枚生成しました（未許可・「未許可」チップで確認してください）`;
         await this.loadCharLib();
       } catch (e) {
         this.charLib.msg = `生成失敗: ${e}`;
@@ -8517,7 +8484,7 @@ function app() {
       const panels = this.qaMerged;
       const f = this.qaFilter;
       if (f === 'all') return panels;
-      // 「絵はあるが未承認」＝在庫に積まれていない行。見て承認する動線のための絞り込み
+      // 「絵はあるがまだ確定していない」行（在庫登録自体はT1で済んでいる）。見て確定する動線
       if (f === 'unapproved') {
         return panels.filter(p => {
           const a = this.arollPanelOf(p.line_id);
@@ -8618,7 +8585,7 @@ function app() {
     },
     // ─── 📚 キャラ在庫タブ: 閲覧・整理（旧✂️切り抜き＋📚キャラ画像を統合。2026-08-28） ────
     // 選択のロジックは持たない（find_current・cutout_selectorが本籍・1事実1ホーム）。
-    // ここは在庫を見て承認/削除/ラベル編集/世代付け替えをするだけ。
+    // ここは在庫を見て再利用許可/削除/ラベル編集/世代付け替えをするだけ。
     //
     // 絞り込みは軸ごとに独立（🏞️背景タブと同じ方式）: 用途(usable) / 状態(status) / 感情 / ショット。
     // チップの件数は「他の軸を適用した集合」で数える＝押すと0件になるチップが出ない。
@@ -8845,8 +8812,8 @@ function app() {
       }
     },
     async approveAllCharLib() {
-      // 未承認は出自によって kind が違う（先回り生成の承認待ち=既定kind／psassist取り込み=kind:"cutout"）。
-      // 両方まとめて承認する
+      // 未許可は出自によって kind が違う（先回り生成の許可待ち=既定kind／psassist取り込み=kind:"cutout"）。
+      // 両方まとめて許可する
       this.charLib.busy = true;
       try {
         const ids = this.charLib.charId === '*'
@@ -8854,7 +8821,7 @@ function app() {
         const rs = await Promise.all(ids.flatMap(id => ['panel', 'cutout'].map(kind => fetch(
           `${FAPI}/characters/${id}/panel_library/approve-all?kind=${kind}`, { method: 'POST' })
           .then(r => r.json()))));
-        this.charLib.msg = `${rs.reduce((a, r) => a + (r.approved || 0), 0)} 件を承認しました`;
+        this.charLib.msg = `${rs.reduce((a, r) => a + (r.approved || 0), 0)} 件に再利用を許可しました`;
         await this.loadCharLib();
       } finally {
         this.charLib.busy = false;
@@ -8944,8 +8911,13 @@ function app() {
       if (!confirm(`${e.slot_id} を削除します（実体ファイルも消えます）。よろしいですか？`)) return;
       this.charLib.busy = true;
       try {
-        await fetch(`${FAPI}/characters/${e.char_id || this.charLib.charId}/panel_library/${e.slot_id}`,
+        const r = await fetch(`${FAPI}/characters/${e.char_id || this.charLib.charId}/panel_library/${e.slot_id}`,
                     { method: 'DELETE' });
+        if (!r.ok) {
+          const d = await r.json().catch(() => ({}));
+          this.charLib.msg = d.detail || '削除に失敗しました';
+          return;
+        }
         this.charLib.detail = null;
         await this.loadCharLib();
       } finally {
@@ -9080,14 +9052,14 @@ function app() {
     async arollBulkApprove() {
       const ids = this.arollSelected;
       if (!ids.length) return;
-      // §13-4「画像の承認は一括だけ確認を挟む」。arollApproveImages は明示idsだと
+      // §13-4「確定は一括だけ確認を挟む」。arollApproveImages は明示idsだと
       // 確認しない（1行ずつ押す用途のため正しい）ので、一括のこちら側で挟む。
-      if (!confirm(`選択した ${ids.length}行 を承認し、キャラ所有ライブラリへ取り込みます。`
+      if (!confirm(`選択した ${ids.length}行 の絵を「これでいい」と確定します。`
           + `\n無料です（画像は生成しません）。続行しますか？`)) return;
       this.arollBulkBusy = true;
       try {
         await this.arollApproveImages(ids);
-        this.arollBulkMsg = `✔ ${ids.length}行を承認しました`;
+        this.arollBulkMsg = `✔ ${ids.length}行を確定しました`;
       } finally { this.arollBulkBusy = false; }
     },
     async arollBulkRegenerate() {
@@ -9156,7 +9128,6 @@ function app() {
       switch (key) {
         case 'prep':    return this.arollPrepDone;
         case 'draw':    return this.arollDrawDone;
-        case 'approve': return !!this.arollManifest && !this.arollApprovalCounts.pending;
         // 組む/見る は「終わり」を機械で判断できない（目視が要る）ので畳まない
         default:        return false;
       }
@@ -9182,7 +9153,7 @@ function app() {
     },
     // 見出しの右端に出す一行サマリ。畳んだままでも進捗が分かるようにする
     arollSecSummary(key) {
-      const c = this.arollCounts, a = this.arollApprovalCounts;
+      const c = this.arollCounts;
       switch (key) {
         case 'prep': {
           if (!this.arollManifest) return 'まだ何もありません';
@@ -9201,8 +9172,6 @@ function app() {
           return need === null ? base
             : `${base}　（在庫で ${this.cutoutPlan.from_stock} 行・要生成 ${need} 行）`;
         }
-        case 'approve':
-          return a.pending ? `未承認 ${a.pending} 件` : '✔ すべて承認済み';
         case 'build':
           if (!this.psassistAlive) return 'ホスト工程が停止中';
           return this.psassistExportTargets.length
@@ -9264,11 +9233,11 @@ function app() {
         this.arollMsg = `確定に失敗: ${e.message}`;
       } finally { this.arollSyncBusy = false; }
     },
-    // ─── 画像の承認（在庫へ積む口） ────────────────────────────────
+    // ─── T2: 行の絵の確定状況（image_approved_at） ──────────────────────
     //
-    // 生成の瞬間ではなく**人が承認した瞬間**に積む。生成時に積むと、作り直して捨てた絵まで
-    // 在庫に入る（a_roll/panel_{line_id}.png は上書きで最後の1枚しか残らないのに、在庫には
-    // 作り直した回数ぶん並ぶ）。台本・TTSの「承認」と同じ位置づけ。Docs/AROLL_ASSET_PLAN.md §12-2
+    // 在庫登録はT1で生成の瞬間に済んでいる。ここが数えるのは「この行の絵はこれでいい」と
+    // 人が確定したかどうかだけで、資産の再利用許可（review_status）とは別軸
+    // （Docs/AROLL_UNIFIED_FLOW_PLAN.md §3）。
     get arollApprovalCounts() {
       const c = { done: 0, approved: 0, pending: 0 };
       for (const p of this.arollPanels) {
@@ -9278,20 +9247,11 @@ function app() {
       }
       return c;
     },
-    get arollUnapprovedLineIds() {
-      return this.arollPanels
-        .filter(p => p.status === 'done' && p.image && !p.image_approved_at)
-        .map(p => p.line_id);
-    },
+    // T2: 「この行の絵はこれでいい」の確定（image_approved_at）。在庫登録はT1で
+    // 生成の瞬間に済んでいるので、ここは通常 registered=0 になる（過去データ互換の時だけ動く）。
     async arollApproveImages(lineIds) {
-      const ids = lineIds || this.arollUnapprovedLineIds;
+      const ids = lineIds || [];
       if (!ids.length) return;
-      // 一括だけ確認を挟む（1行ずつは「今その絵を見て押す」操作なので挟まない）
-      if (!lineIds && !confirm(
-          `未承認 ${ids.length} 件を承認し、キャラ所有ライブラリへ取り込みます。\n`
-          + '無料です（背景除去→指紋→多様性検査を通すだけで、画像は生成しません）。\n'
-          + '既存の在庫と近すぎる絵は積まれませんが、その行の絵はそのまま使われます。\n'
-          + '続行しますか？')) return;
       this.arollApproveBusy = true;
       this.arollMsg = '';
       try {
@@ -9300,22 +9260,13 @@ function app() {
           body: JSON.stringify({ line_ids: ids }),
         });
         const d = await r.json();
-        if (!r.ok) throw new Error(d.detail || '承認に失敗しました');
-        this.arollApproveResult = d;
-        this.arollMsg = `✔ ${d.approved}件を承認 / ${d.registered}件を在庫へ取り込みました`;
+        if (!r.ok) throw new Error(d.detail || '確定に失敗しました');
+        this.arollMsg = `✔ ${d.approved}件を確定しました`
+          + (d.registered ? `（うち${d.registered}件は旧データのため在庫へ新規登録）` : '');
         await this.loadArollManifest();
       } catch (e) {
-        this.arollMsg = `承認に失敗: ${e.message}`;
+        this.arollMsg = `確定に失敗: ${e.message}`;
       } finally { this.arollApproveBusy = false; }
-    },
-    // 「積まなかった理由」は件数でまとめる（1行ずつ読ませない）
-    get arollApproveSkipReasons() {
-      const m = {};
-      for (const s of this.arollApproveResult?.skipped || []) {
-        const k = (s.reason || '').split('（')[0];
-        m[k] = (m[k] || 0) + 1;
-      }
-      return Object.entries(m).sort((a, b) => b[1] - a[1]);
     },
     async arollExport() {
       this.arollExportBusy = true;
@@ -9487,7 +9438,7 @@ function app() {
         this.arollPickerThreshold = d.threshold ?? 0.073;
         if (!this.arollPickerItems.length) {
           this.arollPickerNote = d.reason
-            || '適格な在庫がありません（未承認・世代違い・生涯上限・感情の不一致）。✂️切り抜きタブで承認してください';
+            || '適格な在庫がありません（未許可・世代違い・生涯上限・感情の不一致）。📚キャラ在庫タブで許可してください';
         }
       } catch { this.arollPickerItems = []; this.arollPickerNote = '候補の取得に失敗しました'; }
       this.arollPickerBusy = false;
@@ -9523,6 +9474,22 @@ function app() {
           body: JSON.stringify({ slot_id: null }),
         });
         if (r.ok) { p.cutout_slot_id = null; p.cutout_char_id = null; }
+      } catch { /* noop */ }
+      finally { this.arollLineBusy = null; }
+    },
+    // 🗑 この絵は失敗（副操作・T2 §4-2）。「外す」と違い在庫からも削除する（ゴミ箱方式で復元可）。
+    async arollRejectImage(p) {
+      if (!confirm('この絵はどの行でも使えない失敗作として在庫から削除します（ゴミ箱へ移動・復元可）。\nよろしいですか？')) return;
+      this.arollLineBusy = p.line_id;
+      try {
+        const r = await fetch(`${this.arollApiBase}/lines/${p.line_id}/cutout/reject`, { method: 'POST' });
+        const d = await r.json();
+        if (r.ok) {
+          p.cutout_slot_id = null; p.cutout_char_id = null;
+          this.arollMsg = `🗑 ${d.slot_id} を在庫から削除しました`;
+        } else {
+          this.arollMsg = d.detail || '削除に失敗しました';
+        }
       } catch { /* noop */ }
       finally { this.arollLineBusy = null; }
     },

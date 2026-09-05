@@ -756,14 +756,21 @@ def clear_image_approval(project_id: str, episode: int, panel: dict,
 
 def approve_images(project_id: str, episode: int, line_ids: list[str] | None = None,
                    *, register: bool = True) -> dict:
-    """画像を承認し、**その時点で**キャラ所有ライブラリへ取り込む。
+    """行の絵を**確定**する（``image_approved_at`` を立てる）。「この行の絵はこれでいい」の答え。
 
-    「いつ在庫に積むか」の答え。生成の瞬間ではなく**人が承認した瞬間**に積む。
-    生成時に積むと、作り直して捨てた絵まで在庫に入ってしまう（``a_roll/`` の実体は
-    上書きされて最後の1枚しか残らないのに、在庫には作り直した回数ぶん並ぶ）。
+    T2（Docs/AROLL_UNIFIED_FLOW_PLAN.md §3）: 「承認」は2つの別の判断に割れている。
+    ここは**行の確定**だけを担う。「この絵を他の行にも使い回してよい」という
+    **資産側の許可**（``review_status: pending → approved``）は別物で、
+    📚キャラ在庫タブの ``approve_entry`` / ``approve_all`` が担う（ここでは触らない）。
 
-    取り込みは ``register_from_image``（背景除去→指紋）。人が今その絵を見て
-    承認したので ``review_status="approved"`` で入れる（切り抜きタブで二度承認させない）。
+    ⚠️ **在庫登録は原則ここではもう行わない。** T1で生成の瞬間に
+    ``register_from_image(review_status="pending")`` 済み（``cutout_slot_id`` を持つ）なので、
+    確定はその絵の身元には触れず ``image_approved_at`` を立てるだけでよい。
+
+    **過去データ互換**: T1より前に生成され ``cutout_slot_id`` を持たない絵は、
+    ここが唯一の登録の入口なので**従来どおり**登録する
+    （``register_from_image`` に ``review_status`` を渡さず既定の "approved" で入れる＝
+    人が今その絵を見て確定したので、切り抜きタブで二度承認させない）。
 
     ⚠️ **承認と在庫化は別物**。積めない行は ``skipped`` に理由を載せて承認だけ通す
     （絵はそのまま使える・課金ゼロ）。積まない条件は
@@ -792,7 +799,9 @@ def approve_images(project_id: str, episode: int, line_ids: list[str] | None = N
         p["image_approved_at"] = _now()
         p["image_approved_hash"] = hashlib.sha256(data).hexdigest()[:16]
         approved.append(lid)
-        if not register:
+        if not register or p.get("cutout_slot_id"):
+            # T1で既に登録済み（pending）。確定は image_approved_at を立てるだけで、
+            # 資産側の許可（pending→approved）はキャラ在庫タブの操作に任せる。
             continue
         chars = [c for c in (p.get("characters") or []) if c]
         slot = p.get("slot") or {}
@@ -1159,7 +1168,9 @@ async def generate_line_image(
             })
             clear_image_approval(project_id, episode, panel, demote=False)
             save_manifest(project_id, episode, manifest)
-            panel_library_manager.record_usage(lib_hit["char_id"], lib_hit["slot_id"])
+            panel_library_manager.record_usage(
+                lib_hit["char_id"], lib_hit["slot_id"],
+                project_id=project_id, episode=episode, line_id=line_id)
             if log is not None:
                 log.append(f"📚 {line_id} ライブラリから引用: {lib_hit['char_id']}/{lib_hit.get('slot_id')}")
             return panel
@@ -1203,6 +1214,20 @@ async def generate_line_image(
         # 引かれない＝pending除外が効き、この行専用のまま。§3-1参照）。
         # ⚠️ 単独キャラの行のみ対象。2ショットはライブラリ非対応（_library_lookup と同じ制約、
         # §6「やらないこと」）なので、複数キャラの行は従来どおり image のみで扱う。
+        #
+        # ⚠️ 作り直すたびに古い cutout_slot_id は必ず外す。新しい登録が成功すればすぐ
+        # 上書きするが、対象外/失敗の時もここで外さないと「image は新しいのに
+        # cutout_slot_id だけ前の絵を指す」不整合が残る（plan_builder は cutout_slot_id を
+        # 優先するため、せっかく作り直した絵が無視されてしまう）。
+        prev_slot_id, prev_char_id = panel.get("cutout_slot_id"), panel.get("cutout_char_id")
+        if prev_slot_id and prev_char_id:
+            panel_library_manager.release_usage(
+                prev_char_id, prev_slot_id, project_id=project_id, episode=episode, line_id=line_id)
+        panel["cutout_slot_id"] = None
+        panel["cutout_char_id"] = None
+        panel["cutout_source"] = None
+        panel["cutout_assigned_at"] = None
+
         chars = [c for c in (panel.get("characters") or []) if c]
         slot = panel.get("slot") or {}
         emotion, shot, angle = slot.get("emotion"), slot.get("shot"), slot.get("angle")
@@ -1232,6 +1257,9 @@ async def generate_line_image(
                     panel["cutout_char_id"] = char_id
                     panel["cutout_source"] = "generated"
                     panel["cutout_assigned_at"] = _now()
+                    panel_library_manager.record_usage(
+                        char_id, reg["slot_id"],
+                        project_id=project_id, episode=episode, line_id=line_id)
                     if log is not None:
                         log.append(f"📦 {line_id} 生成物を在庫へ登録(pending): {char_id}/{reg['slot_id']}")
                 elif log is not None:
@@ -1725,9 +1753,11 @@ def set_cutout_selection(project_id: str, episode: int, line_id: str, slot_id: s
             raise ValueError(f"未承認の切り抜きは割り当てられません: {slot_id}")
 
     if prev:
-        panel_library_manager.release_usage(char_id, prev)
+        panel_library_manager.release_usage(
+            char_id, prev, project_id=project_id, episode=episode, line_id=line_id)
     if slot_id:
-        panel_library_manager.record_usage(char_id, slot_id)
+        panel_library_manager.record_usage(
+            char_id, slot_id, project_id=project_id, episode=episode, line_id=line_id)
 
     panel["cutout_slot_id"] = slot_id
     panel["cutout_char_id"] = char_id if slot_id else None
@@ -1738,6 +1768,30 @@ def set_cutout_selection(project_id: str, episode: int, line_id: str, slot_id: s
     clear_image_approval(project_id, episode, panel, demote=False)
     save_manifest(project_id, episode, manifest)
     return {"line_id": line_id, "cutout_slot_id": slot_id, "previous": prev, "changed": True}
+
+
+def reject_current_image(project_id: str, episode: int, line_id: str) -> dict:
+    """行の絵を「絵そのものが失敗」として、割当を外した上で在庫からも削除する（T2 §4-2）。
+
+    ⚠️ **「この行には合わない」（絵は良い・在庫に残す）場合はこちらを使わない。**
+    その場合は ``set_cutout_selection(..., None)`` （行モーダルの「✕ この絵を外す」）だけでよい。
+    ここは「指が6本ある」「破綻している」等、**どの行でも使えない絵**の逃がし道。
+    `delete_entry` は trash_dir への退避（可逆）なので事故コストは低いが、控えめに置くこと。
+    """
+    manifest = load_manifest(project_id, episode)
+    if manifest is None:
+        raise ValueError("aroll.json not found")
+    panel = next((p for p in manifest.get("panels", []) if p.get("line_id") == line_id), None)
+    if panel is None:
+        raise ValueError(f"line not found: {line_id}")
+    slot_id, char_id = panel.get("cutout_slot_id"), panel.get("cutout_char_id")
+    if not (slot_id and char_id):
+        raise ValueError("この行には在庫割当がありません（外す絵がありません）")
+    # 先に割当を外す（used_by を解放してから delete_entry を通す。順序を逆にすると
+    # 「使用中なので削除できません」に自分自身の使用でブロックされる）
+    set_cutout_selection(project_id, episode, line_id, None)
+    deleted = panel_library_manager.delete_entry(char_id, slot_id)
+    return {"line_id": line_id, "char_id": char_id, "slot_id": slot_id, "deleted": deleted}
 
 
 def apply_cutout_plan(project_id: str, episode: int, line_ids: list[str] | None = None) -> dict:
