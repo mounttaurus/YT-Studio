@@ -1196,6 +1196,48 @@ async def generate_line_image(
         demoted = clear_image_approval(project_id, episode, panel, demote=True)
         if demoted and log is not None:
             log.append(f"⬇️ {line_id} 作り直しに伴い在庫を未承認へ降格: {', '.join(demoted)}")
+
+        # T1（Docs/AROLL_UNIFIED_FLOW_PLAN.md）: 生成物を自動で在庫へ通す。
+        # 「1行の絵は必ず在庫から来る」を満たすため、生成した瞬間にpendingで在庫登録し、
+        # この行はその slot_id を直接指す（他の行からは find_current 経由でしか
+        # 引かれない＝pending除外が効き、この行専用のまま。§3-1参照）。
+        # ⚠️ 単独キャラの行のみ対象。2ショットはライブラリ非対応（_library_lookup と同じ制約、
+        # §6「やらないこと」）なので、複数キャラの行は従来どおり image のみで扱う。
+        chars = [c for c in (panel.get("characters") or []) if c]
+        slot = panel.get("slot") or {}
+        emotion, shot, angle = slot.get("emotion"), slot.get("shot"), slot.get("angle")
+        if len(chars) == 1 and emotion and shot and angle:
+            char_id = chars[0]
+            # ⚠️ **二重在庫の入口はここ**（approve_images と同じ理由・同じガード）。参照画像が
+            # 無いキャラの絵を在庫に積むと「似た別人」が同じキャラの在庫として配られてしまう
+            # （外見だけ複製したVoiceバリアントキャラで実際に起きうる。§15-0）。生成自体は
+            # 止めない（この行の絵は必要）が、在庫への登録だけを塞ぐ。
+            can_stock, why = character_manager.can_generate_images(char_id)
+            if not can_stock:
+                if log is not None:
+                    log.append(f"ℹ️ {line_id} は在庫に積めません（{why}）。絵はこの行にだけ使われます")
+            else:
+                reg = panel_library_manager.register_from_image(
+                    char_id, data, emotion=emotion, shot=shot, angle=angle,
+                    pose=slot.get("pose") or "", prompt=full_prompt,
+                    style_name=manifest.get("style", "kamishibai"), provider="nanobanana",
+                    source={"project_id": project_id, "episode": episode, "line_id": line_id},
+                    review_status="pending",
+                )
+                if reg.get("slot_id"):
+                    # set_cutout_selection() は review_status="approved" を要求するため使えない
+                    # （他の行が在庫を借りる時の承認ゲートであって、この行が自分の生成物を
+                    # 直接指すのとは別の操作。ここは意図的にゲートを通さない）。
+                    panel["cutout_slot_id"] = reg["slot_id"]
+                    panel["cutout_char_id"] = char_id
+                    panel["cutout_source"] = "generated"
+                    panel["cutout_assigned_at"] = _now()
+                    if log is not None:
+                        log.append(f"📦 {line_id} 生成物を在庫へ登録(pending): {char_id}/{reg['slot_id']}")
+                elif log is not None:
+                    log.append(f"⚠️ {line_id} 切り抜きに失敗し在庫登録できませんでした: {reg.get('reason')}")
+        elif len(chars) > 1 and log is not None:
+            log.append(f"ℹ️ {line_id} は2人以上写る行のため在庫登録の対象外です（キャラ単独限定）")
     except Exception as e:
         panel.update({"status": "failed", "error": str(e)[:300]})
         raise
