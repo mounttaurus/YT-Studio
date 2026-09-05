@@ -1623,7 +1623,11 @@ def cutout_candidates(project_id: str, episode: int, line_id: str, limit: int = 
         if not sid or (q.get("cutout_char_id") or (q.get("characters") or [None])[0]) != char_id:
             continue
         e = panel_library_manager.get_entry(char_id, sid)
-        if e and e.get("kind") == "cutout":
+        # ⚠️ 適格判定の本籍は usable_as（`kind` は出自の記録であって用途ではない。
+        #    panel_library_manager.usable_as 参照）。kind で見ていた時は、背景除去を
+        #    Python化した2026-08-27以降の entry（kind="panel" のまま cutout を持つ）が
+        #    直近リストから丸ごと抜け落ち、「近すぎ」判定が発火しなかった。
+        if e and panel_library_manager.usable_as(e)["cutout"]:
             recent_ids.append(q.get("line_id"))
             recent.append(e)
 
@@ -1671,7 +1675,9 @@ def set_cutout_selection(project_id: str, episode: int, line_id: str, slot_id: s
 
     if slot_id:
         entry = panel_library_manager.get_entry(char_id, slot_id)
-        if not entry or entry.get("kind") != "cutout":
+        # ⚠️ ここを `kind` で見ると、cutout_plan（usable_as 経由）が候補に出した entry を
+        #    apply が拒否する＝試算と実行が別基準になる（実データで287枚中93枚が該当）。
+        if not entry or not panel_library_manager.usable_as(entry)["cutout"]:
             raise ValueError(f"cutout entry not found: {char_id}/{slot_id}")
         if entry.get("review_status", "approved") != "approved":
             raise ValueError(f"未承認の切り抜きは割り当てられません: {slot_id}")
