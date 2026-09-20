@@ -105,9 +105,17 @@ def main() -> None:
             "height": args.height,
         })
     if args.resume:
+        # ⚠️ **存在チェックだけでは古いPNGを見逃す**（穴8・2026-09-06実測）。組み直して
+        # PSDが新しくなっても、PNGが既に「存在する」ので黙って古いまま残ってしまい、
+        # build_timeline の直前まで気づけなかった実害があった（export-png-must-follow-rebuild）。
+        # PSDのmtimeより新しいPNGだけをスキップ対象にする。
         before = len(jobs)
-        jobs = [j for j in jobs if not os.path.exists(j["out_png"])]
-        print("書き出し済みを除外: %d → %d 枚" % (before, len(jobs)))
+        jobs = [
+            j for j in jobs
+            if not (os.path.exists(j["out_png"])
+                    and os.path.getmtime(j["out_png"]) >= os.path.getmtime(j["in_psd"]))
+        ]
+        print("書き出し済み（PSDより新しいPNGがある）を除外: %d → %d 枚" % (before, len(jobs)))
 
     print("対象 %d 枚 → %s（%d×%d）\n" % (len(jobs), out_dir, args.width, args.height))
     if not jobs:

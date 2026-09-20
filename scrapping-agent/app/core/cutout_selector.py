@@ -19,7 +19,7 @@ import json
 import os
 from pathlib import Path
 
-from app.core import character_manager, panel_library_manager
+from app.core import character_manager, panel_library_manager, shot_meter
 
 OVERRIDES_NAME = "character_overrides.json"
 
@@ -28,6 +28,10 @@ DEFAULT_THRESHOLDS = {
     "repetitive_below": 0.073,  # これ未満＝使い回しに見える（完成コマで較正・§10-6）
     "max_uses": 3,              # 生涯の使用回数上限（times_used累計・1話内ではない）
     "recent_window": 5,         # 直近何行を「近く」とみなすか（§10-7でK=4が違反0の窓）
+    # ⚠️ **合成距離ではなくポーズだけを見る閾値**（2026-09-06追加・下の pose_distance 参照）。
+    # ユーザーが「似すぎ」と指摘した実データの shape_rel 実測が 0.070 / 0.165 / 0.187 だったので、
+    # 「0.20未満は人の目に同じポーズ」と読む。本番64行での実測は下の plan_episode に記録。
+    "pose_near": 0.20,
 }
 
 
@@ -59,6 +63,30 @@ def distance(fa: dict, fb: dict) -> float:
         return 1.0
     try:
         return (_hamming_ratio(fa["dhash"], fb["dhash"]) + _l1_ratio(fa["shape_rel"], fb["shape_rel"])) / 2
+    except (KeyError, ValueError):
+        return 1.0
+
+
+def pose_distance(fa: dict, fb: dict) -> float:
+    """**ポーズだけ**の距離（`shape_rel` 単体）。0=同じ姿勢, 1=最大。
+
+    ⚠️ `distance()` と使い分ける。合成距離は `dhash`（フレーム全体の明暗＝**寄り引きに敏感**）を
+    半分含むため、「同じポーズを寄りと引きで撮った2枚」を**別物と判定してしまう**。
+    実データ（2026-09-06・ユーザーが「似すぎ」と指摘した3枚）:
+
+        031×040  合成 0.199 ＝ dhash 0.328 ＋ shape_rel **0.070**
+        039×040  合成 0.309 ＝ dhash 0.453 ＋ shape_rel **0.165**
+        031×039  合成 0.390 ＝ dhash 0.594 ＋ shape_rel **0.187**
+
+    合成では 0.318（＝「明らかに別物」の較正中央値）を超える組すらあるのに、人の目には
+    同じポーズだった。`shape_rel` は bbox に正規化済み＝位置と寸法を捨てて形だけを見るので、
+    こちらが「見た目が同じか」の正しい物差しになる（[[fingerprint-identity-vs-repetition]]
+    の「識別に効く信号≠反復に効く信号」と同じ構図）。
+    """
+    if not fa or not fb:
+        return 1.0
+    try:
+        return _l1_ratio(fa["shape_rel"], fb["shape_rel"])
     except (KeyError, ValueError):
         return 1.0
 
@@ -95,6 +123,59 @@ def _ref(char_id: str, slot_id: str) -> str:
     return "%s/%s" % (char_id, slot_id)
 
 
+# --------------------------------------------------------------------- 向き
+
+# ⚠️ **指紋は向きを見られない**（2026-09-20 目視で発見・[[shape-rel-cannot-see-facing-direction]]）。
+# `shape_rel` は bbox 正規化した 16×16 のシルエットで、正面と真横は「頭＋肩の塊」として
+# 似た形になる。実測: 完全な横顔と正面の顔アップの pose_distance が **0.039〜0.155**＝
+# 閾値0.20を下回り「同じ絵」と判定されていた（目視では明確に別カット）。
+# 左右反転の非対称度で代用できないかも試したが失敗（真横0.130／正面0.131）。
+#
+# 向きの情報は**ラベルにしか無い**ので、ラベルから素直に読む。新規生成はラベルが正確
+# （profile_left が実際に横顔になることを目視確認済み）。ラベルの無い旧在庫は "front" 扱い
+# ＝従来どおりの判定になるので、後方互換で壊れない。
+#
+# ⚠️ **真横(profile_*)と斜め45度(facing_*)は別クラスにする**（2026-09-20 目視で判断）。
+# 真横は遠目の目が見えず輪郭だけ、斜めは両目が見えて体だけ振れている ── 別カットとして読める。
+# 同じ "left" に畳むと互いを「近すぎ」と潰し合い、せっかくの変化が使えなくなる。
+_ORIENTATION_BY_POSE = {
+    "profile_left": "left_profile", "facing_left": "left_3q",
+    "profile_right": "right_profile", "facing_right": "right_3q",
+}
+
+
+def orientation(entry: dict | None) -> str:
+    """その絵が**どちらを向いているか**。
+
+    "front" / "left_3q" / "left_profile" / "right_3q" / "right_profile" / "back"。
+
+    保存済みの `facing` があればそれを使う（`psassist/Docs/CHARACTER_CUTOUT_PLAN.md` §4 で
+    予約されていたフィールド。`facing_source` に出どころが入る）。無ければラベルから導く
+    ── `angle="from_behind"` は背面なので pose より優先する。
+
+    ⚠️ **`facing` を正本にする**のは、後から視覚モデルや手タグで**上書きできる**ようにするため。
+    ラベル由来の値は `facing_source="llm"` で入っているので、精度が足りなければそこだけ直せる。
+    """
+    e = entry or {}
+    stored = e.get("facing")
+    if stored:
+        return stored
+    if (e.get("angle") or "") == "from_behind":
+        return "back"
+    return _ORIENTATION_BY_POSE.get(e.get("pose") or "", "front")
+
+
+def _looks_same(a: dict, b: dict, fn, threshold: float) -> bool:
+    """a と b が「同じ絵に見える」か。**向きが違えば無条件で別物**として扱う。
+
+    ⚠️ ここを距離だけで判定すると、真横の在庫が「直前の正面と近い」として弾かれ、
+    ユーザーが求めた向きの変化を**選定アルゴ自身が潰す**（上記の実測）。
+    """
+    if orientation(a) != orientation(b):
+        return False
+    return fn(a.get("fingerprint"), b.get("fingerprint")) < threshold
+
+
 # --------------------------------------------------------------------- 選択
 
 
@@ -108,7 +189,15 @@ def _pose_conflicts(want: str | None, have: str | None) -> bool:
 
     そこで「分からないものは制約にしない・分かっていて食い違う時だけ弾く」に倒す。
     今日は何も弾かないが、pose を持つ在庫が増えるにつれて自然に効き始める。
+
+    ⚠️ **向きのポーズ（profile_*/facing_*）はここで比べない**（2026-09-20）。あれは
+    アクションではなく**体の向き**で、担当軸は `facing`／カメラプランの方。
+    ここで弾いていたせいで、向きを増やすために買った在庫が**候補に入る前に消えて**いた
+    （実測: カメラプランが back や left_profile を希望しても 62カット中60カットが正面）。
+    在庫の pose 被覆が上がるほど悪化する性質だったので、軸の取り違えとして直す。
     """
+    if want in _ORIENTATION_BY_POSE or have in _ORIENTATION_BY_POSE:
+        return False
     return bool(want and have and want != have)
 
 
@@ -183,7 +272,8 @@ def select(char_id: str, emotion: str | None, recent: list[dict],
     return _select_from(cands, recent, thresholds())
 
 
-def plan_episode(char_of_line: list[tuple[str | None, dict | None]]) -> list[dict]:
+def plan_episode(char_of_line: list[tuple[str | None, dict | None]],
+                 want_shots: list[str | None] | None = None) -> list[dict]:
     """話数まるごとの割当を試算する（ドライラン。times_used は増やさない）。
 
     char_of_line: 台本の並び順に [(char_id, slot), ...]。2人写り等は (None, _) を渡す。
@@ -192,14 +282,29 @@ def plan_episode(char_of_line: list[tuple[str | None, dict | None]]) -> list[dic
 
     返り値の `entry` が None の行が**新規生成すべき行**。予算のつまみは
     「この行数のうち何枚を実際に生成するか」であって、モードの選択ではない（§7-4）。
+
+    **本番64行での実測（2026-09-06・`20260905_001_missing_scientists` ep01）**
+    指標は「同キャラの隣接行で `pose_distance` < 0.20」＝人の目に同じポーズに見える組:
+
+        旧アルゴ（重複対策なし）      ルカ 3/3組  アオイ  7/19組  在庫充当 64/64
+        画角ラベル回避だけ入れた版    ルカ 1/3組  アオイ 15/18組  在庫充当 62/64  ← 悪化
+        pose_distance の段構え（現行）ルカ 0/3組  アオイ  2/18組  在庫充当 62/64
+
+    在庫充当は変わらない＝**追加課金なしで見た目の反復だけが減る**。段の使用実績は
+    1段目47行・2段目15行・3段目以降0行で、再使用への退避は一度も要らなかった。
     """
     th = thresholds()
     ov = load_overrides()["overrides"]
     used: dict[str, int] = {}
     assigned: list[dict] = []
     plan = []
-    for char_id, slot in char_of_line:
+    for i, (char_id, slot) in enumerate(char_of_line):
         slot = slot or {}
+        # カメラプラン（U2）が欲しがった段。ソフト制約として _select_from へ渡す
+        want = (want_shots or [None] * len(char_of_line))[i]
+        # 段だけの文字列でも、{"shot","facing"} でも受ける（呼び出し側の移行を楽にする）
+        want_shot = want.get("shot") if isinstance(want, dict) else want
+        want_facing = want.get("facing") if isinstance(want, dict) else None
         emotion, pose = slot.get("emotion"), slot.get("pose")
         if not char_id:
             plan.append({"entry": None, "reason": "キャラ未確定（2人写り等）"})
@@ -211,18 +316,50 @@ def plan_episode(char_of_line: list[tuple[str | None, dict | None]]) -> list[dic
             assigned.append({})
             continue
         recent = [a for a in assigned[-th["recent_window"]:] if a]
+        prev = assigned[-1] if assigned and assigned[-1] else None
         # 試算中の消費を上限判定ごと反映する（含めないと同じ絵を無限に使えてしまう）
-        entry, why = _select_from(
-            candidates(char_id, emotion, ov, used, pose=pose), recent, th)
+        cands = candidates(char_id, emotion, ov, used, pose=pose)
+        # ⚠️ **1話の中では同じ絵を二度使わない**（2026-09-06・ユーザー判断）。
+        # max_uses は「生涯の」上限（既定3）なので、17行離れた再使用を素通りさせていた
+        # （本番 line_009 と line_026 に同一 slot_id。recent_window=5 の窓の外だった）。
+        # 在庫は1キャラ140枚規模あるので、1話ぶんを賄うのに使い回す必要が無い。
+        fresh = [e for e in cands if not used.get(_ref(char_id, e["slot_id"]))]
+        # ユーザー提案の2段構え（2026-09-06）: **似ている絵は「同じ絵」として扱い、
+        # 候補が尽きた時だけ緩める。** 事前クラスタリングは採らなかった ── 単連結だと
+        # 芋づる式に併合され、3枚を同群にできる閾値ではルカ142枚中119枚が1グループへ
+        # 崩壊して「別グループから選ぶ」が機能しなくなる（実測）。代わりに
+        # **選ぶ瞬間に直近と pose_distance で比べる**ことで同じ意図を崩壊なしに実現する。
+        tiers = [(fresh, False, ""),
+                 (fresh, True, "・⚠️直近とポーズが近い（他に候補が無い）"),
+                 (cands, False, "・⚠️この話で再使用（未使用の在庫では選べなかった）"),
+                 (cands, True, "・⚠️再使用かつポーズも近い（在庫が尽きた）")]
+        entry, why, note = None, "", ""
+        for pool, allow, tier_note in tiers:
+            entry, why = _select_from(pool, recent, th, prev, allow_pose_near=allow,
+                                      want_shot=want_shot, want_facing=want_facing)
+            if entry:
+                note = tier_note
+                break
         if entry:
             used[_ref(char_id, entry["slot_id"])] = used.get(_ref(char_id, entry["slot_id"]), 0) + 1
+            why += note
         plan.append({"entry": entry, "reason": why, "char_id": char_id,
                      "emotion": emotion, "pose": pose})
         assigned.append(entry or {})
     return plan
 
 
-def _select_from(cands: list[dict], recent: list[dict], th: dict) -> tuple[dict | None, str]:
+def _tags(e: dict | None) -> tuple[str, str]:
+    """並びの単調さを見るためのタグ（画角）。感情は行が決めるので含めない。"""
+    e = e or {}
+    return (e.get("shot") or "", e.get("angle") or "")
+
+
+def _select_from(cands: list[dict], recent: list[dict], th: dict,
+                 prev: dict | None = None, *,
+                 allow_pose_near: bool = True,
+                 want_shot: str | None = None,
+                 want_facing: str | None = None) -> tuple[dict | None, str]:
     """閾値を**固い制約**として使い、通ったものの中から**最も使われていない**1枚を選ぶ。
 
     ⚠️ 距離を最大化してはいけない。閾値を超えていれば「気にならない」のであって、
@@ -231,19 +368,90 @@ def _select_from(cands: list[dict], recent: list[dict], th: dict) -> tuple[dict 
     距離を目的関数にすると同じ絵に偏る ── 実際それで57枚が未使用のまま19枚が
     上限に達した。背景の行ごと自動割当と同じ「使用回数最小優先＋直近回避」に揃える
     （[[aroll-background-per-line-manga-convention]]）。
+
+    prev: 直前の行に割り当てた entry。**同じ画角(shot/angle)が隣り合うのを後回しにする**
+      ためだけに使う（2026-09-06 追加）。⚠️ **ソフト制約**にすること。ハードにすると
+      在庫が尽きた行が新規生成へ落ちて課金が増える。
+
+    allow_pose_near: False なら「直近と**ポーズが**近すぎる絵」を候補から外す
+      （ユーザー提案の1段目）。True で同じ候補集合を制限なしに見る（2段目）。
+
+    ⚠️ **画角ラベルだけを避けても見た目は変わらない。** 2026-09-06、`_tags` のソフト制約
+    だけを入れた版を本番64行で測ったところ、アオイの「同キャラ隣接で shape_rel<0.20」が
+    **7/19組 → 15/18組へ悪化**した ── ラベルさえ違えば良いので、**同じポーズで別ラベルの絵**を
+    積極的に選んでしまう。`pose_distance` による段構え（下記）と**必ず併用**すること。
     """
     if not cands:
         return None, "適格な在庫が無い"
+    pose_near = th.get("pose_near", DEFAULT_THRESHOLDS["pose_near"])
+    # ⚠️ **向きが違う相手とは比べない**（_looks_same 参照）。距離だけで見ると
+    # 真横の在庫が「直前の正面と近い」として落ち、向きの変化が起きなくなる。
     scored = []
     for e in cands:
-        near = min((distance(e.get("fingerprint"), r.get("fingerprint")) for r in recent), default=1.0)
+        near = min((distance(e.get("fingerprint"), r.get("fingerprint"))
+                    for r in recent if orientation(e) == orientation(r)), default=1.0)
         scored.append((near, e))
     ok = [(n, e) for n, e in scored if n >= th["repetitive_below"]]
     if not ok:
         return None, "最良候補も直近と近すぎる（距離 %.3f）" % max(n for n, _ in scored)
-    # 使用回数が少ない順 → 同数なら直近から遠い順 → slot_id で決定的に
-    near, best = min(ok, key=lambda x: (x[1].get("times_used", 0), -x[0], x[1].get("slot_id", "")))
-    return best, "距離 %.3f・使用 %d回" % (near, best.get("times_used", 0))
+    if not allow_pose_near:
+        ok = [(n, e) for n, e in ok
+              if not any(_looks_same(e, r, pose_distance, pose_near) for r in recent)]
+        if not ok:
+            return None, "直近とポーズが近すぎる候補しか無い（閾値 %.2f）" % pose_near
+    prev_tags = _tags(prev) if prev else None
+    prev_pose = (prev or {}).get("pose")
+
+    prev_orientation = orientation(prev) if prev else None
+
+    def monotony(e: dict) -> int:
+        """直前とどれだけ「同じに見えるか」の点数（0-2・小さいほど良い）。
+
+        `pose_distance` はシルエット（16x16のbbox正規化マスク）しか見ないので、
+        **輪郭の内側**の違い（顎に手／腕組み／手を振る）を検出できない。
+        ラベルがある絵に限ってはそこを補える ── ただし付与率はルカ22%・アオイ13%（実測）
+        なので、**これは補助信号であって主軸にはならない**。
+
+        ⚠️ **向きが違えば単調ではない**（2026-09-20）。正面の次に真横が来るのは
+        むしろ狙いどおりの変化なので、画角ラベルが同じでも減点しない。
+        """
+        if prev_orientation and orientation(e) != prev_orientation:
+            return 0
+        score = 1 if prev_tags and _tags(e) == prev_tags else 0
+        pose = e.get("pose")
+        if prev_pose and pose and pose == prev_pose:
+            score += 1
+        return score
+
+    def off_plan(e: dict) -> int:
+        """カメラプランの希望（段・向き）から外れている点数（0-3）。U2・**ソフト制約**。
+
+        ⚠️ ハードにしない。その段の在庫が無い行が新規生成へ落ちて課金が増える。
+        段は**実測**で見る（ラベルは実物と31〜47%しか一致しない）。
+
+        ⚠️ **向きを段より重く数える**（重み2対1）。段だけを見ていた版も、段と向きを
+        同点にした版も、**62カット中60カットが正面**になった ── 「段も向きも完全一致」の
+        在庫が稀なので両方が同点になり、結局 times_used で決まっていた。
+        向きの方が視覚的な差が大きく、かつ在庫が希少（383枚中62枚）なので、
+        意図的に優先しないと永久に眠る（2026-09-20 実測）。
+        """
+        off = 0
+        if want_shot and shot_meter.effective_shot(e) != want_shot:
+            off += 1
+        if want_facing and orientation(e) != want_facing:
+            off += 2
+        return off
+
+    # カメラプランの段 → 直前と被らない → 使用回数が少ない → 直近から遠い → slot_id
+    near, best = min(ok, key=lambda x: (
+        off_plan(x[1]), monotony(x[1]), x[1].get("times_used", 0),
+        -x[0], x[1].get("slot_id", "")))
+    why = "距離 %.3f・使用 %d回" % (near, best.get("times_used", 0))
+    if prev_tags and _tags(best) == prev_tags:
+        why += "・⚠️直前と同じ画角（他に候補が無い）"
+    if prev_pose and best.get("pose") == prev_pose:
+        why += "・⚠️直前と同じポーズラベル"
+    return best, why
 
 
 def nearest_in_stock(char_id: str, fingerprint: dict, *, limit: int = 5,

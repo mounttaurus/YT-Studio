@@ -33,8 +33,9 @@ from pathlib import Path
 import httpx
 
 from app.core import (
-    aroll_prompt_generator, background_manager, character_manager, cutout_selector,
-    nanobanana_client, panel_library_manager, panel_presets, project_manager, style_manager,
+    aroll_prompt_generator, background_manager, camera_plan, character_manager, cut_planner,
+    cutout_selector, nanobanana_client, panel_library_manager, panel_presets, project_manager,
+    style_manager,
 )
 
 SCHEMA_VERSION = "1.2.0"  # 1.2.0: panels[].background_id を追加（行単位の背景自動割当・§19）
@@ -376,6 +377,10 @@ def build_or_update_manifest(
         "aspect": (old.get("aspect") if not overwrite else None) or aspect,
         "style": (old.get("style") if not overwrite else None) or style,
         "generated_at": _now(),
+        # ⚠️ **カットの手直しは必ず引き継ぐ**（穴9 §11-2「手動の上書きは再計算で壊さない」）。
+        # ここは毎回マニフェストを作り直すので、書き忘れるとプロンプト再生成のたびに
+        # ユーザーのカット編集が黙って消える。カット自体は保存しない（毎回計算する）。
+        "cut_overrides": old.get("cut_overrides") or {},
         "panels": panels,
     }
     save_manifest(project_id, episode, manifest)
@@ -435,6 +440,13 @@ def auto_assign_backgrounds(project_id: str, episode: int, only_missing: bool = 
     外れだけ人が差し替える」方針（Docs/AROLL_ASSET_PLAN.md §19。
     [[aroll-background-per-line-manga-convention]]）。
 
+    ⚠️ **shotの出どころは「実際に使われている絵」を優先する**（穴6・2026-09-14）。
+    在庫選定は指紋距離で選ぶためLLMの希望slot.shotとは実測69%（41/59）ズレる
+    （[[background-shot-decided-before-cutout]]）。`cutout_slot_id` が既に決まっている行は
+    その実物のshotで背景を選び、まだ決まっていない行（承認直後の初回一括割当など）は
+    従来どおりslot.shotへフォールバックする。emotionは在庫選定の適格条件そのものなので
+    実物とほぼ一致し続ける（差し替えない）。
+
     only_missing=True（既定）: 既にbackground_idを持つ行はスキップ（手動で選んだ行を壊さない）。
     False: 全行を割当し直す（既存の手動選択も上書きする）。
 
@@ -453,38 +465,52 @@ def auto_assign_backgrounds(project_id: str, episode: int, only_missing: bool = 
 
     wanted = None if line_ids is None else set(line_ids)
 
+    # ⚠️ **背景もカット単位**（穴9 §9-6・2026-09-20）。行ごとに割り当てると、
+    # キャラの絵を共有しているカットの途中で背景だけ変わり、**カットが割れて見える**。
+    # 直近回避もカットの並びで効かせる（行で数えると窓が実質半分の秒数になる）。
+    panels_by_id = {p.get("line_id"): p for p in manifest.get("panels", [])}
+    cuts = cut_report(project_id, episode, manifest)["cuts"]
+
     recent: list[str] = []
-    assigned = unmatched = skipped = 0
-    for p in manifest["panels"]:
-        if p.get("orphan"):
+    assigned = unmatched = skipped = from_actual = 0
+    for c in cuts:
+        members = [panels_by_id[l] for l in c["line_ids"] if l in panels_by_id]
+        if not members:
             continue
-        # 対象外の行も recent には積む（連続を避ける判定は行の並び順で効くため）
-        if wanted is not None and p.get("line_id") not in wanted:
-            if p.get("background_id"):
-                recent.append(p["background_id"])
+        head = members[0]
+        # 対象外のカットも recent には積む（連続を避ける判定は並び順で効くため）
+        if wanted is not None and not any(m.get("line_id") in wanted for m in members):
+            if head.get("background_id"):
+                recent.append(head["background_id"])
                 recent[:] = recent[-AROLL_BG_RECENT_WINDOW:]
             continue
-        if only_missing and p.get("background_id"):
-            recent.append(p["background_id"])
+        if only_missing and all(m.get("background_id") for m in members):
+            recent.append(head["background_id"])
             recent[:] = recent[-AROLL_BG_RECENT_WINDOW:]
-            skipped += 1
+            skipped += len(members)
             continue
-        slot = p.get("slot") or {}
+        slot = head.get("slot") or {}
+        used = _used_slot_tags(head)  # 実物のタグ（cutout_slot_id未確定ならNone）
+        shot = (used.get("shot") if used else None) or slot.get("shot") or ""
         bg = background_manager.suggest_background(
-            slot.get("shot") or "", slot.get("emotion") or "", exclude_ids=set(recent),
+            shot, slot.get("emotion") or "", exclude_ids=set(recent),
         )
         if bg is None:
-            unmatched += 1
+            unmatched += len(members)
             continue
-        p["background_id"] = bg["bg_id"]
-        background_manager.record_usage(bg["bg_id"])
+        for m in members:
+            m["background_id"] = bg["bg_id"]
+            assigned += 1
+        background_manager.record_usage(bg["bg_id"])   # 消費はカットに1回
         recent.append(bg["bg_id"])
         recent[:] = recent[-AROLL_BG_RECENT_WINDOW:]
-        assigned += 1
+        if used and used.get("shot") and used["shot"] != slot.get("shot"):
+            from_actual += 1
 
     save_manifest(project_id, episode, manifest)
     return {
         "assigned": assigned, "unmatched": unmatched, "skipped": skipped,
+        "from_actual_shot": from_actual,  # 実物のshotで選び直せた件数（希望とズレていた分）
         "total": len([p for p in manifest["panels"] if not p.get("orphan")]),
     }
 
@@ -722,13 +748,118 @@ def sync_report(project_id: str, episode: int, script: dict | None = None) -> di
     }
 
 
+def load_tts(project_id: str, episode: int) -> dict | None:
+    """``tts.json`` を読む（カットの尺に使う。無ければ None＝文字数から推定する）。"""
+    ep_dir = project_manager.episode_dir(project_id, episode)
+    if ep_dir is None:
+        return None
+    f = ep_dir / "tts.json"
+    if not f.exists():
+        return None
+    try:
+        return json.loads(f.read_text(encoding="utf-8"))
+    except Exception:
+        return None
+
+
+def cut_report(project_id: str, episode: int, manifest: dict | None = None) -> dict:
+    """この話数のカット割りを返す（**検査のみ・何も保存しない**。穴9 §11-2）。
+
+    ⚠️ **カットは保存しない＝毎回計算する。** 台本が変われば境界も変わるので、
+    保存すると `line_id` の増減で簡単に腐る（`cut_id` は順番に振り直される連番であって
+    恒久IDではない）。保存するのは**ユーザーの手直しだけ**（``manifest["cut_overrides"]``）。
+    """
+    manifest = manifest or load_manifest(project_id, episode)
+    if manifest is None:
+        raise ValueError("aroll.json not found (run /aroll/prompts first)")
+    panels = [p for p in manifest.get("panels", []) if not p.get("orphan")]
+    tts = load_tts(project_id, episode)
+    durations = cut_planner.durations_from_tts(tts)
+    cuts = cut_planner.plan_cuts(
+        panels, durations, overrides=manifest.get("cut_overrides") or {})
+    return {
+        "total_lines": len(panels),
+        "total_cuts": len(cuts),
+        # 尺の出どころを明示する（推定のまま本番に流れていないかを見るため）
+        "duration_source": "tts" if durations else "estimated",
+        "max_sec": cut_planner.DEFAULT_MAX_SEC,
+        "cuts": cuts,
+    }
+
+
+KEEP = object()   # 「このフィールドは触らない」を表す番兵（None＝「消す」と区別する）
+
+
+def set_cut_override(project_id: str, episode: int, line_id: str,
+                     boundary=KEEP, role=KEEP, reset: bool = False) -> dict:
+    """カットの手直しを保存する（境界を足す/消す・決めを付け替える）。
+
+    boundary: ``"start"``（この行から新しいカット）/ ``"join"``（前のカットへつなげる）/
+      ``None``（この項目だけ自動に戻す）/ 省略（触らない）。
+    role: ``"kime"`` 等 / ``None`` でこの項目だけ自動に戻す / 省略で触らない。
+    reset: True なら**この行の手直しを全部消す**。
+
+    ⚠️ **省略と None を区別する**（2026-09-20）。区別しないと、UIが
+    `{"boundary": "start"}` だけ送った時に **role の手直しが黙って消える**
+    （決めにした行の境界を直したら決めが外れる、という直しにくい事故になる）。
+
+    ⚠️ **手直しは再計算で壊れない**のが要件（§11-2）。カット自体は保存せず、
+    ここで保存した上書きだけを毎回の計算に当てる。
+    """
+    manifest = load_manifest(project_id, episode)
+    if manifest is None:
+        raise ValueError("aroll.json not found")
+    if not any(p.get("line_id") == line_id for p in manifest.get("panels", [])):
+        raise ValueError(f"line not found: {line_id}")
+    if boundary is not KEEP and boundary not in (None, "start", "join"):
+        raise ValueError("boundary は start / join / null のいずれか")
+
+    ov = dict(manifest.get("cut_overrides") or {})
+    entry = {} if reset else dict(ov.get(line_id) or {})
+    for key, val in (("boundary", boundary), ("role", role)):
+        if val is KEEP:
+            continue
+        if val is None:
+            entry.pop(key, None)
+        else:
+            entry[key] = val
+    if entry:
+        ov[line_id] = entry
+    else:
+        ov.pop(line_id, None)     # 空になったら消す（自動に戻す）
+    manifest["cut_overrides"] = ov
+    save_manifest(project_id, episode, manifest)
+    return {"line_id": line_id, "override": entry or None,
+            "cuts": cut_report(project_id, episode, manifest)["total_cuts"]}
+
+
+def _used_slot_tags(panel: dict) -> dict | None:
+    """コマ一覧が表示する「実際に使われている絵」のタグ（emotion/shot/angle/pose）。
+
+    ⚠️ **`panel["slot"]` とは別物**。`slot` はLLMが決めた**希望**のラベルで、
+    在庫選定は指紋距離で「一番使われていない近い絵」を選ぶため、実物とズレることが多い
+    （本番64行中56行=87.5%でズレを実測・2026-09-06）。一覧はここではなく
+    **在庫エントリ側の実タグ**を出す。行の「希望」を変える入力はモーダル側の
+    プルダウン（`panel["slot"]`）に残す ── 表示元と入力先を分ける設計。
+    """
+    char_id, slot_id = panel.get("cutout_char_id"), panel.get("cutout_slot_id")
+    if not char_id or not slot_id:
+        return None
+    e = panel_library_manager.get_entry(char_id, slot_id)
+    if not e:
+        return None
+    return {"emotion": e.get("emotion"), "shot": e.get("shot"),
+            "angle": e.get("angle"), "pose": e.get("pose")}
+
+
 def annotate_manifest(project_id: str, episode: int, manifest: dict) -> dict:
-    """マニフェストのコピーに sync を付けて返す（レスポンス専用・ファイルには書かない）。"""
+    """マニフェストのコピーに sync 等を付けて返す（レスポンス専用・ファイルには書かない）。"""
     lines_by_id = _script_lines_by_id(project_id, episode)
     out_dir = aroll_dir(project_id, episode)
     out = dict(manifest)
     out["panels"] = [
-        {**p, "sync": _panel_sync(p, lines_by_id.get(p.get("line_id")), out_dir)}
+        {**p, "sync": _panel_sync(p, lines_by_id.get(p.get("line_id")), out_dir),
+         "used_slot": _used_slot_tags(p)}
         for p in manifest.get("panels", [])
     ]
     return out
@@ -1627,32 +1758,73 @@ def cutout_plan(project_id: str, episode: int) -> dict:
     if manifest is None:
         raise ValueError("aroll.json not found")
 
-    panels = manifest.get("panels", [])
-    seq = []
-    for p in panels:
-        chars = p.get("characters") or []
-        seq.append((chars[0] if len(chars) == 1 else None, p.get("slot")))
+    panels = [p for p in manifest.get("panels", []) if not p.get("orphan")]
+    panels_by_id = {p.get("line_id"): p for p in panels}
 
-    plan = cutout_selector.plan_episode(seq)
-    lines, from_stock = [], 0
-    for p, r in zip(panels, plan):
+    # ⚠️ **選定はカット単位で行う**（穴9 §11-3・2026-09-20）。行ごとに選ぶと、TTSの都合で
+    # 割った同一話者の連続行に別々の絵が当たり、細切れのカットが並ぶ。
+    # 1カット＝1枚を選び、そのカットの全行が同じ `cutout_slot_id` を指す。
+    cuts = cut_report(project_id, episode, manifest)["cuts"]
+    seq = []
+    for c in cuts:
+        # カットの代表は先頭行。⚠️ 感情が適格性の主軸なので、カット内で感情が割れていると
+        # 先頭行の感情で引くことになる（実測ではランの18組中17組が同一感情なので実害は小さい）。
+        head = panels_by_id.get(c["line_ids"][0], {})
+        chars = head.get("characters") or []
+        seq.append((chars[0] if len(chars) == 1 else None, head.get("slot")))
+
+    # ⚠️ **カメラプラン（U2）は「希望」を渡すだけ**。ハード制約にすると、その段の在庫が
+    # 無いカットが新規生成へ落ちて課金が増える。選定は従来どおり指紋で決め、
+    # 同点のときにプランの段を優先する（cutout_selector._select_from の off_plan）。
+    char_of_cut = {}
+    for c in cuts:
+        head = panels_by_id.get(c["line_ids"][0], {})
+        chars = head.get("characters") or []
+        if len(chars) == 1:
+            char_of_cut[c["cut_id"]] = chars[0]
+    stock_by_char = {
+        cid: cutout_selector.candidates(cid, None, allow_unknown_emotion=True)
+        for cid in set(char_of_cut.values())
+    }
+    cam = camera_plan.plan_episode(cuts, stock_by_char, char_of_cut)
+    # 段と向きの両方を渡す（向きを落とすと正面ばかりが選ばれる。2026-09-20実測）
+    want_shots = [{"shot": cam.get(c["cut_id"], {}).get("shot"),
+                   "facing": cam.get(c["cut_id"], {}).get("facing")} for c in cuts]
+
+    plan = cutout_selector.plan_episode(seq, want_shots)
+    lines, from_stock_cuts = [], 0
+    for c, r in zip(cuts, plan):
         e = r.get("entry")
         if e:
-            from_stock += 1
-        lines.append({
-            "line_id": p.get("line_id"),
-            "char_id": r.get("char_id"),
-            "emotion": r.get("emotion"),
-            "slot_id": e.get("slot_id") if e else None,
-            "cutout": e.get("cutout") if e else None,
-            "times_used": e.get("times_used", 0) if e else None,
-            "reason": r.get("reason"),
-        })
+            from_stock_cuts += 1
+        for lid in c["line_ids"]:
+            lines.append({
+                "line_id": lid,
+                "cut_id": c["cut_id"],
+                "cut_role": c["role"],
+                # カメラプランが欲しがった段（希望）。実物とズレていれば代用が起きた印
+                "planned_shot": cam.get(c["cut_id"], {}).get("shot"),
+                "planned_facing": cam.get(c["cut_id"], {}).get("facing"),
+                # カットの先頭行だけが実際に在庫を消費する（残りは同じ絵を共有するだけ）。
+                # apply 側がこれを見て record_usage を1回に抑える。
+                "cut_head": lid == c["line_ids"][0],
+                "char_id": r.get("char_id"),
+                "emotion": r.get("emotion"),
+                "slot_id": e.get("slot_id") if e else None,
+                "cutout": e.get("cutout") if e else None,
+                "times_used": e.get("times_used", 0) if e else None,
+                "reason": r.get("reason"),
+            })
+    from_stock = sum(1 for ln in lines if ln["slot_id"])
     return {
         "thresholds": cutout_selector.thresholds(),
         "total": len(lines),
+        "total_cuts": len(cuts),
         "from_stock": from_stock,
+        "from_stock_cuts": from_stock_cuts,
+        # ⚠️ 課金の見積りは**行数ではなくカット数**で見る（1カット＝1枚）
         "need_generation": len(lines) - from_stock,
+        "need_generation_cuts": len(cuts) - from_stock_cuts,
         "lines": lines,
     }
 
@@ -1718,12 +1890,21 @@ def cutout_candidates(project_id: str, episode: int, line_id: str, limit: int = 
             "items": items[:limit], "total_candidates": len(items)}
 
 
-def set_cutout_selection(project_id: str, episode: int, line_id: str, slot_id: str | None) -> dict:
-    """その行で使う切り抜きを決める（`panel["cutout_slot_id"]`）。
+def set_cutout_selection(project_id: str, episode: int, line_id: str, slot_id: str | None,
+                         source: str = "user") -> dict:
+    """その行が属する**カット全体**で使う切り抜きを決める（`panel["cutout_slot_id"]`）。
 
     ⚠️ **パネル画像を差し替えるのではない。** 切り抜きは背景を持たないので、そのままでは
     コマにならない。ここで決めるのは「psassist の合成プランにどの素材を渡すか」だけ。
     背景は `background_id`、生成画像は `image` と、行ごとに3つが対になる。
+
+    ⚠️ **1行だけ替えるのではなくカット全体に当てる**（穴9 §9-3・2026-09-20）。
+    カットは「同じ絵のまま吹き出しだけ変わる」区間なので、途中の1行だけ絵が変わると
+    カットが割れて見える。UIから1行を指定しても、同じカットの兄弟行に同じ絵が入る。
+
+    ⚠️ **消費（times_used）はカットにつき1回**。カット内の行数ぶん数えると、
+    絵が画面に出た回数と食い違い、生涯上限（既定3）へ不当に早く到達する。
+    逆引きの `used_by` は行ごとに積む（どの行が参照しているかは全部知りたいため）。
 
     slot_id=None で選択を解除する。前の選択があれば times_used を戻す
     （戻さないと選び直すたびに嘘の消費が積もり、生涯上限へ早く到達する）。
@@ -1731,17 +1912,14 @@ def set_cutout_selection(project_id: str, episode: int, line_id: str, slot_id: s
     manifest = load_manifest(project_id, episode)
     if manifest is None:
         raise ValueError("aroll.json not found")
-    panel = next((p for p in manifest.get("panels", []) if p.get("line_id") == line_id), None)
+    panels_by_id = {p.get("line_id"): p for p in manifest.get("panels", [])}
+    panel = panels_by_id.get(line_id)
     if panel is None:
         raise ValueError(f"line not found: {line_id}")
     chars = panel.get("characters") or []
     if len(chars) != 1:
         raise ValueError("キャラが1人に確定していない行には切り抜きを割り当てられません")
     char_id = chars[0]
-
-    prev = panel.get("cutout_slot_id")
-    if prev == slot_id:
-        return {"line_id": line_id, "cutout_slot_id": slot_id, "changed": False}
 
     if slot_id:
         entry = panel_library_manager.get_entry(char_id, slot_id)
@@ -1752,22 +1930,44 @@ def set_cutout_selection(project_id: str, episode: int, line_id: str, slot_id: s
         if entry.get("review_status", "approved") != "approved":
             raise ValueError(f"未承認の切り抜きは割り当てられません: {slot_id}")
 
-    if prev:
-        panel_library_manager.release_usage(
-            char_id, prev, project_id=project_id, episode=episode, line_id=line_id)
-    if slot_id:
-        panel_library_manager.record_usage(
-            char_id, slot_id, project_id=project_id, episode=episode, line_id=line_id)
+    # このカットに属する行すべてが対象（1行のカットなら従来どおりその行だけ）
+    cut = cut_planner.cut_of_line(
+        cut_report(project_id, episode, manifest)["cuts"]).get(line_id)
+    targets = [panels_by_id[l] for l in (cut or {}).get("line_ids", [line_id])
+               if l in panels_by_id]
 
-    panel["cutout_slot_id"] = slot_id
-    panel["cutout_char_id"] = char_id if slot_id else None
-    panel["cutout_source"] = "user" if slot_id else None
-    # 合成済みPSDより後に差し替えたかを判定するための時刻。これが無いと
-    # 「絵を替えたのに古い合成サムネが出たまま」に気付けない
-    panel["cutout_assigned_at"] = _now() if slot_id else None
-    clear_image_approval(project_id, episode, panel, demote=False)
+    if all(t.get("cutout_slot_id") == slot_id for t in targets):
+        return {"line_id": line_id, "cutout_slot_id": slot_id, "changed": False,
+                "line_ids": [t.get("line_id") for t in targets]}
+
+    # 解放は「この絵を手放す最後の行」でだけ消費を戻す。カット内で共有している間は
+    # 消費1のままなので、行ごとに戻すと負の方向へ狂う。
+    released: set[str] = set()
+    for t in targets:
+        prev = t.get("cutout_slot_id")
+        prev_char = t.get("cutout_char_id") or char_id
+        if prev and prev != slot_id:
+            panel_library_manager.release_usage(
+                prev_char, prev, project_id=project_id, episode=episode,
+                line_id=t.get("line_id"), count=prev not in released)
+            released.add(prev)
+
+    for i, t in enumerate(targets):
+        if slot_id:
+            panel_library_manager.record_usage(
+                char_id, slot_id, project_id=project_id, episode=episode,
+                line_id=t.get("line_id"), count=(i == 0))   # 消費はカットに1回だけ
+        t["cutout_slot_id"] = slot_id
+        t["cutout_char_id"] = char_id if slot_id else None
+        t["cutout_source"] = source if slot_id else None
+        # 合成済みPSDより後に差し替えたかを判定するための時刻。これが無いと
+        # 「絵を替えたのに古い合成サムネが出たまま」に気付けない
+        t["cutout_assigned_at"] = _now() if slot_id else None
+        clear_image_approval(project_id, episode, t, demote=False)
     save_manifest(project_id, episode, manifest)
-    return {"line_id": line_id, "cutout_slot_id": slot_id, "previous": prev, "changed": True}
+    return {"line_id": line_id, "cutout_slot_id": slot_id, "changed": True,
+            "line_ids": [t.get("line_id") for t in targets],
+            "cut_id": (cut or {}).get("cut_id")}
 
 
 def reject_current_image(project_id: str, episode: int, line_id: str) -> dict:
@@ -1806,11 +2006,21 @@ def apply_cutout_plan(project_id: str, episode: int, line_ids: list[str] | None 
     """
     plan = cutout_plan(project_id, episode)
     targets = None if line_ids is None else set(line_ids)
-    applied, skipped = [], 0
+    applied, skipped, cuts_done = [], 0, 0
     for line in plan["lines"]:
         if not line["slot_id"] or (targets is not None and line["line_id"] not in targets):
             skipped += 1
             continue
-        set_cutout_selection(project_id, episode, line["line_id"], line["slot_id"])
-        applied.append(line["line_id"])
-    return {"applied": len(applied), "skipped": skipped, "line_ids": applied}
+        # ⚠️ **カットの先頭行でだけ呼ぶ。** set_cutout_selection はカット全体へ当てるので、
+        # 兄弟行でも呼ぶと同じ仕事を人数分繰り返すことになる（消費の数え方も狂いやすい）。
+        # 先頭行が line_ids で選ばれていない場合に備え、既に当たっていれば飛ばす。
+        if not line["cut_head"]:
+            applied.append(line["line_id"])
+            continue
+        res = set_cutout_selection(project_id, episode, line["line_id"], line["slot_id"],
+                                   source="plan")
+        cuts_done += 1
+        applied.extend(res.get("line_ids") or [line["line_id"]])
+    applied = list(dict.fromkeys(applied))   # カット共有で重複するので畳む
+    return {"applied": len(applied), "applied_cuts": cuts_done,
+            "skipped": skipped, "line_ids": applied}

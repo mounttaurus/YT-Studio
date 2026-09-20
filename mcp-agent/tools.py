@@ -915,6 +915,48 @@ async def aroll_approve_images(project_id: str, episode_number: int,
         json=body)
 
 
+async def aroll_cuts(project_id: str, episode_number: int) -> dict:
+    """この話数の**カット割り**を返す(検査のみ・何も変えない・READ)。
+
+    穴9: 1行=1コマだとTTSの都合で分割した台詞が画像まで割ってしまうので、
+    連続する同じ話者の行を「カット」にまとめる。カットは保存せず毎回計算する。
+
+    規則: 話者/セクション交代で必ず切る。2行以上のランは**最終行が単独の「決め」**で、
+    その前の前振りだけを12秒以下でまとめる。
+    ⚠️ 尺だけで束ねると決め台詞が潰れる(実測で結合7組中5組が決め台詞)ので、
+    「N行まとめる」「N秒でまとめる」と単純化して説明しないこと。
+
+    返り値の cuts[] は {cut_id, line_ids, role(solo/setup/kime), duration_sec, speaker_id}。
+    duration_source が "estimated" ならTTS前の推定尺(文字数×係数)で境界を決めている。
+    """
+    return await dc.get(
+        f"api/scrapping/projects/{project_id}/episodes/{episode_number}/aroll/cuts")
+
+
+async def aroll_set_cut(project_id: str, episode_number: int, line_id: str,
+                        boundary: Optional[str] = None,
+                        role: Optional[str] = None,
+                        reset: bool = False) -> dict:
+    """カットの境界・役を手で直す(可逆WRITE)。
+
+    boundary: "start"=この行から新しいカット / "join"=前のカットへつなげる。
+    role: "kime"(決め) 等。
+    reset: True でこの行の手直しを全部消して自動へ戻す。
+    ⚠️ **送らなかった項目は触らない**(決めにした行の境界を直しても決めは外れない)。
+    ⚠️ **話者をまたぐ join は無視される**(1カットに2人の絵は入らない)。
+    手直しは `aroll.json` の cut_overrides に保存され、**再計算しても壊れない**。
+    """
+    body: dict = {"reset": reset} if reset else {}
+    if boundary is not None:
+        body["boundary"] = boundary
+    if role is not None:
+        body["role"] = role
+    return await dc.request(
+        "PUT",
+        f"api/scrapping/projects/{project_id}/episodes/{episode_number}/aroll/cuts/{line_id}",
+        json=body)
+
+
 async def aroll_assign_backgrounds(project_id: str, episode_number: int,
                                    only_missing: bool = True,
                                    line_ids: Optional[list[str]] = None) -> dict:
@@ -1086,6 +1128,8 @@ TOOLS = [
     {"fn": aroll_apply_cutout_plan, "side_effects": [S.WRITE]},
     {"fn": aroll_approve_images, "side_effects": [S.WRITE]},
     {"fn": aroll_assign_backgrounds, "side_effects": [S.WRITE]},
+    {"fn": aroll_cuts,           "side_effects": [S.READ]},
+    {"fn": aroll_set_cut,        "side_effects": [S.WRITE]},
     {"fn": aroll_update_line,    "side_effects": [S.WRITE]},
     # ホスト工程（psassist・Photoshop）
     {"fn": psassist_worker_status, "side_effects": [S.READ]},

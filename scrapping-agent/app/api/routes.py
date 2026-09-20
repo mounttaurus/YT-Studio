@@ -2107,6 +2107,47 @@ async def aroll_auto_assign_backgrounds(project_id: str, episode_number: int,
         raise HTTPException(status_code=404, detail=str(e))
 
 
+@router.get("/projects/{project_id}/episodes/{episode_number}/aroll/cuts")
+async def aroll_cuts(project_id: str, episode_number: int):
+    """この話数のカット割りを返す（検査のみ・何も変えない。穴9 §11-2）。
+
+    カットは**保存せず毎回計算する**（台本が変われば境界も変わるため）。
+    保存されるのはユーザーの手直し（`cut_overrides`）だけ。
+    """
+    try:
+        return aroll_manager.cut_report(project_id, episode_number)
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+
+
+class ArollCutOverrideRequest(BaseModel):
+    boundary: str | None = None   # "start"（分ける）/ "join"（前へつなげる）/ null（この項目を自動へ）
+    role: str | None = None       # "kime" 等 / null でこの項目を自動へ
+    reset: bool = False           # この行の手直しを全部消す
+
+
+@router.put("/projects/{project_id}/episodes/{episode_number}/aroll/cuts/{line_id}")
+async def aroll_set_cut_override(project_id: str, episode_number: int, line_id: str,
+                                 req: ArollCutOverrideRequest):
+    """カットの境界・役を手で直す（再計算で壊れない・可逆）。
+
+    ⚠️ **送らなかったフィールドは触らない。** `{"boundary": "start"}` だけ送っても
+    `role` の手直しは残る（区別しないと、決めにした行の境界を直したら決めが外れる）。
+    その項目を自動へ戻すには **null を明示**、全部戻すには `reset: true`。
+    """
+    sent = req.model_fields_set
+    kw = {}
+    if "boundary" in sent:
+        kw["boundary"] = req.boundary
+    if "role" in sent:
+        kw["role"] = req.role
+    try:
+        return aroll_manager.set_cut_override(
+            project_id, episode_number, line_id, reset=req.reset, **kw)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
 @router.post("/projects/{project_id}/episodes/{episode_number}/aroll/lines/{line_id}/set_library_image")
 async def aroll_set_library_image(project_id: str, episode_number: int, line_id: str,
                                    req: ArollSetLibraryImageRequest):

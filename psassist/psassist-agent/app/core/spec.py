@@ -60,8 +60,9 @@ BUBBLES: tuple[BubbleShape, ...] = (
     BubbleShape("round_a", "Talk 1 1", "round", "horizontal", 29, (602, 426), -0.167),
     BubbleShape("round_v", "Talk 6 1", "round", "vertical", 2, (412, 623), -0.206),
     # 雲＝強い疑問
-    BubbleShape("cloud_a", "Talk 3 1", "cloud", "horizontal", 16, (648, 468), +0.067),
-    BubbleShape("cloud_b", "Talk 4 1", "cloud", "horizontal", 4, (616, 438), +0.151),
+    # 符号は 2026-09-06 修正（下の「⚠️ 雲だけ符号が逆だった」を参照）。
+    BubbleShape("cloud_a", "Talk 3 1", "cloud", "horizontal", 16, (648, 468), -0.067),
+    BubbleShape("cloud_b", "Talk 4 1", "cloud", "horizontal", 4, (616, 438), -0.151),
     # スパイク＝激しい反応
     BubbleShape("spike_a", "Talk 8 1", "spike", "horizontal", 9, (565, 459), +0.021),
     BubbleShape("spike_b", "Talk 7 1", "spike", "horizontal", 0, (645, 404), +0.074),
@@ -73,6 +74,17 @@ BUBBLES: tuple[BubbleShape, ...] = (
 #    尻尾がキャラと反対を向いた出力になった（ユーザー指摘で発覚）。
 #    先端で測り直すと Talk 1=-0.167 / Talk 10=-0.143 と明確に左向きだった。
 #    実画像で検証済み: 私の出力 -0.165 → ユーザー修正 +0.165（左右反転のみ）。
+#
+# ⚠️ **雲だけ符号が逆だった**（2026-09-06 修正・`20260905_001_missing_scientists` ep01 で発覚）。
+#    cloud_a を使った6行が**例外なく**尻尾をキャラと反対に向けていた（ユーザー報告「100%逆」）。
+#    bubbles.psd のシェイプを描いて確かめると、雲2種の尻尾は round_a とまったく同じ
+#    「付け根が本体の右下・先端が左下」の形。round_a が -0.167 なのに雲だけ + だった＝
+#    2026-08-23 の測り直しが雲に適用されていなかった（絶対値だけ更新して符号を戻し忘れたと見られる）。
+#
+#    ⚠️ **自動計測でこれを見つけようとして二度失敗している。** 雲は輪郭が波打つため
+#    「本体行＝幅が最大の70%以上」の判定に尻尾側の膨らみが混ざり、先端を右と誤検出する
+#    （今回書いた検証スクリプトも +0.044 と出して「登録値と一致」と誤判定した）。
+#    **シェイプは目視で確かめること**（[[eyeball-the-input-before-measuring]]）。
 TAIL_NEUTRAL = 0.03
 
 BUBBLE_BY_KEY = {b.key: b for b in BUBBLES}

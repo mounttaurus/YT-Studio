@@ -85,3 +85,6 @@ psassist/assets/speaker_defaults.json
 # README 等の非バイナリが公開リポ側で未追跡のまま残り、誤って混入しうる。
 # 公開マニフェストの include にも入っていないのでディレクトリごと無視する。
 imagegen-agent/models/
+
+# 生成キューの進捗（レジューム用の実行時ファイル・コミット不要）
+scrapping-agent/scripts/*.progress.json

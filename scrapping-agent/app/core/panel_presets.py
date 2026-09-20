@@ -48,7 +48,12 @@ DEFAULT_PRESETS = {
         {"id": "surprised", "label_ja": "驚き",   "prompt": "surprised, wide eyes, open mouth"},
         {"id": "shy",       "label_ja": "照れ",   "prompt": "blushing, shy smile"},
         {"id": "troubled",  "label_ja": "困惑",   "prompt": "troubled, worried expression"},
-        {"id": "thoughtful","label_ja": "物思い", "prompt": "thoughtful, pensive expression, hand on chin"},
+        # ⚠️ `hand on chin` を 2026-09-06 に削除した。**emotion は顔の表情だけを言い、
+        # 手や体は pose に任せる**（そこが分業）。混ざっていたせいで
+        # `pose=arms_chrossed` を指定しても「顎に手」が勝ってしまい、腕組みの絵が作れなかった
+        # （実測：thoughtful×arms_crossed で生成した絵が全て顎に手だった）。
+        # 顎に手のポーズが要る時は pose=`thinking`（"hand on chin, thoughtful pose"）を使う。
+        {"id": "thoughtful","label_ja": "物思い", "prompt": "thoughtful, pensive expression"},
     ],
     "pose": [
         {"id": "talking",     "label_ja": "話している", "prompt": "mouth open, talking, light hand gesture"},
@@ -64,6 +69,20 @@ DEFAULT_PRESETS = {
         {"id": "sweat_drop",   "label_ja": "冷や汗",     "prompt": "anime sweat drop, nervous, awkward"},
         {"id": "held_breath",  "label_ja": "息を呑む",   "prompt": "holding breath, frozen for a beat, wide-eyed stillness"},
         {"id": "clenched_fist","label_ja": "拳を握る",   "prompt": "clenched fist, quiet resolve"},
+        # ⚠️ 向きは 2026-09-06 追加。それまで**体の向きを指定する手段が無く**、同じ感情の在庫が
+        # 「同じ向き・同じ姿勢で画角ラベルだけ違う絵」ばかりになっていた（ルカで実測。
+        # thoughtful 23枚が実質3種）。angle(shot/angle)は**カメラ**の位置で、これは**被写体**の向き。
+        {"id": "facing_left",  "label_ja": "左を向く",   "prompt": "body turned to the left, three-quarter view facing left, shoulders angled away from the camera"},
+        {"id": "facing_right", "label_ja": "右を向く",   "prompt": "body turned to the right, three-quarter view facing right, shoulders angled away from the camera"},
+        # ⚠️ `facing_*` は**斜め45度**（three-quarter）であって横顔ではない。真横が要る時はこちら。
+        # 2026-09-06 追加：facing_* だけでは横顔が一枚も出ず、原因が prompt の "three-quarter view"
+        # という自己指定だったため、真横を別のポーズとして分けた。
+        {"id": "profile_left", "label_ja": "真横（左向き）",
+         "prompt": ("strict side profile facing left, the head seen fully from the side, "
+                    "nose lips and chin drawn in clean silhouette, the far eye not visible")},
+        {"id": "profile_right", "label_ja": "真横（右向き）",
+         "prompt": ("strict side profile facing right, the head seen fully from the side, "
+                    "nose lips and chin drawn in clean silhouette, the far eye not visible")},
     ],
     "shot": [
         {"id": "face_closeup","label_ja": "顔アップ",     "prompt": "extreme close-up of the face"},
@@ -73,6 +92,16 @@ DEFAULT_PRESETS = {
         {"id": "wide",        "label_ja": "引き（全景）", "prompt": "wide shot showing the full scene"},
         {"id": "profile",     "label_ja": "横顔",         "prompt": "profile view, side face, looking off to the side"},
         {"id": "eyes_only",   "label_ja": "瞳アップ",     "prompt": "extreme close-up on the eyes only, dramatic focal point"},
+        # ⚠️ `face_closeup`（顔アップ）とは**別物**として 2026-09-06 に追加した。
+        # face_closeup は "extreme close-up of the face" と書いてあるのに、実際の生成物は
+        # **頭と肩が入ったバストアップ寄り**で、マンガの決めゴマで使う「顔が画面を埋める」
+        # 構図が在庫に事実上ゼロだった（ルカ75枚を目視で確認）。ラベルと実物が食い違う例
+        # （[[slot-shot-label-unreliable]] と同じ構図）。プロンプトで**切り取り位置を明示**して
+        # 初めてその構図になる。既存の face_closeup は挙動を変えたくないので触っていない。
+        {"id": "face_extreme", "label_ja": "顔ドアップ",
+         "prompt": ("extreme facial close-up, the face fills the entire frame, "
+                    "cropped above the eyebrows and below the chin, shoulders not visible, "
+                    "eyes and mouth dominate the composition, dramatic manga panel framing")},
     ],
     "angle": [
         {"id": "eye_level",     "label_ja": "正面（目線）", "prompt": "eye-level shot, front view"},

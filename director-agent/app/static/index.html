@@ -2695,6 +2695,18 @@
                 <span style="font-weight:400;text-transform:none;color:#4b5563;font-size:11px"
                       x-text="`${arollPanels.length}行 — 行をクリックすると1行の詳細（生成・在庫から選ぶ・確定）が開きます`"></span>
               </h2>
+              <!-- カットの説明。⚠️「N行まとめる」と要約しないこと ──
+                   ランの最終行は必ず単独の「決め」で、前振りだけを秒数でまとめている。 -->
+              <div x-show="arollCuts" style="font-size:11px;color:#64748b;margin:-4px 0 8px;line-height:1.7">
+                <b style="color:#94a3b8" x-text="`${arollCuts?.total_cuts ?? 0} カット`"></b>
+                ── 連続する同じ話者の行は1カットにまとめ、<b>同じ絵と背景を共有</b>します
+                （吹き出しだけが変わる＝カメラが動かないまま台詞が進む）。
+                最後の行は必ず単独の「決め」になり、その前の前振りだけが
+                <span x-text="`${arollCuts?.max_sec ?? 12}秒`"></span>以内でまとまります。
+                <span x-show="arollCuts?.duration_source === 'estimated'" style="color:#f59e0b">
+                  ⚠️ TTS前なので尺は文字数からの推定です（TTS後に再計算されます）。
+                </span>
+              </div>
 
               <!-- ── 一括操作 ──────────────────────────────────────────
                    ⚠️ チェック0件では押せない。`line_ids: []` は「対象ゼロ」で、
@@ -2750,6 +2762,7 @@
                     <tr style="color:#64748b;text-align:left">
                       <th style="padding:6px 4px;width:28px"></th>
                       <th style="padding:6px 4px;width:34px">#</th>
+                      <th style="padding:6px 4px;width:96px" title="連続する同じ話者の行は1カットにまとめられ、同じ絵と背景を共有します">カット</th>
                       <th style="padding:6px 4px;width:90px">話者</th>
                       <th style="padding:6px 4px">セリフ</th>
                       <th style="padding:6px 4px;width:340px">根拠（表情/ショット/アングル/ポーズ）</th>
@@ -2760,8 +2773,15 @@
                   </thead>
                   <tbody>
                     <template x-for="p in arollRowsFiltered" :key="p.line_id">
-                      <tr style="border-top:1px solid #1e293b;cursor:pointer"
-                          :style="arollChecked[p.line_id] ? 'background:#1a1040' : ''"
+                      <!-- ⚠️ `:style` は static style を**丸ごと置き換える**ので、
+                           カットの区切り線も含めて毎回すべて返す（Alpineの罠）。
+                           カットの先頭だけ太い線＝どこで絵が変わるかが一目で分かる。 -->
+                      <tr style="cursor:pointer"
+                          :style="(arollIsCutHead(p.line_id)
+                                    ? 'border-top:2px solid #475569;'
+                                    : 'border-top:1px dotted #1e293b;')
+                                  + 'cursor:pointer;'
+                                  + (arollChecked[p.line_id] ? 'background:#1a1040' : '')"
                           @click="arollOpenRow(p.line_id)">
                         <td style="padding:6px 4px" @click.stop>
                           <input type="checkbox" style="width:14px;height:14px;accent-color:#7c3aed"
@@ -2769,6 +2789,42 @@
                                  @change="arollChecked[p.line_id] = $event.target.checked">
                         </td>
                         <td style="padding:6px 4px;color:#4b5563" x-text="p.order"></td>
+                        <!-- カット: 先頭行に役と尺、続きの行は「同じ絵」であることを示す -->
+                        <td style="padding:6px 4px" @click.stop>
+                          <template x-if="arollCutOf(p.line_id) && arollIsCutHead(p.line_id)">
+                            <div>
+                              <span style="font-size:10px;padding:1px 5px;border-radius:3px"
+                                    :style="'font-size:10px;padding:1px 5px;border-radius:3px;'
+                                            + (arollCutOf(p.line_id).role === 'kime'
+                                               ? 'background:#7c2d12;color:#fed7aa'
+                                               : 'background:#1e293b;color:#94a3b8')"
+                                    x-text="arollCutRoleLabel(arollCutOf(p.line_id).role)"></span>
+                              <span style="font-size:9px;color:#4b5563;margin-left:3px"
+                                    x-text="`${arollCutOf(p.line_id).duration_sec}s`"></span>
+                              <div style="margin-top:2px">
+                                <button class="btn btn-sm" style="font-size:9px;padding:0 4px"
+                                        :disabled="arollLineBusy === p.line_id"
+                                        title="前のカットにつなげる（同じ話者のときだけ有効）"
+                                        @click="arollSetCut(p.line_id, { boundary: 'join' })">↑つなげる</button>
+                                <button class="btn btn-sm" style="font-size:9px;padding:0 4px"
+                                        :disabled="arollLineBusy === p.line_id"
+                                        title="この行を「決め」にする（自動に戻すには自動へ）"
+                                        @click="arollSetCut(p.line_id, { role: 'kime' })">決め</button>
+                              </div>
+                            </div>
+                          </template>
+                          <template x-if="arollCutOf(p.line_id) && !arollIsCutHead(p.line_id)">
+                            <div>
+                              <span style="font-size:9px;color:#4b5563">↳ 同じ絵</span>
+                              <div style="margin-top:2px">
+                                <button class="btn btn-sm" style="font-size:9px;padding:0 4px"
+                                        :disabled="arollLineBusy === p.line_id"
+                                        title="ここでカットを分ける（別の絵にする）"
+                                        @click="arollSetCut(p.line_id, { boundary: 'start' })">✂ 分ける</button>
+                              </div>
+                            </div>
+                          </template>
+                        </td>
                         <td style="padding:6px 4px">
                           <div style="color:#60a5fa" x-text="p.speaker_name || p.speaker_id"></div>
                           <div style="font-size:9px;color:#4b5563" x-text="p.section"></div>
@@ -2785,18 +2841,11 @@
                                     x-text="(charas.find(c => c.char_id === cid)?.name || cid) + (ci === 0 ? ' 🔒' : '')"></span>
                             </template>
                           </div>
-                          <div style="display:flex;gap:3px;flex-wrap:wrap;margin-top:3px" @click.stop>
-                            <template x-for="axis in [['emotion','表情'],['shot','ショット'],['angle','アングル'],['pose','ポーズ']]" :key="axis[0]">
-                              <select style="font-size:10px;padding:1px;width:auto"
-                                      :value="p.slot?.[axis[0]] || ''"
-                                      @change="arollSetSlot(p, axis[0], $event.target.value)">
-                                <option value="" x-text="axis[1]"></option>
-                                <template x-for="o in (studioPresets[axis[0]] || [])" :key="o.id">
-                                  <option :value="o.id" x-text="o.label_ja"></option>
-                                </template>
-                              </select>
-                            </template>
-                          </div>
+                          <!-- 読み取り専用: 実際に使われている絵のタグ（p.used_slot）。
+                               p.slot（希望ラベル）を直す入力はモーダル側に集約した
+                               （一覧の意味は「何が使われているか見る」・入力は別の場所という分担）。 -->
+                          <div x-show="p.cutout_slot_id" style="font-size:9px;color:#94a3b8;margin-top:3px"
+                               x-text="arollUsedSlotSummary(p)"></div>
                           <span x-show="!p.slot_key && (p.characters||[]).length" style="font-size:9px;color:#f59e0b"
                                 title="emotion・shot・angleが揃うとライブラリと照合できます">未照合（必ず課金生成）</span>
                         </td>
@@ -4740,6 +4789,40 @@
           </div>
         </div>
 
+        <!-- ── カット（穴9・U1）────────────────────────────────────
+             この行がどのカットに属するか。カット内の行は同じ絵と背景を共有する。
+             ⚠️ 手直しを**自動へ戻す口**をここに置く。一覧側は「つなげる/分ける/決め」しか
+                出していないので、ここが無いと一度触った行を元に戻せない。 -->
+        <template x-if="arollCutOf(qaDetail.line_id)">
+          <div style="border-top:1px solid #2d3748;padding-top:10px;margin-bottom:8px">
+            <div style="font-size:10px;color:#64748b;text-transform:uppercase;letter-spacing:0.06em">カット</div>
+            <div style="font-size:11px;color:#94a3b8;margin-top:4px;line-height:1.7">
+              <span x-text="arollCutOf(qaDetail.line_id).cut_id"></span>
+              ／<span x-text="arollCutRoleLabel(arollCutOf(qaDetail.line_id).role)"></span>
+              ／<span x-text="`${arollCutOf(qaDetail.line_id).duration_sec}s`"></span>
+              ／<span x-text="`${arollCutOf(qaDetail.line_id).line_ids.length}行`"></span>
+              <div x-show="arollCutOf(qaDetail.line_id).line_ids.length > 1" style="color:#64748b">
+                このカットの行は<b>同じ絵</b>を使います:
+                <span x-text="arollCutOf(qaDetail.line_id).line_ids.join(' / ')"></span>
+              </div>
+            </div>
+            <div style="display:flex;gap:4px;flex-wrap:wrap;margin-top:6px">
+              <button class="btn btn-sm" :disabled="arollLineBusy === qaDetail.line_id"
+                      title="この行から新しいカットを始める"
+                      @click="arollSetCut(qaDetail.line_id, { boundary: 'start' })">✂ ここで分ける</button>
+              <button class="btn btn-sm" :disabled="arollLineBusy === qaDetail.line_id"
+                      title="前のカットにつなげる（同じ話者のときだけ有効）"
+                      @click="arollSetCut(qaDetail.line_id, { boundary: 'join' })">↑ 前へつなげる</button>
+              <button class="btn btn-sm" :disabled="arollLineBusy === qaDetail.line_id"
+                      title="この行を決めにする"
+                      @click="arollSetCut(qaDetail.line_id, { role: 'kime' })">★ 決めにする</button>
+              <button class="btn btn-sm" :disabled="arollLineBusy === qaDetail.line_id"
+                      title="手直しを消して自動の判定に戻す"
+                      @click="arollSetCut(qaDetail.line_id, { reset: true })">↺ 自動に戻す</button>
+            </div>
+          </div>
+        </template>
+
         <!-- ── その行を作り直す（コマ一覧と同じ操作をここに統合） ────────────── -->
         <template x-if="arollPanelOf(qaDetail.line_id)">
           <div style="border-top:1px solid #2d3748;padding-top:10px;display:flex;flex-direction:column;gap:6px">
@@ -5557,6 +5640,7 @@ function app() {
     arollShowLegacyExport: false,  // 旧・手作業用の書き出し（既定で畳む）
     arollChecked: {},              // コマ一覧のチェック状態 {line_id: true}
     arollRowFilter: 'all',
+    arollCuts: null,        // GET .../aroll/cuts の結果（毎回サーバで計算される）
     arollBulkBusy: false,
     arollBulkMsg: '',
     qaVersion: 0,                 // 画像のキャッシュバスター
@@ -9095,8 +9179,10 @@ function app() {
         });
         const d = await r.json().catch(() => ({}));
         if (!r.ok) { alert('エラー: ' + (d.detail || r.status)); return; }
+        // from_actual_shot: 絵が既に決まっている行は実物のshotを優先した件数（穴6）
         this.arollBulkMsg = `🏞️ ${d.assigned ?? 0}行に背景を割り当てました`
-          + ((d.unmatched ?? 0) ? `（候補なし ${d.unmatched}行）` : '');
+          + ((d.unmatched ?? 0) ? `（候補なし ${d.unmatched}行）` : '')
+          + ((d.from_actual_shot ?? 0) ? `（実物優先 ${d.from_actual_shot}行）` : '');
         await this.loadArollManifest();
       } finally { this.arollBulkBusy = false; }
     },
@@ -9292,7 +9378,49 @@ function app() {
         this.arollAspect = this.arollManifest.aspect || this.arollAspect;
         this.arollStyle = this.arollManifest.style || this.arollStyle;
       }
+      await this.loadArollCuts();
       this.arollImgVersion++;
+    },
+    // ─── カット（穴9・U1）────────────────────────────────────────
+    // 連続する同じ話者の行を1カットにまとめる。カット内の行は同じ絵と背景を共有し、
+    // 吹き出しだけが変わる＝「カメラが動かないまま次の台詞が出る」区間。
+    // ⚠️ カットは**保存せず毎回サーバで計算する**（台本が変われば境界も変わるため）。
+    // 保存されるのはユーザーの手直しだけなので、ここでは読むだけでよい。
+    async loadArollCuts() {
+      this.arollCuts = null;
+      if (!this.currentProject || !this.activeEpisodeNumber) return;
+      try {
+        const r = await fetch(`${this.arollApiBase}/cuts`);
+        this.arollCuts = r.ok ? await r.json() : null;
+      } catch { this.arollCuts = null; }
+    },
+    get arollCutByLine() {
+      const m = {};
+      for (const c of (this.arollCuts?.cuts || [])) {
+        for (const lid of c.line_ids) m[lid] = c;
+      }
+      return m;
+    },
+    arollCutOf(lineId) { return this.arollCutByLine[lineId] || null; },
+    arollIsCutHead(lineId) {
+      const c = this.arollCutOf(lineId);
+      return !c || c.line_ids[0] === lineId;
+    },
+    arollCutRoleLabel(role) {
+      return { solo: '単独', setup: '前振り', kime: '決め' }[role] || role || '';
+    },
+    // 手直し: 境界を足す/消す・決めを付け替える。再計算しても壊れない（サーバが上書きを保存）
+    async arollSetCut(lineId, patch) {
+      this.arollLineBusy = lineId;
+      try {
+        const r = await fetch(`${this.arollApiBase}/cuts/${lineId}`, {
+          method: 'PUT', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(patch),
+        });
+        const d = await r.json().catch(() => ({}));
+        if (!r.ok) { this.arollMsg = `カットの変更に失敗: ${d.detail || r.status}`; return; }
+        await this.loadArollCuts();
+      } finally { this.arollLineBusy = null; }
     },
     async arollGeneratePrompts() {
       this.arollBusy = 'prompts';
@@ -9392,6 +9520,23 @@ function app() {
         await this.loadArollManifest();
         await this.loadArollSync();
       } finally { this.arollLineBusy = null; }
+    },
+    // コマ一覧が見せるのは「実際に使われている絵」のタグ（p.used_slot）であって、
+    // p.slot（LLMが決めた希望ラベル・在庫選定とズレて当たり前）ではない。
+    // 本番64行中56行=87.5%でズレを実測（2026-09-06）。希望を変える入力は
+    // モーダル側のプルダウン（p.slot）に残し、一覧は読み取り専用の表示に絞る。
+    studioPresetLabel(axis, id) {
+      if (!id) return '';
+      return (this.studioPresets[axis] || []).find(o => o.id === id)?.label_ja || id;
+    },
+    arollUsedSlotSummary(p) {
+      if (!p.cutout_slot_id) return '';
+      const u = p.used_slot;
+      if (!u) return '（在庫の情報を取得できません）';
+      const parts = [['emotion', '表情'], ['shot', 'ショット'], ['angle', 'アングル'], ['pose', 'ポーズ']]
+        .map(([k, label]) => u[k] ? `${label}:${this.studioPresetLabel(k, u[k])}` : null)
+        .filter(Boolean);
+      return parts.join(' / ') || '（タグ無し）';
     },
     async arollSetSlot(p, field, value) {
       const slot = { emotion: '', shot: '', angle: '', pose: '', ...(p.slot || {}) };
@@ -9502,8 +9647,10 @@ function app() {
           body: JSON.stringify({ only_missing: true }),
         });
         const d = await r.json();
+        // from_actual_shot: 在庫の実物shotで選び直せた件数（LLM希望とズレていた分。穴6）
+        const actual = d.from_actual_shot ? `・実物優先 ${d.from_actual_shot}` : '';
         this.arollMsg = r.ok
-          ? `✔ 背景を${d.assigned}行に割当しました（未一致 ${d.unmatched}・スキップ ${d.skipped}）`
+          ? `✔ 背景を${d.assigned}行に割当しました（未一致 ${d.unmatched}・スキップ ${d.skipped}${actual}）`
           : `背景自動割当に失敗: ${d.detail || r.status}`;
         await this.loadArollManifest();
       } catch (e) {

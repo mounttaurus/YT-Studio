@@ -32,7 +32,7 @@ from PIL import Image
 
 from app.core import (
     character_manager, cutout_engine, fingerprint, nanobanana_client, panel_presets,
-    style_manager,
+    shot_meter, style_manager,
 )
 
 SCHEMA_VERSION = "1.3.0"  # 1.3.0: mask を追加（analyze_alpha実測・psassistの採寸本籍。追加のみ・後方互換）
@@ -185,6 +185,17 @@ def demote_from_line(char_ids: list[str], project_id: str, episode: int,
     return touched
 
 
+def _facing_from_labels(pose: str | None, angle: str | None) -> str:
+    """向きをラベルから導く。
+
+    ⚠️ **定義の本籍は `cutout_selector.orientation`。** ここは登録時に `facing` を埋めるための
+    入口で、同じ結果にならなければならない（あちらは保存済み `facing` を優先して読む）。
+    循環importを避けるため辞書だけを借りる。
+    """
+    from app.core import cutout_selector
+    return cutout_selector.orientation({"pose": pose, "angle": angle})
+
+
 def usable_as(entry: dict) -> dict:
     """その entry が**何に使えるか**。⚠️ `kind` ではなく実際に持っているもので判定する。
 
@@ -274,14 +285,21 @@ def find_current(char_id: str, emotion: str, shot: str, angle: str) -> dict | No
 
 
 def _touch_usage(entry: dict, delta: int, *, project_id: str | None = None,
-                 episode: int | None = None, line_id: str | None = None) -> None:
+                 episode: int | None = None, line_id: str | None = None,
+                 count: bool = True) -> None:
     """times_used を delta 増減し、行が分かれば used_by も同期する（T2 §4-3）。
 
     used_by は「今どの行がこの絵を直接指しているか」の逆引き。キャラ在庫タブが
     使用中のentryを削除できなくするために読む（delete_entry参照）。
     project_id/line_id が無い呼び出し（後方互換）は times_used だけ動かす。
+
+    count=False: **used_by だけ更新し times_used は動かさない**（穴9・2026-09-20）。
+    1つのカットが複数行にまたがる時、絵が画面に出たのは1回なので消費も1回。
+    行数ぶん数えると生涯上限（既定3）へ不当に早く到達する。逆引きは全行ぶん要るので
+    used_by だけは積む。
     """
-    entry["times_used"] = max(0, entry.get("times_used", 0) + delta)
+    if count:
+        entry["times_used"] = max(0, entry.get("times_used", 0) + delta)
     if not (project_id and line_id):
         return
     used_by = entry.setdefault("used_by", [])
@@ -294,7 +312,8 @@ def _touch_usage(entry: dict, delta: int, *, project_id: str | None = None,
 
 
 def record_usage(char_id: str, slot_id: str, *, project_id: str | None = None,
-                 episode: int | None = None, line_id: str | None = None) -> None:
+                 episode: int | None = None, line_id: str | None = None,
+                 count: bool = True) -> None:
     """ライブラリentryの使用回数(times_used)を+1する。find_currentのローテーションが参照する。
 
     project_id/episode/line_id を渡すと、どの行が使っているかを ``used_by`` にも記録する。
@@ -303,13 +322,15 @@ def record_usage(char_id: str, slot_id: str, *, project_id: str | None = None,
     data = load_index(char_id)
     for e in data.get("entries", []):
         if e.get("slot_id") == slot_id:
-            _touch_usage(e, 1, project_id=project_id, episode=episode, line_id=line_id)
+            _touch_usage(e, 1, project_id=project_id, episode=episode,
+                         line_id=line_id, count=count)
             save_index(char_id, data)
             return
 
 
 def release_usage(char_id: str, slot_id: str, *, project_id: str | None = None,
-                  episode: int | None = None, line_id: str | None = None) -> None:
+                  episode: int | None = None, line_id: str | None = None,
+                  count: bool = True) -> None:
     """times_used を-1する（0未満にはしない）。選び直しで前の1枚を解放する時に使う。
 
     project_id/episode/line_id を渡すと ``used_by`` から該当行も取り除く。
@@ -319,7 +340,8 @@ def release_usage(char_id: str, slot_id: str, *, project_id: str | None = None,
     data = load_index(char_id)
     for e in data.get("entries", []):
         if e.get("slot_id") == slot_id:
-            _touch_usage(e, -1, project_id=project_id, episode=episode, line_id=line_id)
+            _touch_usage(e, -1, project_id=project_id, episode=episode,
+                         line_id=line_id, count=count)
             save_index(char_id, data)
             return
 
@@ -501,6 +523,22 @@ def _resolve_refs(char_id: str) -> list[tuple[bytes, str, str]]:
 
 MAX_ATTEMPTS = 3   # 初回＋再試行2回。落ちるたびに課金されるので上限を持つ
 
+# ⚠️ **アルファが「空」ではなく「ほぼ空」でも弾く**（2026-09-06追加）。
+# `fingerprint.compute` はマスクが1画素でもあれば dhash を返すので、`not fp.get("dhash")`
+# だけでは**ほぼ全部消えた切り抜き**を通してしまう（実例: 顔ドアップの生成物で Rembg が
+# 被写体を見失い coverage 0.0012 の entry が在庫に入った）。顔だけの構図は背景が乏しく
+# 抜きが不安定になりやすいので、面積でも見る。
+MIN_CUTOUT_COVERAGE = 0.02  # 画面の2%未満しか残らなければ切り抜き失敗とみなす
+
+
+def _too_empty(fp: dict) -> bool:
+    """切り抜きがほぼ空か。⚠️ 判定は**指紋が実測した coverage**（アルファの面積比）で行う。
+    `cut_out` が返す info 側は経路や差し替えで欠けうるので当てにしない。
+    値が無い時は**弾かない**（判定できないものを落とさない）。
+    """
+    cov = fp.get("coverage")
+    return cov is not None and float(cov) < MIN_CUTOUT_COVERAGE
+
 
 async def _generate_and_measure(
     char_id: str, prompt: str, refs: list, model: str,
@@ -532,9 +570,11 @@ async def _generate_and_measure(
     )
     rgba, info = cutout_engine.cut_out(Image.open(io.BytesIO(data)), method="ai")
     fp = fingerprint.for_entry(rgba)
-    if not fp.get("dhash"):
-        # アルファが空＝切り抜きに失敗。絵自体は課金済みなので捨てない（パネルとしては使える）
-        return data, None, None, None, "背景を抜くとアルファが空だった（切り抜き方式=%s）" % info.get("effective")
+    if not fp.get("dhash") or _too_empty(fp):
+        # アルファが空／ほぼ空＝切り抜きに失敗。絵自体は課金済みなので捨てない（パネルとしては使える）
+        return data, None, None, None, (
+            "背景を抜くと被写体がほぼ残らなかった（切り抜き方式=%s・残り %.2f%%）"
+            % (info.get("effective"), float(fp.get("coverage") or 0.0) * 100))
     # ⚠️ psassist の採寸（バブルの左右・キャラ移動量）はここで測った mask を使う。
     # mask_stats.json（その話数で生成した絵）と混同しないこと ── 混同すると
     # 在庫の絵を貼った行でも生成画像の採寸で左右が決まり、バブルが逆側に出る
@@ -677,10 +717,11 @@ def register_from_image(
 
     rgba, info = cutout_engine.cut_out(Image.open(io.BytesIO(data)), method="ai")
     fp = fingerprint.for_entry(rgba)
-    if not fp.get("dhash"):
+    if not fp.get("dhash") or _too_empty(fp):
         # 切り抜きに失敗した絵だけは積まない（cutout も指紋も無い entry は用途が無い）
         return {"registered": False,
-                "reason": "背景を抜くとアルファが空だった（方式=%s）" % info.get("effective")}
+                "reason": "背景を抜くと被写体がほぼ残らなかった（方式=%s・残り %.2f%%）"
+                          % (info.get("effective"), float(fp.get("coverage") or 0.0) * 100)}
     # ⚠️ psassist の採寸（バブルの左右等）はここで測る mask を使う。詳細は
     # _generate_and_measure の同種コメント参照。
     mask = cutout_engine.analyze_alpha(rgba)
@@ -699,6 +740,11 @@ def register_from_image(
         "pose": pose or None, "appearance_version": ver, "aspect": "16:9",
         "image": f"images/{slot_id}.png", "cutout": f"cutouts/{slot_id}.png",
         "fingerprint": fp, "mask": mask, "cutout_method": info.get("effective"),
+        # ⚠️ **実物の画角と向きをここで確定させる**（U2・2026-09-20）。ラベル（shot/pose）は
+        # 実物と31〜47%しか一致しないので、カメラプランは下の measured/facing を見る。
+        # ここで入れ忘れると、新しい絵だけラベル頼りになって寄り引きが崩れる。
+        "measured": shot_meter.measure(rgba), "measured_source": "mask",
+        "facing": _facing_from_labels(pose, angle), "facing_source": "llm",
         "style": style_name, "model": model or None, "prompt": prompt,
         "provider": provider, "source": src, "created_at": _now(), "note": "",
         "review_status": review_status, "times_used": 0,
