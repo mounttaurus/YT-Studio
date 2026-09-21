@@ -3,6 +3,7 @@ import logging
 import os
 import secrets
 import shutil
+import uuid
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -490,6 +491,64 @@ async def preview(req: PreviewRequest):
         "audio_url": f"/audio/direct/{filename}",
         "duration_hint": audio_utils.wav_duration_sec(audio_bytes),
     }
+
+
+# ─────────────── 🎙️ 自由生成（台本に紐づかない話者音声・エキストラ用） ───────────────
+#
+# director🎨自由生成タブの画像/BGMと同じ置き場（shared/direct_output/_staging/）に候補を置く。
+# 保存/破棄/一覧の配信は scrapping-agent の /imagegen/free/* をそのまま使い回す（同じbind mount
+# を見ているのでファイル名さえ一致すれば別コンテナのエンドポイントでも操作できる）。
+# アプリのフロー（tts.json・OTIO）には一切載らない（memory: tts-free-generation-for-extras）。
+
+FREE_STAGING = SHARED_DIR / "direct_output" / "_staging"
+SCRAP_PUBLIC_URL = os.getenv("SCRAP_PUBLIC_URL", "http://localhost:8003")
+
+
+class FreeTTSRequest(BaseModel):
+    text: str
+    voice: str = "none"
+    caption: str = ""
+    emotion: str = "neutral"
+    speed: float = 1.0
+    lang: Optional[str] = None  # 省略 or "ja" = irodori、それ以外 = omnivoice
+
+
+@router.post("/free/generate")
+async def free_tts_generate(req: FreeTTSRequest):
+    """台本に紐づかない話者音声を1本生成し、staging候補（WAV）として返す。
+
+    声は既存カタログ（GET /voices）かキャラの声バインディングから選ぶ想定＝新しい声の概念は作らない。
+    生成はローカルGPU推論（外部課金なし）。確定保存は scrapping-agent の free_save を流用する。
+    """
+    text = (req.text or "").strip()
+    if not text:
+        raise HTTPException(status_code=400, detail="text is empty")
+    if not req.voice or req.voice == "none":
+        raise HTTPException(status_code=400, detail="voice is required")
+
+    processed = apply_emotion_to_text(text, req.emotion)
+    caption = req.caption.strip() or None
+    is_ja = not req.lang or req.lang == "ja"
+    engine_mod = irodori if is_ja else omnivoice
+
+    try:
+        audio_bytes = await engine_mod.generate(processed, req.voice, req.speed, caption=caption)
+    except MissingRefAudioError as e:
+        raise HTTPException(409, str(e))
+    except Exception as e:
+        logger.error("free TTS generate error: %s", e, exc_info=True)
+        raise HTTPException(503, f"TTS server error: {e}")
+
+    FREE_STAGING.mkdir(parents=True, exist_ok=True)
+    name = f"free_tts_{uuid.uuid4().hex[:12]}.wav"
+    (FREE_STAGING / name).write_bytes(audio_bytes)
+    url = f"{SCRAP_PUBLIC_URL}/imagegen/free/staging/{name}"
+    provider = f"tts:{'irodori' if is_ja else 'omnivoice'}"
+    candidate = {
+        "id": name, "name": name, "provider": provider, "prompt": text,
+        "kind": "audio", "url": url, "thumbnail_url": url,
+    }
+    return {"provider": provider, "voice": req.voice, "text": text, "candidates": [candidate]}
 
 
 @router.get("/audio/direct/{filename}")

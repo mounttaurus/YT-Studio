@@ -529,6 +529,20 @@ async def free_audio(prompt: str) -> dict:
                             json={"prompt": prompt})
 
 
+async def free_tts(text: str, voice: str, caption: str = "", emotion: str = "neutral",
+                   speed: float = 1.0, lang: str = "") -> dict:
+    """台本に紐づかない話者音声を1本生成し staging 候補(WAV)にする（ローカルGPU・外部課金なし）。
+
+    voice は list_voices の id を使う（新しい声の概念は作らない）。lang省略/"ja"=irodori、
+    それ以外=omnivoice（多言語・voiceに .ref.wav/.ref.txt が要る）。生成物はエキストラ扱いで
+    tts.json/OTIOには載らない（DaVinciでの手動追加が前提）。確定保存は free_save を流用する。
+    """
+    return await dc.request("POST", "api/tts/free/generate", json={
+        "text": text, "voice": voice, "caption": caption,
+        "emotion": emotion, "speed": speed, "lang": lang or None,
+    })
+
+
 async def free_save(name: str, save_name: str = "") -> dict:
     """staging の候補(name)を direct_output/ に確定保存する。save_name は任意の確定名。"""
     return await dc.request("POST", "api/scrapping/imagegen/free/save",
@@ -1154,6 +1168,7 @@ TOOLS = [
     {"fn": list_imagegen_styles, "side_effects": [S.READ]},
     {"fn": free_generate,        "side_effects": [S.COST, S.GPU]},
     {"fn": free_audio,           "side_effects": [S.COST]},
+    {"fn": free_tts,             "side_effects": [S.GPU]},
     {"fn": free_save,            "side_effects": [S.WRITE]},
     # リサーチ（探索→蒸留→ラフ台本）
     {"fn": research_list_sources, "side_effects": [S.READ]},

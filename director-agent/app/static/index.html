@@ -4001,6 +4001,62 @@
           <div x-show="free.audioBusy" class="progress-indeterminate"></div>
         </div>
 
+        <div class="card">
+          <h3 style="margin-top:0;display:flex;align-items:center;gap:8px">🎙️ 話者音声（TTS）自由生成
+            <span style="font-size:10px;padding:2px 8px;border-radius:99px;background:#1e3a2f;color:#86efac">エキストラ</span>
+          </h3>
+          <p style="font-size:12px;color:#94a3b8;margin:2px 0 10px">
+            台本に無い一言を既存の声で喋らせる。ニュース性の高い題材で事実の変更等があった時の逃げ道。
+            <span style="color:#fca5a5">生成物は tts.json / OTIO には載りません。保存後は DaVinci で手動で足してください。</span>
+          </p>
+          <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px">
+            <label style="font-size:12px;color:#cbd5e1">キャラから声を引く（任意）
+              <select :value="free.ttsCharId" @change="pickFreeTtsChar($event.target.value)" style="width:100%;margin-top:4px">
+                <option value="">－ 選択しない －</option>
+                <template x-for="c in charas.filter(c => c.voice && c.voice.voice_id)" :key="c.char_id">
+                  <option :value="c.char_id" x-text="`${c.name} (🔊${c.voice.voice_id})`"></option>
+                </template>
+              </select>
+            </label>
+            <label style="font-size:12px;color:#cbd5e1">声（voice_id）
+              <select x-model="free.ttsVoice" style="width:100%;margin-top:4px">
+                <option value="">－ 選択してください －</option>
+                <template x-for="v in freeVoices" :key="v.id">
+                  <option :value="v.id" x-text="v.id"></option>
+                </template>
+              </select>
+            </label>
+          </div>
+          <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:12px;margin-top:10px">
+            <label style="font-size:12px;color:#cbd5e1">エンジン
+              <select x-model="free.ttsLang" style="width:100%;margin-top:4px">
+                <option value="ja">日本語（Irodori）</option>
+                <option value="en">多言語（OmniVoice・声に.ref.wav/.ref.txtが要る）</option>
+              </select>
+            </label>
+            <label style="font-size:12px;color:#cbd5e1">感情
+              <select x-model="free.ttsEmotion" style="width:100%;margin-top:4px">
+                <option>neutral</option><option>happy</option><option>surprised</option>
+                <option>sad</option><option>angry</option><option>thinking</option>
+              </select>
+            </label>
+            <label style="font-size:12px;color:#cbd5e1">キャプション（字幕名・任意）
+              <input type="text" x-model="free.ttsCaption" placeholder="例: AOI" style="width:100%;margin-top:4px">
+            </label>
+          </div>
+          <label style="font-size:12px;color:#cbd5e1;display:block;margin-top:10px">セリフ
+            <textarea x-model="free.ttsText" rows="2" style="width:100%;margin-top:4px"
+              placeholder="喋らせたいテキスト（表記ルールはDocs/TTS_SCRIPT_TEXT_RULES.mdに準拠）"></textarea>
+          </label>
+          <div style="display:flex;align-items:center;gap:12px;margin-top:8px">
+            <button class="btn" @click="generateFreeTts()" :disabled="free.ttsBusy || !free.ttsText.trim() || !free.ttsVoice">
+              <span x-show="!free.ttsBusy">🎙️ 生成</span><span x-show="free.ttsBusy">生成中…</span>
+            </button>
+            <span x-text="free.ttsMsg" style="font-size:12px;color:#94a3b8"></span>
+          </div>
+          <div x-show="free.ttsBusy" class="progress-indeterminate"></div>
+        </div>
+
         <div class="card" x-show="free.candidates.length">
           <h3 style="margin-top:0">生成候補（保存するとdirect_outputに確定）</h3>
           <div style="display:flex;flex-wrap:wrap;gap:14px">
@@ -5430,6 +5486,9 @@ function app() {
       audioPrompt: '', audioBusy: false, audioMsg: '',
       cnEnabled: true, cnModel: '', cnType: 'canny', cnStrength: 0.9, cnLow: 0.4, cnHigh: 0.8,
       cnStart: 0.0, cnEnd: 1.0,
+      // 🎙️ 話者音声（TTS）自由生成＝エキストラ用（tts.json/OTIOには載らない）
+      ttsCharId: '', ttsVoice: '', ttsCaption: '', ttsEmotion: 'neutral', ttsLang: 'ja',
+      ttsText: '', ttsBusy: false, ttsMsg: '',
     },
     // 🏞️ 背景アーカイブタブ
     bg: {
@@ -5452,6 +5511,7 @@ function app() {
       is_keyframe: false, style: '', source_url: '', license: '', note: '',
     },
     freeStyles: ['realistic'],
+    freeVoices: [],
     // 📚 キャラ在庫タブ（旧「キャラ画像」＋「切り抜き」を統合。2026-08-28・§14）
     // 絞り込みは軸ごとに独立させる（🏞️背景タブと同じ方式）。すべてクライアント側で絞る
     charLib: {
@@ -7032,7 +7092,11 @@ function app() {
         if (!this.charLib.charId && this.charas.length) this.charLib.charId = '*';  // 既定は全キャラ
         await this.loadCharLib();
       }
-      if (t === 'free') { await this.loadFreeStyles(); await this.loadFreeControlnets(); await this.loadFreeOutputs(); }
+      if (t === 'free') {
+        await this.loadFreeStyles(); await this.loadFreeControlnets(); await this.loadFreeOutputs();
+        await this.loadFreeVoices();
+        if (!this.charas.length) await this.loadCharas();
+      }
       if (t === 'editing') await this.refreshEditingTab();
     },
 
@@ -8133,6 +8197,41 @@ function app() {
         this.free.audioMsg = `生成失敗: ${e}`;
       } finally {
         this.free.audioBusy = false;
+      }
+    },
+    async loadFreeVoices() {
+      try {
+        const d = await (await fetch(`${TAPI}/voices`)).json();
+        this.freeVoices = d.voices || [];
+      } catch { this.freeVoices = []; }
+    },
+    pickFreeTtsChar(charId) {
+      this.free.ttsCharId = charId;
+      const c = this.charas.find(x => x.char_id === charId);
+      if (!c) return;
+      if (c.voice && c.voice.voice_id) this.free.ttsVoice = c.voice.voice_id;
+      this.free.ttsCaption = c.caption || c.name || '';
+    },
+    async generateFreeTts() {
+      if (!this.free.ttsText.trim() || !this.free.ttsVoice || this.free.ttsBusy) return;
+      this.free.ttsBusy = true; this.free.ttsMsg = '';
+      try {
+        const r = await fetch(`${TAPI}/free/generate`, {
+          method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            text: this.free.ttsText.trim(), voice: this.free.ttsVoice,
+            caption: this.free.ttsCaption.trim(), emotion: this.free.ttsEmotion,
+            speed: 1.0, lang: this.free.ttsLang === 'ja' ? null : this.free.ttsLang,
+          }),
+        });
+        const d = await r.json();
+        if (!r.ok) { this.free.ttsMsg = `生成失敗: ${d.detail || r.status}`; return; }
+        this.free.candidates = [...(d.candidates || []), ...this.free.candidates];
+        this.free.ttsMsg = '🎙️ 生成しました（候補に追加・試聴して確認してください）';
+      } catch (e) {
+        this.free.ttsMsg = `生成失敗: ${e}`;
+      } finally {
+        this.free.ttsBusy = false;
       }
     },
     async saveFree(c) {
