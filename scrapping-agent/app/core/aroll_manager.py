@@ -1298,6 +1298,37 @@ async def generate_line_image(
                 "library_slot_id": lib_hit.get("slot_id"),
             })
             clear_image_approval(project_id, episode, panel, demote=False)
+
+            # T5（穴4）: この経路（find_current の完全一致）が当てた entry が
+            # 2026-08-27以降の形式（cutout+fingerprintを併せ持つ）なら、T1と同じく
+            # cutout_slot_id も直接指させる。⚠️ **これをやらないと「ライブラリに
+            # 一致したのに背景付きのまま」＝下流がPhotoshop切り抜きへ回ってしまう
+            # （batch_cutout.py が対象ゼロになったT1の恩恵をこの経路だけ受けられない）。
+            # find_current と cutout_selector.candidates は別の一致基準（完全一致 vs
+            # 指紋距離）で選ぶ別系統のままでよい（索引統合はS1で見送り済み）── ここは
+            # 「選んだ後、同じ絵の切り抜きも一緒に使う」という出口の一本化だけを行う。
+            prev_slot_id, prev_char_id = panel.get("cutout_slot_id"), panel.get("cutout_char_id")
+            if prev_slot_id and prev_char_id and prev_slot_id != lib_hit.get("slot_id"):
+                panel_library_manager.release_usage(
+                    prev_char_id, prev_slot_id, project_id=project_id, episode=episode,
+                    line_id=line_id)
+            if panel_library_manager.usable_as(lib_hit)["cutout"]:
+                panel["cutout_slot_id"] = lib_hit["slot_id"]
+                panel["cutout_char_id"] = lib_hit["char_id"]
+                panel["cutout_source"] = "library"
+                panel["cutout_assigned_at"] = _now()
+            else:
+                # 旧形式（背景付きの image のみ・cutout 無し）。ここだけは今も
+                # Photoshop切り抜きが要る。件数は自然に減っていく（新規生成は全てT1で
+                # cutout を伴って登録されるため、旧形式のまま残るのは移行前の資産だけ）。
+                panel["cutout_slot_id"] = None
+                panel["cutout_char_id"] = None
+                panel["cutout_source"] = None
+                panel["cutout_assigned_at"] = None
+                if log is not None:
+                    log.append(f"ℹ️ {line_id} は旧形式のライブラリ資産（切り抜き無し）のため"
+                              "Photoshop切り抜きが必要です")
+
             save_manifest(project_id, episode, manifest)
             panel_library_manager.record_usage(
                 lib_hit["char_id"], lib_hit["slot_id"],
