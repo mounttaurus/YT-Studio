@@ -2182,7 +2182,8 @@ async def aroll_start_batch(project_id: str, episode_number: int, req: ArollGene
             manifest["style"] = req.style
         aroll_manager.save_manifest(project_id, episode_number, manifest)
 
-    targets = aroll_manager.select_targets(manifest, req.line_ids, req.only_missing)
+    targets = aroll_manager.select_targets(
+        project_id, episode_number, manifest, req.line_ids, req.only_missing)
     if not targets:
         raise HTTPException(status_code=400, detail="対象行がありません（プロンプト未生成 or 全行生成済み）")
 

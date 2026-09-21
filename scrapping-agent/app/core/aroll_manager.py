@@ -1250,6 +1250,58 @@ async def _generate_with_retry(
     raise last  # 到達しない
 
 
+def _propagate_cut_result(
+    project_id: str, episode: int, manifest: dict, head: dict, sibling_ids: list[str],
+    log: list[str] | None = None,
+) -> None:
+    """カットの先頭行(head)が確定した絵を、同じカットの兄弟行にも反映する（穴9 §15-1）。
+
+    apply_cutout_plan/set_cutout_selection と同じ「カット単位で1枚を共有する」原則を
+    生成経路にも適用する。画像ファイルは _apply_copy と同じ手順でコピーする
+    （``image_source="copied"``・``copied_from`` は Phase2 のバッチ内コピーと同じ値を使い回す。
+    「代表行の画像を頂く」という意味は同じなので出自を分ける schema 追加はしない）。
+    cutout_slot_id の消費（times_used）はカットにつき1回に抑える ── head 側で既に
+    record_usage 済みなので、ここでは count=False で used_by の記録だけ行う
+    （set_cutout_selection の consumption ルールと同じ）。
+
+    ⚠️ **呼び出し側が最後に save_manifest すること。** ここでは保存しない
+    （generate_line_image が head/兄弟をまとめて1回で書き出す）。
+    """
+    panels_by_id = {p.get("line_id"): p for p in manifest.get("panels", [])}
+    head_line_id = head.get("line_id")
+    new_slot_id = head.get("cutout_slot_id")
+    new_char_id = head.get("cutout_char_id")
+    new_source = head.get("cutout_source")
+    new_assigned_at = head.get("cutout_assigned_at")
+
+    for sid in sibling_ids:
+        sib = panels_by_id.get(sid)
+        if sib is None:
+            continue
+        if not _apply_copy(project_id, episode, manifest,
+                           {"line_id": sid, "copy_from": head_line_id, "variant_id": None}, log=log):
+            continue
+        prev_slot_id, prev_char_id = sib.get("cutout_slot_id"), sib.get("cutout_char_id")
+        if prev_slot_id and prev_char_id and prev_slot_id != new_slot_id:
+            panel_library_manager.release_usage(
+                prev_char_id, prev_slot_id, project_id=project_id, episode=episode, line_id=sid)
+        if new_slot_id and new_char_id:
+            sib["cutout_slot_id"] = new_slot_id
+            sib["cutout_char_id"] = new_char_id
+            sib["cutout_source"] = new_source
+            sib["cutout_assigned_at"] = new_assigned_at
+            panel_library_manager.record_usage(
+                new_char_id, new_slot_id, project_id=project_id, episode=episode,
+                line_id=sid, count=False)   # 消費はカットに1回（headで数え済み）
+        else:
+            # headが2ショット等で在庫を持たない（cutout_slot_id無し）場合は兄弟も同じく持たない
+            sib["cutout_slot_id"] = None
+            sib["cutout_char_id"] = None
+            sib["cutout_source"] = None
+            sib["cutout_assigned_at"] = None
+        clear_image_approval(project_id, episode, sib, demote=False)
+
+
 async def generate_line_image(
     project_id: str, episode: int, line_id: str,
     allow_paid_fallback: bool = False, log: list[str] | None = None,
@@ -1279,6 +1331,13 @@ async def generate_line_image(
 
     out_dir = aroll_dir(project_id, episode)
     out_dir.mkdir(parents=True, exist_ok=True)
+
+    # 穴9 §15-1: この行が属するカットの兄弟行。生成/ライブラリ引用の結果は
+    # 兄弟行にも伝播させる（1カット1枚の原則。select_targets が先頭行だけを渡す前提だが、
+    # 手動の「この行だけ作り直す」1行エンドポイントから直接呼ばれた時も同じ扱いにする ──
+    # カットは定義上「同じ絵を共有する区間」なので、片方だけ絵が変わるとカットが割れる）。
+    cut = cut_planner.cut_of_line(cut_report(project_id, episode, manifest)["cuts"]).get(line_id)
+    sibling_ids = [lid for lid in (cut or {}).get("line_ids", []) if lid != line_id]
 
     if use_library:
         lib_hit = _library_lookup(panel)
@@ -1329,10 +1388,12 @@ async def generate_line_image(
                     log.append(f"ℹ️ {line_id} は旧形式のライブラリ資産（切り抜き無し）のため"
                               "Photoshop切り抜きが必要です")
 
-            save_manifest(project_id, episode, manifest)
             panel_library_manager.record_usage(
                 lib_hit["char_id"], lib_hit["slot_id"],
                 project_id=project_id, episode=episode, line_id=line_id)
+            if sibling_ids:
+                _propagate_cut_result(project_id, episode, manifest, panel, sibling_ids, log=log)
+            save_manifest(project_id, episode, manifest)
             if log is not None:
                 log.append(f"📚 {line_id} ライブラリから引用: {lib_hit['char_id']}/{lib_hit.get('slot_id')}")
             return panel
@@ -1428,6 +1489,9 @@ async def generate_line_image(
                     log.append(f"⚠️ {line_id} 切り抜きに失敗し在庫登録できませんでした: {reg.get('reason')}")
         elif len(chars) > 1 and log is not None:
             log.append(f"ℹ️ {line_id} は2人以上写る行のため在庫登録の対象外です（キャラ単独限定）")
+
+        if sibling_ids:
+            _propagate_cut_result(project_id, episode, manifest, panel, sibling_ids, log=log)
     except Exception as e:
         panel.update({"status": "failed", "error": str(e)[:300]})
         raise
@@ -1466,32 +1530,56 @@ def request_stop(project_id: str, episode: int) -> bool:
 
 
 def select_targets(
-    manifest: dict, line_ids: list[str] | None, only_missing: bool,
+    project_id: str, episode: int, manifest: dict,
+    line_ids: list[str] | None, only_missing: bool,
 ) -> list[dict]:
-    """バッチ対象パネルを選ぶ。only_missing=True なら「もう絵が決まっている」行を除外する
-    （＝レジューム/失敗再試行）。
+    """バッチ対象パネルを選ぶ。**対象は行ではなくカットの先頭行**（穴9 §15-1・2026-09-21）。
 
-    「もう決まっている」＝ ``status=="done"``（実生成済み）または ``cutout_slot_id``
-    あり（在庫の切り抜きを適用済み）。後者を見ないと、``aroll_apply_cutout_plan`` で
-    在庫を適用した行にも課金生成が走る（実測: 承認3行のつもりが11行課金・約$0.32過剰。
-    詳細 memory/aroll-batch-ignores-cutout-plan）。
+    カットは同じ絵を共有する区間（``cut_planner`` 参照）。1カット1枚の原則を生成経路にも
+    揃えるため、対象はカットにつき1行（先頭）だけを返す。実際の生成/ライブラリ引用は
+    その先頭行だけが行い、兄弟行への反映は ``generate_line_image`` が担う
+    （``apply_cutout_plan``/``set_cutout_selection`` と同じ役割分担。これをしないと、
+    在庫が薄いカットは行の数だけ NanoBanana を呼び、兄弟行に別々の絵が入ってしまう
+    ＝1カット1枚の原則が新規生成時だけ効かない）。
 
-    台本から消えた行（orphan）は明示指定を含め常に除外する（消えたセリフの絵に課金しない）。
+    only_missing=True なら「カット全体がもう決まっている」カットを除外する
+    （＝レジューム/失敗再試行）。``auto_assign_backgrounds`` と同じ判定を踏襲し、
+    カット内のどれか1行でも未決定なら、カット全体をやり直し対象として先頭行を返す。
+    「決まっている」の定義は以前と同じ ── ``status=="done"``（実生成済み）または
+    ``cutout_slot_id`` あり（在庫の切り抜きを適用済み。実測: 承認3行のつもりが11行課金・
+    約$0.32過剰だった事故の再発防止。詳細 memory/aroll-batch-ignores-cutout-plan）。
 
-    ⚠️ **ナレーション行（``characters`` が空）も常に除外する。** 映すキャラが居ないので
-    キャラ画像を生成する対象ではない（背景だけのコマになる）。ここを外さないと、
-    参照画像0枚のまま「誰でもない人物」が課金生成される。
+    台本から消えた行（orphan）は ``cut_report`` が最初から除外する。line_ids を明示した
+    場合、カットのどの行が指定されていてもそのカット（の先頭）が対象になる。
+
+    ⚠️ **ナレーション行（``characters`` が空）も常に除外する。** 話者が変われば必ず
+    カットの境界になるため（``cut_planner._runs``）、先頭行だけ見れば足りる。ここを
+    外さないと、参照画像0枚のまま「誰でもない人物」が課金生成される。
     """
-    panels = [p for p in manifest.get("panels", []) if not p.get("orphan")]
-    panels = [p for p in panels if p.get("characters")]
+    panels_by_id = {p.get("line_id"): p for p in manifest.get("panels", []) if not p.get("orphan")}
+    cuts = cut_report(project_id, episode, manifest)["cuts"]
     # ⚠️ 空リストは「1行も選んでいない」＝対象ゼロ（省略＝None が「全行」）。
     # falsy判定にすると、行を1つも選んでいないのに全行へ課金生成が走る。
-    if line_ids is not None:
-        wanted = set(line_ids)
-        panels = [p for p in panels if p.get("line_id") in wanted]
-    if only_missing:
-        panels = [p for p in panels if p.get("status") != "done" and not p.get("cutout_slot_id")]
-    return [p for p in panels if (p.get("prompt") or "").strip()]
+    wanted = None if line_ids is None else set(line_ids)
+
+    targets = []
+    for c in cuts:
+        members = [panels_by_id[lid] for lid in c["line_ids"] if lid in panels_by_id]
+        if not members:
+            continue
+        head = members[0]
+        if not head.get("characters"):
+            continue
+        if not (head.get("prompt") or "").strip():
+            continue
+        if wanted is not None and not any(m.get("line_id") in wanted for m in members):
+            continue
+        if only_missing and all(
+            m.get("status") == "done" or m.get("cutout_slot_id") for m in members
+        ):
+            continue
+        targets.append(head)
+    return targets
 
 
 # ---------------------------------------------------------------------------
@@ -1531,11 +1619,14 @@ def _assign_variants(group_panels: list[dict], max_reuse: int, min_gap: int) -> 
 def build_generation_plan(
     targets: list[dict], max_reuse: int = 1, min_gap: int = 8, use_library: bool = True,
 ) -> dict:
-    """targets(select_targetsの出力)を「ライブラリ引用」「実生成する代表行」「コピーで済む行」に振り分ける。
+    """targets(select_targetsの出力＝カットの先頭行のみ)を「ライブラリ引用」「実生成する代表行」
+    「コピーで済む行」に振り分ける。
 
     ライブラリ引用（Phase 3・use_library）が最優先: 単独キャラのパネルでキャラ所有ライブラリに
     一致（かつappearance_versionが最新）があれば、バッチ内dedupより先にそちらを使う（$0）。
     残りについて、slot_key を持たない行・max_reuse<=1 の時は常に個別生成（安全側）。
+    ⚠️ ここで言う「コピー」は同一バッチ内の演技スロット使い回し（Phase2）。カットの兄弟行への
+    伝播は別経路（generate_line_image が担う。穴9 §15-1）で、ここには出てこない。
     Returns: {"library": [{"line_id","char_id","slot_id"}...],
               "generate": [{"line_id","variant_id"}...], "copy": [{"line_id","copy_from","variant_id"}...],
               "generate_count", "copy_count", "library_count", "max_reuse", "min_gap"}
@@ -1599,7 +1690,7 @@ def generation_plan_estimate(
     manifest = load_manifest(project_id, episode)
     if manifest is None:
         raise ValueError("aroll.json not found (run /aroll/prompts first)")
-    targets = select_targets(manifest, line_ids, only_missing)
+    targets = select_targets(project_id, episode, manifest, line_ids, only_missing)
     plan = build_generation_plan(targets, max_reuse=max_reuse, min_gap=min_gap, use_library=use_library)
     unkeyed = sum(1 for e in plan["generate"] if e["variant_id"] is None)
     return {
@@ -1678,7 +1769,7 @@ async def run_batch(
     """
     key = _job_key(project_id, episode)
     manifest = load_manifest(project_id, episode) or {}
-    targets = select_targets(manifest, line_ids, only_missing)
+    targets = select_targets(project_id, episode, manifest, line_ids, only_missing)
     plan = build_generation_plan(targets, max_reuse=max_reuse, min_gap=min_gap, use_library=use_library)
     generate_entries = plan["generate"]
     copy_by_source: dict[str, list[dict]] = {}

@@ -2373,7 +2373,7 @@
                       <button class="btn btn-sm" @click="loadCutoutPlan()" :disabled="cutoutPlanBusy">🔄 試算</button>
                       <template x-if="cutoutPlan">
                         <span style="font-size:12px;color:#94a3b8"
-                              x-text="`在庫で ${cutoutPlan.from_stock} 行（無料）／ 新規生成が要る ${cutoutPlan.need_generation} 行 ≈ $${(cutoutPlan.need_generation * 0.04).toFixed(2)}`"></span>
+                              x-text="`在庫で ${cutoutPlan.from_stock} 行（無料）／ 新規生成が要る ${cutoutPlan.need_generation} 行 ≈ $${(cutoutPlan.need_generation_cuts * 0.04).toFixed(2)}`"></span>
                       </template>
                       <template x-if="cutoutPlan && cutoutPlan.from_stock">
                         <button class="btn btn-primary btn-sm" :disabled="cutoutPlanBusy || arollRunning"
@@ -9072,20 +9072,34 @@ function app() {
     get arollJob() { return this.arollStatus?.job || {}; },
     // 対象セレクトに応じたバッチ対象枚数（概算コスト表示用。プロンプトの無い行は対象外）
     get arollBatchTargetCount() {
-      // ⚠️ ナレーション行（映すキャラが居ない）は課金生成の対象外。
-      //    バックエンドの aroll_manager.select_targets と条件を揃える
-      //    （ここだけ多く数えると「押したのに枚数が違う」になる）。
-      const panels = this.arollPanels.filter(
-        p => (p.prompt || '').trim() && (p.characters || []).length);
-      if (this.arollTarget === 'all') return panels.length;
-      if (this.arollTarget === 'failed') return panels.filter(p => p.status === 'failed').length;
-      return panels.filter(p => p.status !== 'done').length;
+      // ⚠️ **カット単位で数える**（穴9 §15-1・2026-09-21）。バックエンドの
+      //    aroll_manager.select_targets はカットの先頭行だけを対象にし、兄弟行は
+      //    generate_line_image の伝播で無料に埋まる（1カット1枚の原則）。ここを行数の
+      //    ままにすると、実際の課金枚数より多く見せてしまう（「押したのに枚数が違う」）。
+      const cuts = this.arollCuts?.cuts || [];
+      if (!cuts.length) return 0;
+      const panelById = {};
+      for (const p of this.arollPanels) panelById[p.line_id] = p;
+      let count = 0;
+      for (const c of cuts) {
+        const members = c.line_ids.map(lid => panelById[lid]).filter(Boolean);
+        const head = members[0];
+        if (!head || !(head.prompt || '').trim() || !(head.characters || []).length) continue;
+        if (this.arollTarget === 'failed') {
+          if (members.some(m => m.status === 'failed')) count++;
+        } else if (this.arollTarget === 'all') {
+          count++;
+        } else if (!members.every(m => m.status === 'done' || m.cutout_slot_id)) {
+          count++;   // 'missing': カット全体が既に決まっていれば対象外
+        }
+      }
+      return count;
     },
-    // 在庫で賄える行を引いた「実際に課金される枚数」。試算前は null。
+    // 在庫で賄える分（カット単位）を引いた「実際に課金される枚数」。試算前は null。
     // ★先に高い数字を見せて後から安い数字を出すのは順序が逆だった（§1-5）。
     get arollBillableCount() {
       if (!this.cutoutPlan || this.arollTarget !== 'missing') return null;
-      return Math.max(0, this.arollBatchTargetCount - (this.cutoutPlan.from_stock || 0));
+      return Math.max(0, this.arollBatchTargetCount - (this.cutoutPlan.from_stock_cuts || 0));
     },
     arollImageUrl(p) {
       return `${this.arollApiBase}/image/${p.image}?v=${this.arollImgVersion}`;

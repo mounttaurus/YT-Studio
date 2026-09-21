@@ -822,8 +822,11 @@ async def run_aroll_batch(project_id: str, episode_number: int,
                           only_missing: bool = True,
                           line_ids: Optional[list] = None,
                           allow_paid_fallback: bool = False) -> dict:
-    """Aロールのパネル画像をバッチ生成する(NanoBanana・外部API課金 ≈$0.04/枚×対象行数)。
+    """Aロールのパネル画像をバッチ生成する(NanoBanana・外部API課金 ≈$0.04/枚)。
 
+    ⚠️ 課金は行数ではなく**カット数**（同じ画像を共有する連続行の単位）で決まる。対象が
+    複数行にまたがるカットなら、先頭行だけ課金され残りの行は自動で同じ絵を共有する
+    （実際に生成される枚数は行数より少なくなりうる）。
     バックグラウンド実行＝この呼び出しは即返る。進捗は aroll_status でポーリングする。
     only_missing=True(既定)は生成済みをスキップ＝中断後の再開・失敗行の再試行を兼ねる。
     allow_paid_fallback は既定False＝Gemini失敗時もOpenRouter(Free表示でも課金)へ退避しない。
