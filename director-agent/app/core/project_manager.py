@@ -157,6 +157,20 @@ def get_psassist_qa(project_id: str, episode_number: int) -> dict | None:
     return _read_json(f)
 
 
+def get_psassist_plan(project_id: str, episode_number: int) -> dict | None:
+    """build_plan が書いた panel_plan.json を返す。未実行ならNone。
+
+    T3（要組み直し判定）が「プラン作成時点で使われていたcutout」を知るために読む。
+    """
+    ep = episode_dir(project_id, episode_number)
+    if ep is None:
+        return None
+    f = ep / "psassist" / "panel_plan.json"
+    if not f.exists():
+        return None
+    return _read_json(f)
+
+
 def psassist_file(project_id: str, episode_number: int, rel: str) -> Path | None:
     """psassist/ 配下のファイルの実パスを返す（パストラバーサル防止）。"""
     ep = episode_dir(project_id, episode_number)

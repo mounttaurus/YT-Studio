@@ -1075,17 +1075,20 @@ async def psassist_run(project_id: str, episode_number: int, kind: str,
                        lines: Optional[list[str]] = None) -> dict:
     """host_worker.py（ホスト常駐のPhotoshop工程）へジョブを1件キューに積む。
 
-    ⚠️ **`cutout` / `build_panel` / `export_png` は Photoshop を占有する。** 他の用途で
+    ⚠️ **`cutout` / `build_panel` / `export_png` / `resync` は Photoshop を占有する。** 他の用途で
     Photoshopを使っていると衝突する。**実行前に必ずユーザーへ確認を取ってから呼ぶこと。**
 
     kind: "build_plan"（配置計画）| "cutout"（キャラ切り抜き・Photoshop占有）|
     "build_panel"（コマ合成・Photoshop占有）| "qa_check"（検査・結果はpsassist_qaで読む）|
-    "export_png"（納品PNG書き出し・Photoshop占有）。
+    "export_png"（納品PNG書き出し・Photoshop占有）|
+    "resync"（T3: 在庫を選び直した行を①build_plan→③build_panel→④qa_check→⑤export_pngで
+    1ジョブに連鎖して組み直す・Photoshop占有・要組み直しの行だけが対象）。
 
     lines: 対象行のline_id配列。build_plan/cutout/build_panel/qa_checkは省略で「全件」。
-    ⚠️ **export_png だけは lines 省略不可**（空/省略はエラーになる）。理由: 進捗の
-    `--resume` はファイルの更新日時を見ないため、全件指定だと直した行だけ描き出すつもりが
-    古い版のまま飛ばされる。直した行のline_idを明示すること。
+    ⚠️ **export_png と resync だけは lines 省略不可**（空/省略はエラーになる）。
+    export_pngの理由: 進捗の `--resume` はファイルの更新日時を見ないため、全件指定だと
+    直した行だけ描き出すつもりが古い版のまま飛ばされる。直した行のline_idを明示すること。
+    resyncの理由: 「要組み直し」の対象を明示させる設計（全件を毎回殴らない）。
 
     ⚠️ **先に psassist_worker_status() で alive を確認すること。** worker が動いていないと
     ジョブはキューに積まれるだけで何も実行されない（無言で放置される）。

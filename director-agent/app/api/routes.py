@@ -73,6 +73,19 @@ async def get_psassist_qa(project_id: str, episode_number: int):
     return data
 
 
+@router.get("/projects/{project_id}/episodes/{episode_number}/psassist/plan")
+async def get_psassist_plan(project_id: str, episode_number: int):
+    """組版プラン（psassist/panel_plan.json・build_plan が書く）。
+
+    T3: 「プラン作成時点で使われていたcutout」と「現在のaroll.jsonのcutout」を
+    突き合わせて「要組み直し」を判定するために使う（Docs/AROLL_UNIFIED_FLOW_PLAN.md §17）。
+    """
+    data = project_manager.get_psassist_plan(project_id, episode_number)
+    if data is None:
+        raise HTTPException(status_code=404, detail="panel_plan.json not found")
+    return data
+
+
 @router.get("/projects/{project_id}/episodes/{episode_number}/psassist/file/{rel:path}")
 async def get_psassist_file(project_id: str, episode_number: int, rel: str):
     """psassist/ 配下の表示用画像を配信する（サムネ・詳細ビュー・納品PNG）。"""
@@ -91,9 +104,11 @@ async def get_psassist_file(project_id: str, episode_number: int, rel: str):
 
 # host_worker.py が実行できる工程。director はこの文字列だけを知り、Photoshop 固有の
 # 詳細（COM・JSX・PSD）には触れない（AROLL_TAB_REDESIGN_PLAN.md §2-6）。
-_PSASSIST_JOB_KINDS = {"build_plan", "cutout", "build_panel", "qa_check", "export_png"}
-# lines 省略で「全件」を意味する工程。export_png だけは対象行の明示を必須にする
-#（--resume が mtime を見ないため、全件指定だと直した行が飛ばされる。Phase 0-c）。
+# resync（T3）は①③④⑤を1ジョブで連鎖する複合工程。AROLL_UNIFIED_FLOW_PLAN.md §17。
+_PSASSIST_JOB_KINDS = {"build_plan", "cutout", "build_panel", "qa_check", "export_png", "resync"}
+# lines 省略で「全件」を意味する工程。export_png と resync は対象行の明示を必須にする
+#（--resume が mtime を見ないため、全件指定だと直した行が飛ばされる。Phase 0-c。
+# resync も「要組み直しの行だけ」を明示させる設計のため同じ扱い）。
 _PSASSIST_KINDS_ALLOW_ALL = {"build_plan", "cutout", "build_panel", "qa_check"}
 
 

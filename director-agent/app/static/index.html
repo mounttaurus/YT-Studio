@@ -2733,6 +2733,17 @@
                         @click="arollBulkBackground()"
                         title="選択行の背景を自動で割り当て直します（無料）">🏞️ 背景を割り当て直す</button>
 
+                <!-- T3: 選び直した絵をPSD・検査・納品PNGへ反映する（Docs/AROLL_UNIFIED_FLOW_PLAN.md §17） -->
+                <button class="btn btn-sm" x-show="psassistAvailable"
+                        :disabled="!arollRowFilterCount('restale')"
+                        @click="arollCheckRestale()"
+                        title="要組み直しの行だけをチェックします">♻️ 要組み直しを選択</button>
+
+                <button class="btn btn-sm" x-show="psassistAvailable"
+                        :disabled="!arollSelected.length || psassistJobBusy"
+                        @click="psassistResync(arollSelected)"
+                        title="選択行のPSD・検査・納品PNGを組み直します（Photoshop占有・確認あり）">🔧 選択行を組み直す</button>
+
                 <template x-for="axis in [['emotion','表情'],['shot','ショット'],['angle','アングル'],['pose','ポーズ']]" :key="axis[0]">
                   <select style="font-size:11px;padding:3px;width:auto"
                           :disabled="!arollSelected.length || arollBulkBusy"
@@ -2749,7 +2760,7 @@
 
               <!-- ── 絞り込み ────────────────────────────────────────── -->
               <div style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:8px">
-                <template x-for="f in [['all','すべて'],['ungenerated','未生成'],['unapproved','未確定'],['narration','ナレーション'],['drift','台本とズレ']]" :key="f[0]">
+                <template x-for="f in [['all','すべて'],['ungenerated','未生成'],['unapproved','未確定'],['restale','♻️要組み直し'],['narration','ナレーション'],['drift','台本とズレ']]" :key="f[0]">
                   <button class="btn btn-sm" :style="arollRowFilter === f[0] ? 'background:#4c1d95;color:#ede9fe' : ''"
                           @click="arollRowFilter = f[0]"
                           x-text="`${f[1]} ${arollRowFilterCount(f[0])}`"></button>
@@ -2862,6 +2873,10 @@
                                   x-text="p.image_approved_at ? '✓ 確定済' : '未確定'"></span>
                             <span class="status-badge" x-show="p.sync && p.sync !== 'ok' && p.sync !== 'missing'"
                                   :style="arollSyncStyle(p.sync)" x-text="arollSyncLabel(p.sync)"></span>
+                            <!-- T3: 組版済みだが選び直しでズレた行。合成チェックのrestaleと同じ判定 -->
+                            <span class="status-badge" x-show="arollBuildState(p.line_id) === 'restale'"
+                                  style="background:#581c87;color:#e9d5ff"
+                                  title="選び直した絵がまだPSDに反映されていません">♻️ 要組み直し</span>
                             <span x-show="p.cutout_slot_id" style="font-size:9px;color:#a5f3fc">✂️ 在庫</span>
                             <span x-show="p.background_id" style="font-size:9px;color:#64748b"
                                   :title="p.background_id">🏞️</span>
@@ -5005,6 +5020,13 @@
               <span x-show="arollPanelOf(qaDetail.line_id).image_approved_at"
                     style="font-size:10px;color:#86efac">✓ 確定済み</span>
             </div>
+
+            <!-- T3: 選び直した絵がまだPSDに反映されていない行だけ出す（Docs/AROLL_UNIFIED_FLOW_PLAN.md §17） -->
+            <button class="btn btn-sm" style="background:#581c87;color:#e9d5ff"
+                    x-show="psassistAvailable && arollBuildState(qaDetail.line_id) === 'restale'"
+                    :disabled="psassistJobBusy"
+                    @click="psassistResync([qaDetail.line_id])"
+                    title="この行のPSD・検査・納品PNGを組み直します（Photoshop占有・確認あり）">♻️ この行を組み直す</button>
 
             <!-- 在庫ピッカー（コマ一覧と同じ供給元・同じ並び） -->
             <div x-show="arollPickerFor === qaDetail.line_id"
@@ -8570,6 +8592,28 @@ function app() {
         this.psassistJobBusy = false;
       }
     },
+    // T3: 要組み直しの行を①③④⑤で1ジョブに連鎖して組み直す（Docs/AROLL_UNIFIED_FLOW_PLAN.md §17）
+    async psassistResync(lineIds) {
+      const lines = lineIds && lineIds.length ? lineIds : [];
+      if (!lines.length || this.psassistJobBusy || !this.psassistAlive) return;
+      if (this.psassistLatestJob?.status === 'running') { alert('別のジョブが実行中です'); return; }
+      if (!confirm(`♻️ 要組み直しの${lines.length}行を組み直します。`
+                 + `\n\n⚠️ この工程は Photoshop を占有します。`
+                 + `\nPhotoshop で作業中なら、先に手を止めてください。\n\n続行しますか？`)) return;
+      this.psassistJobBusy = true;
+      this.psassistCancelRequested = false;
+      try {
+        const r = await fetch(`${this.qaBase}/jobs`, {
+          method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ kind: 'resync', lines }),
+        });
+        if (!r.ok) { const d = await r.json().catch(() => ({})); alert('ジョブ投入エラー: ' + (d.detail || r.status)); return; }
+        await this.loadPsassistJobs();
+        this.psassistPollJob();
+      } finally {
+        this.psassistJobBusy = false;
+      }
+    },
     // 3秒間隔でポーリングし、running でなくなったら止めて合成チェックを再読込する
     psassistPollJob() {
       if (this.psassistJobPollTimer) clearInterval(this.psassistJobPollTimer);
@@ -8581,7 +8625,13 @@ function app() {
           this.psassistJobPollTimer = null;
           this.psassistCancelRequested = false;
           // cancelled も build_panel が途中まで進んでいる＝新しいPSDができている
-          if (job && (job.status === 'done' || job.status === 'cancelled')) { await this.loadPsassistQa(); }
+          if (job && (job.status === 'done' || job.status === 'cancelled')) {
+            await this.loadPsassistQa();
+            // resync（T3）は plan/aroll も動かすので、要組み直しバッジを消すために読み直す
+            if (job.kind === 'resync') {
+              await Promise.all([this.loadPsassistPlan(), this.loadArollManifest()]);
+            }
+          }
         }
       }, 3000);
     },
@@ -8643,7 +8693,6 @@ function app() {
     // 「まだ組んでいない行」が画面から消える＝進捗が分からない。
     get qaMerged() {
       const built = new Map((this.qa?.panels || []).map(p => [p.line_id, p]));
-      const checked = this.qa?.checked_at ? Date.parse(this.qa.checked_at) : 0;
       return this.arollPanels.map(a => {
         const q = built.get(a.line_id);
         if (!q) {
@@ -8653,11 +8702,12 @@ function app() {
             issues: [], unbuilt: true,
           };
         }
-        // 検査より後に絵を差し替えた行は、古いPSDのサムネを見せてはいけない
-        // （直したつもりが直っていない/直したのに古い指摘が残る、どちらも起きる）
-        const src = Math.max(Date.parse(a.generated_at || 0) || 0,
-                             Date.parse(a.cutout_assigned_at || 0) || 0);
-        if (checked && src > checked) {
+        // T3: 組んだ時点のcutoutと現在のcutoutがズレている行は、古いPSDのサムネを見せてはいけない
+        // （直したつもりが直っていない/直したのに古い指摘が残る、どちらも起きる）。
+        // ⚠️ 以前は`qa.checked_at`（レポート全体で1個の時刻）と比較していたが、1行だけ
+        // 部分再検査するとchecked_atがグローバルに更新され他行の判定が狂う欠陥があった
+        // （arollBuildStateはpanel_plan.json比較なのでこの問題が無い）。
+        if (this.arollBuildState(a.line_id) === 'restale') {
           return { ...q, severity: 'restale', issues: [], thumb: null, view: null, restale: true };
         }
         return q;
@@ -8683,6 +8733,38 @@ function app() {
     // その行のAロール情報（プロンプト・slot・割当）を引く。編集操作の対象
     arollPanelOf(lineId) {
       return this.arollPanels.find(a => a.line_id === lineId) || null;
+    },
+    // T3: panel_plan.json（build_planが最後に作った時点のスナップショット）から、
+    // その行が「プラン作成時点」で使っていたcutout由来slot_idを逆算する。
+    // 在庫から選ばれた絵は character.image が ".../panel_library/cutouts/{slot_id}.png"
+    // になる（psassist/psassist-agent/app/core/plan_builder.py の _library_cutout_path）。
+    // 旧形式（cutoutを経由しない生成画像そのまま）は判定対象外としてnullを返す。
+    arollPlanCutoutSlot(lineId) {
+      const p = (this.psassistPlan?.panels || []).find(x => x.line_id === lineId);
+      const img = p?.character?.image;
+      if (!img || !/[\\/]cutouts?[\\/]/.test(img)) return null;
+      const base = img.replace(/\\/g, '/').split('/').pop() || '';
+      return base.endsWith('.png') ? base.slice(0, -4) : null;
+    },
+    // T3: 行の組版状態（TTSのlineTtsStateと同型）。
+    //   ungenerated = 絵がまだ無い / unplanned = ①プラン未作成 / unbuilt = ③PSD未組版 /
+    //   restale = PSDはあるがプラン作成時点のcutoutと現在のcutoutがズレている（要組み直し）/
+    //   built = 最新
+    // ⚠️ 旧qaMergedの`restale`判定（checked_at と cutout_assigned_at のグローバル時刻比較）は
+    // 1行だけ再検査すると他行の判定を誤らせる欠陥があった。ここはplan.json比較に置き換えている。
+    arollBuildState(lineId) {
+      const a = this.arollPanelOf(lineId);
+      if (!a) return 'unknown';
+      if (!a.cutout_slot_id && !a.image) return 'ungenerated';
+      const planPanels = this.psassistPlan?.panels;
+      if (!planPanels || !planPanels.some(p => p.line_id === lineId)) return 'unplanned';
+      const built = (this.qa?.panels || []).some(p => p.line_id === lineId);
+      if (!built) return 'unbuilt';
+      if (a.cutout_slot_id) {
+        const planSlot = this.arollPlanCutoutSlot(lineId);
+        if (planSlot !== a.cutout_slot_id) return 'restale';
+      }
+      return 'built';
     },
     // まだ組んでいない行のサムネ。割当済みの切り抜き → 生成した絵、の順で出す
     // （どちらも無ければ「まだ絵が無い」＝生成か在庫選択が要る行）
@@ -9125,6 +9207,15 @@ function app() {
       } catch { this.qa = null; }
       finally { this.qaBusy = false; this.qaVersion++; }
     },
+    // T3: 「要組み直し」判定（arollBuildState）の材料。build_plan が最後に作った
+    // panel_plan.json＝「プラン作成時点で使われていたcutout」のスナップショット。
+    async loadPsassistPlan() {
+      if (!this.currentProject || !this.activeEpisodeNumber) { this.psassistPlan = null; return; }
+      try {
+        const r = await fetch(`${this.qaBase}/plan`);
+        this.psassistPlan = r.ok ? await r.json() : null;
+      } catch { this.psassistPlan = null; }
+    },
 
     // ─── 🖼️ Aロールタブ（マンガ形式パネル） ────────────────────────
     get arollApiBase() {
@@ -9215,6 +9306,7 @@ function app() {
         case 'unapproved':  return ps.filter(p => p.status === 'done' && p.image && !p.image_approved_at);
         case 'narration':   return ps.filter(p => !(p.characters || []).length);
         case 'drift':       return ps.filter(p => p.sync && p.sync !== 'ok');
+        case 'restale':     return ps.filter(p => this.arollBuildState(p.line_id) === 'restale');
         default:            return ps;
       }
     },
@@ -9233,6 +9325,11 @@ function app() {
       for (const p of this.arollRowsFiltered) this.arollChecked[p.line_id] = on;
     },
     arollClearChecked() { this.arollChecked = {}; },
+    // T3: 要組み直しの行だけをチェック状態にする（一括操作バーの「♻️ 要組み直しを選択」）
+    arollCheckRestale() {
+      this.arollChecked = {};
+      for (const p of this.arollRowsFor('restale')) this.arollChecked[p.line_id] = true;
+    },
     // 表の小サムネ。割当済みの切り抜き → 生成した絵、の順（QAのfallbackと同じ供給元）
     arollRowThumb(p) {
       if (p.cutout_slot_id) {
@@ -9399,6 +9496,7 @@ function app() {
       //   先に「在庫で賄えない分だけの金額」を見せるべき（§3-a）。
       if (this.arollManifest) await this.loadCutoutPlan();
       await this.loadPsassistQa();
+      await this.loadPsassistPlan();
       await this.loadPsassistWorker();   // タブを開いた時だけ（話数を切り替えるたびには叩かない）
       await this.loadPsassistJobs();
     },

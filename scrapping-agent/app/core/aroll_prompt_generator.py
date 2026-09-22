@@ -60,7 +60,7 @@ PROMPT_TEMPLATE = """以下はYouTube動画の台本の1章分です。各セリ
 {characters_block}
 
 ルール:
-- "characters" は映すキャラの char_id を1〜2人。基本はその行の話者。会話の掛け合いで聞き手のリアクションや対面カット(two shot)が効果的な行では2人にする。
+- "characters" は映すキャラの char_id を1人だけ（その行の話者）。2ショット（対面カット・聞き手を同時に映す構図）は使わない ── 吹き出しが画面の30〜50%を占めるため2人を画角に収めると必ずどちらかが吹き出しに被る。
 - "prompt" は英語。表情・ポーズ・ショットを含める。髪型・服装・顔立ちは書かない（参照画像が担保する）。
 - 【最重要】本文中でキャラに言及する時、名前を書いてはいけない。必ず char_id を角括弧で囲んだ
   タグ（例: [002]）を使うこと（主語・目的語・所有格すべて）。名前はこちらで機械的に差し込むため、
@@ -261,7 +261,7 @@ def substitute_char_tags(text: str, known_chars: dict[str, dict]) -> str:
 def _normalize_characters(
     raw: list, known_chars: dict[str, dict], speaker_char_id: str,
 ) -> list[str]:
-    """LLM出力のキャラ列をchar_idへ正規化する（名前ゆらぎ対応・最大2人）。
+    """話者1人だけのキャラ列を返す（2ショット禁止・2026-09-21ユーザー判断）。
 
     known_chars: {char_id: {"name": ...}}（**描けるキャラだけ**が入っている）
 
@@ -271,39 +271,44 @@ def _normalize_characters(
       人物が写っていない」表現は成立しないので、ここは自然文の指示に頼らず機械で担保する
       （memory ``aroll-two-shot-subchar-failure``: 自然文指示は信用しない）。
 
-    ★2人目は演出の選択なので残す。対面カット/リアクションの2ショットは意図した設計。
+    ★**2人目は常に捨てる**（2026-09-21・方針転換）。吹き出しが画面の30〜50%を占めるため
+      完全な2ショットは成立せず、参照元動画も相手は画面端の見切れでしか写していない
+      （memory ``aroll-two-shot-is-cropped-composition``）。どうしても2ショットが要る場合は
+      ユーザーが手動合成する運用とし、自動生成・自動選定からは2ショットを排除する
+      （memory ``aroll-two-shot-banned-by-design``）。``raw`` にLLMが2人目を含めて返して
+      来ても無視する（PROMPT_TEMPLATE側でも1人指定に変更済みだが、自然文指示は信用しない
+      という既存方針どおり機械側でも強制する）。
 
     ★話者が ``known_chars`` に居ない = **その話者は描けない**（声だけのキャラ）。
       その場合は空配列を返す ＝ ナレーション（キャラ無し・背景のみのコマ）。
       ここで別のキャラを代役に立てない ── 喋っていない人物が写ることになるため。
-    """
-    if speaker_char_id and speaker_char_id not in known_chars:
-        return []  # ナレーション。代役を立てない
 
-    out: list[str] = []
+    ★話者が**未割当**（``speaker_char_id`` が空）の時だけ、従来どおりLLM出力から
+      1人だけ拾う（名前ゆらぎ解決も含む）。空パネルより救済を優先する既存方針は
+      2ショット禁止と無関係なので維持する。
+    """
     if speaker_char_id:
-        out.append(speaker_char_id)  # 話者は必ず映る
+        if speaker_char_id not in known_chars:
+            return []  # ナレーション。代役を立てない
+        return [speaker_char_id]  # 2人目は常に捨てる（2026-09-21・方針転換）
+
     for token in raw if isinstance(raw, list) else []:
         t = str(token).strip()
         if not t:
             continue
         if t in known_chars:
-            resolved = t
-        else:
-            # 名前一致（完全→部分）で拾う
-            resolved = next(
-                (cid for cid, c in known_chars.items() if c.get("name") and c["name"] == t),
-                None,
-            ) or next(
-                (cid for cid, c in known_chars.items()
-                 if c.get("name") and (t in c["name"] or c["name"] in t)),
-                None,
-            )
-        if resolved and resolved not in out:
-            out.append(resolved)
-        if len(out) >= 2:
-            break
-    return out
+            return [t]
+        resolved = next(
+            (cid for cid, c in known_chars.items() if c.get("name") and c["name"] == t),
+            None,
+        ) or next(
+            (cid for cid, c in known_chars.items()
+             if c.get("name") and (t in c["name"] or c["name"] in t)),
+            None,
+        )
+        if resolved:
+            return [resolved]
+    return []
 
 
 async def generate_section_prompts(

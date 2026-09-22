@@ -55,8 +55,9 @@ sys.path.insert(0, os.path.join(PSASSIST_ROOT, "psassist-agent"))
 
 # Phase 5 で組版の全工程を載せた。director はこの文字列だけを知る（§2-6）。
 # ★Photoshop を占有するものと、しないものを分けて持つ。UI が警告を出し分けるため。
-CAPABILITIES = ["build_plan", "cutout", "build_panel", "qa_check", "export_png"]
-NEEDS_PHOTOSHOP = {"cutout", "build_panel", "export_png"}
+# resync（T3）は①③④⑤を1ジョブで連鎖する複合工程。lines必須（対象を明示する設計）。
+CAPABILITIES = ["build_plan", "cutout", "build_panel", "qa_check", "export_png", "resync"]
+NEEDS_PHOTOSHOP = {"cutout", "build_panel", "export_png", "resync"}
 JOB_KINDS = set(CAPABILITIES)
 DEFAULT_INTERVAL = 1.5
 
@@ -415,6 +416,34 @@ def run_build_panel_job(ep_dir: str, job: dict, log: list[str], on_line=None) ->
     return result
 
 
+def run_resync_job(ep_dir: str, job: dict, log: list[str], on_line=None) -> dict:
+    """T3: 「選び直す」で変わった行を①③④⑤で1ジョブに連鎖する（Docs/AROLL_UNIFIED_FLOW_PLAN.md §17）。
+
+    ⚠️ **①build_plan は対象行だけに絞らず常に全件で実行する。** build_plan自体がlines非対応
+    （常に aroll.json 全体からプランを作り直す）ためで、副作用として他行のプランも
+    最新化されるが、③④⑤は job の lines で絞っているため他行のPSD/検査/納品PNGは触らない。
+    """
+    lines = job.get("lines") or []
+    if not lines:
+        raise ValueError("lines が空です（対象ゼロ）")
+
+    plan_result = run_build_plan_job(ep_dir, job, log)
+    log.append("① プラン再構築: %d件" % plan_result.get("panels", 0))
+
+    panel_result = run_build_panel_job(ep_dir, {**job, "lines": lines}, log, on_line=on_line)
+    log.append("③ コマを組み直し: %d/%d行" % (panel_result.get("lines", 0), panel_result.get("total", 0)))
+    if panel_result.get("cancelled"):
+        return {"cancelled": True, "plan": plan_result, "build": panel_result}
+
+    qa_result = run_qa_check_job(ep_dir, {**job, "lines": lines}, log)
+    log.append("④ 検査: %d枚" % qa_result.get("checked", 0))
+
+    export_result = run_export_png_job(ep_dir, {**job, "lines": lines}, log)
+    log.append("⑤ 納品PNG書き出し: %s" % export_result)
+
+    return {"plan": plan_result, "build": panel_result, "qa": qa_result, "export": export_result}
+
+
 def run_export_png_job(ep_dir: str, job: dict, log: list[str]) -> dict:
     lines = job.get("lines") or []
     if not lines:
@@ -531,6 +560,8 @@ def process_job(ep_dir: str, job_path: str) -> None:
             result = run_cutout_job(ep_dir, job, log, on_line=on_line)
         elif kind == "build_panel":
             result = run_build_panel_job(ep_dir, job, log, on_line=on_line)
+        elif kind == "resync":
+            result = run_resync_job(ep_dir, job, log, on_line=on_line)
         status = "cancelled" if result.get("cancelled") else "done"
     except Exception as e:
         log.append("エラー: %s" % e)

@@ -125,11 +125,18 @@ def plan_episode(cuts: list[dict], stock_by_char: dict[str, list[dict]],
 
     out: dict[str, dict] = {}
     prev_shot: str | None = None
-    prev_facing: str | None = None
+    # ⚠️ 向きは話者ごとに独立管理する（2026-09-21実測）。グローバル1本にすると、
+    # 話者が毎行厳密に交互する台本（掛け合い調）でリングの偶数/奇数位置に固定され、
+    # 片方の話者がfacings_inの先頭（front）に永久に届かなくなる
+    # （リング長6・話者2人で完全にパリティが割れる）。話者自身の直前の向きだけを
+    # 避けるのが「直前と同じ向きを避ける」の本来の意図であり、他話者の向きに
+    # 引きずられる理由はない。
+    prev_facing_by_char: dict[str | None, str] = {}
     for run in runs:
         char_id = char_of_cut.get(run[0]["cut_id"])
         entries = stock_by_char.get(char_id) or [] if char_id else []
         pool = available(entries)
+        prev_facing = prev_facing_by_char.get(char_id)
         wants = plan_run(len(run), pool, prev_shot, facings_in(entries), prev_facing)
         for c, want in zip(run, wants):
             got = _nearest(pool, want["shot"]) if want["shot"] != "unknown" else None
@@ -144,5 +151,5 @@ def plan_episode(cuts: list[dict], stock_by_char: dict[str, list[dict]],
             }
             if got:
                 prev_shot = got
-            prev_facing = want["facing"]
+            prev_facing_by_char[char_id] = want["facing"]
     return out
