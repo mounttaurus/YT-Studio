@@ -8593,11 +8593,18 @@ function app() {
       }
     },
     // T3: 要組み直しの行を①③④⑤で1ジョブに連鎖して組み直す（Docs/AROLL_UNIFIED_FLOW_PLAN.md §17）
-    async psassistResync(lineIds) {
+    // silent=true: 選び直し直後の自動呼び出し用（確認ダイアログを出さない・実行中でも黙って諦める。
+    // 完全自動化はユーザー承認2026-09-22。取りこぼした行は「♻️要組み直し」バッジに残り続けるので、
+    // 後から「🔧要組み直しを選択」→手動の組み直しで拾える＝データが失われるわけではない）
+    async psassistResync(lineIds, { silent = false } = {}) {
       const lines = lineIds && lineIds.length ? lineIds : [];
-      if (!lines.length || this.psassistJobBusy || !this.psassistAlive) return;
-      if (this.psassistLatestJob?.status === 'running') { alert('別のジョブが実行中です'); return; }
-      if (!confirm(`♻️ 要組み直しの${lines.length}行を組み直します。`
+      if (!lines.length || !this.psassistAlive) return;
+      if (this.psassistJobBusy || this.psassistLatestJob?.status === 'running') {
+        if (silent) { this.arollMsg = '♻️ 他の組版ジョブが実行中のため自動組み直しを見送りました。後で「🔧要組み直しを選択」から反映してください'; }
+        else { alert('別のジョブが実行中です'); }
+        return;
+      }
+      if (!silent && !confirm(`♻️ 要組み直しの${lines.length}行を組み直します。`
                  + `\n\n⚠️ この工程は Photoshop を占有します。`
                  + `\nPhotoshop で作業中なら、先に手を止めてください。\n\n続行しますか？`)) return;
       this.psassistJobBusy = true;
@@ -8607,7 +8614,12 @@ function app() {
           method: 'POST', headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ kind: 'resync', lines }),
         });
-        if (!r.ok) { const d = await r.json().catch(() => ({})); alert('ジョブ投入エラー: ' + (d.detail || r.status)); return; }
+        if (!r.ok) {
+          const d = await r.json().catch(() => ({}));
+          const msg = 'ジョブ投入エラー: ' + (d.detail || r.status);
+          if (silent) { this.arollMsg = msg; } else { alert(msg); }
+          return;
+        }
         await this.loadPsassistJobs();
         this.psassistPollJob();
       } finally {
@@ -9816,6 +9828,9 @@ function app() {
           p.cutout_slot_id = d.cutout_slot_id;
           p.cutout_char_id = (p.characters || [])[0];
           this.arollImgVersion++;
+          // T3: 選び直した直後に自動で組み直し（③④⑤）まで走らせる（完全自動・ユーザー承認2026-09-22）。
+          // await しない＝ピッカーはすぐ閉じ、進捗は既存の psassistPollJob が拾う
+          if (this.psassistAvailable) this.psassistResync([p.line_id], { silent: true });
         } else {
           this.arollMsg = (await r.json()).detail || '割り当てに失敗しました';
         }
