@@ -5750,6 +5750,7 @@ function app() {
     // 🖥️ ホスト工程ブリッジ（host_worker.py・AROLL_TAB_REDESIGN_PLAN.md Phase 0）
     psassistWorker: null,         // GET /psassist/worker（プロジェクト非依存・タブを開いた時だけ叩く）
     psCutoutPending: null,        // P4: この話数が使うキャラのPS切り抜き未処理枚数の合計（null=未取得）
+    charLibVersions: {},          // 要組み直し判定用: {char_id: {slot_id: recut_ps_at||created_at}}
     psassistJobs: [],             // その話数のジョブ状態（新しい順）
     psassistJobBusy: false,       // ジョブ投入中
     psassistJobPollTimer: null,   // ポーリング用 setInterval の id
@@ -8540,6 +8541,27 @@ function app() {
         this.psCutoutPending = results.reduce((sum, r) => sum + (r?.pending || 0), 0);
       } catch { this.psCutoutPending = null; }
     },
+    // 要組み直し判定（P2の中身差し替え検知）用。charIdごとにpanel_libraryを1回だけ取得し
+    // {slot_id: recut_ps_at||created_at} のマップにする。バッジ自体は既存のarollBuildState
+    // に相乗りする（Docs/CUTOUT_PS_PRIMARY_PLAN.md P2注記・新しい仕組みは作らない）。
+    async loadCharLibVersions() {
+      const charIds = [...new Set((this.arollManifest?.panels || [])
+        .map(p => p.cutout_char_id).filter(Boolean))];
+      if (!charIds.length) { this.charLibVersions = {}; return; }
+      try {
+        const entries = await Promise.all(charIds.map(id =>
+          fetch(`${FAPI}/characters/${id}/panel_library?kind=`).then(r => r.ok ? r.json() : null)));
+        const out = {};
+        charIds.forEach((id, i) => {
+          const map = {};
+          for (const e of (entries[i]?.entries || [])) {
+            map[e.slot_id] = e.recut_ps_at || e.created_at || null;
+          }
+          out[id] = map;
+        });
+        this.charLibVersions = out;
+      } catch { this.charLibVersions = {}; }
+    },
     // qaMerged から EXPORT_STALE / EXPORT_MISSING を持つ行だけを拾う
     // （「納品PNGを更新」の対象＝もう計算材料はある。§3-a と同じ考え方）。
     get psassistExportTargets() {
@@ -8829,6 +8851,13 @@ function app() {
       const base = img.replace(/\\/g, '/').split('/').pop() || '';
       return base.endsWith('.png') ? base.slice(0, -4) : null;
     },
+    // P2（Docs/CUTOUT_PS_PRIMARY_PLAN.md）: slot_idは在庫のPS取り込みでも不変なので、
+    // 上のarollPlanCutoutSlotだけでは「同じファイル名のまま中身だけ差し替わった」を
+    // 検知できない。plan_builder.pyがプラン作成時点で記録したcutout_versionを返す。
+    arollPlanCutoutVersion(lineId) {
+      const p = (this.psassistPlan?.panels || []).find(x => x.line_id === lineId);
+      return p?.character?.cutout_version || null;
+    },
     // T3: 行の組版状態（TTSのlineTtsStateと同型）。
     //   ungenerated = 絵がまだ無い / unplanned = ①プラン未作成 / unbuilt = ③PSD未組版 /
     //   restale = PSDはあるがプラン作成時点のcutoutと現在のcutoutがズレている（要組み直し）/
@@ -8846,6 +8875,12 @@ function app() {
       if (a.cutout_slot_id) {
         const planSlot = this.arollPlanCutoutSlot(lineId);
         if (planSlot !== a.cutout_slot_id) return 'restale';
+        // P2（Docs/CUTOUT_PS_PRIMARY_PLAN.md）: slot_idが同じでも、host_workerのPS取り込みで
+        // cutouts/{slot_id}.pngの中身だけ差し替わっていることがある（ファイル名は不変）。
+        // プラン作成時点の版（cutout_version）と現在の版を突き合わせて検知する。
+        const planVersion = this.arollPlanCutoutVersion(lineId);
+        const curVersion = this.charLibVersions[a.cutout_char_id]?.[a.cutout_slot_id];
+        if (planVersion && curVersion && planVersion !== curVersion) return 'restale';
       }
       return 'built';
     },
@@ -9587,6 +9622,7 @@ function app() {
       await this.loadPsassistPlan();
       await this.loadPsassistWorker();   // タブを開いた時だけ（話数を切り替えるたびには叩かない）
       await this.loadPsCutoutStatus();   // P4: 上のworker/manifestに依存するのでこの後
+      await this.loadCharLibVersions();  // 要組み直し判定（arollBuildStateが使う）
       await this.loadPsassistJobs();
     },
     async loadArollSync() {

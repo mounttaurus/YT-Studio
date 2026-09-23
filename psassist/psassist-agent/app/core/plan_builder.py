@@ -632,6 +632,15 @@ def build(paths: Paths | None = None) -> dict[str, Any]:
                     "scale": char_scale,
                     "overlap": ov.get("overlap"),
                     "overlap_resolved": ov.get("resolved"),
+                    # ⚠️ slot_idは在庫のPS取り込み（Docs/CUTOUT_PS_PRIMARY_PLAN.md P2）でも
+                    # 不変（cutouts/{slot_id}.pngを中身だけ上書きする）。プラン作成時点の
+                    # 「その絵の版」を別途記録しないと、要組み直し判定（restale）がslot_id
+                    # 一致だけでは中身の差し替えを検知できない。director側のarollBuildStateが
+                    # 現在の版と突き合わせる（lib_entryが無い=在庫を貼らない行はnull）。
+                    "cutout_version": (
+                        (lib_entry.get("recut_ps_at") or lib_entry.get("created_at"))
+                        if lib_entry is not None else None
+                    ),
                 },
                 "background": {
                     "bg_id": bg_id,
