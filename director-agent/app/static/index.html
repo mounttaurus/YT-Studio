@@ -2498,6 +2498,13 @@
                       </div>
                     </template>
                   </div>
+                  <!-- P4（Docs/CUTOUT_PS_PRIMARY_PLAN.md）: 見える化。workerが止まっていて
+                       未処理が残っている時だけ目立たせる（それ以外は静かな情報表示）。 -->
+                  <div x-show="psCutoutPending !== null" style="font-size:11px;margin-top:8px"
+                       :style="(!psassistAlive && psCutoutPending > 0) ? 'color:#fca5a5;font-weight:600' : 'color:#64748b'">
+                    🖼️ PS切り抜き 未処理 <span x-text="psCutoutPending"></span>枚
+                    ・worker: <span x-text="psassistAlive ? '稼働中' : '停止中'"></span>
+                  </div>
                   <div style="font-size:11px;color:#64748b;margin-top:12px;line-height:1.8;border-top:1px solid #2d3748;padding-top:10px">
                     <b style="color:#94a3b8">直す作業に入るなら、ホスト側でこれを出しっぱなしにする</b>
                     ── Photoshop で保存するたびに、その1枚だけ自動で検査し直します（Photoshop は占有しません）。
@@ -3796,8 +3803,13 @@
                   <div :style="`cursor:zoom-in;border-radius:6px;overflow:hidden;border:2px solid ${charLibBorder(e)};`
                               + (e.usable?.panel ? 'background:#334155' : 'background:#808080')"
                        @click="charLib.detail = e">
-                    <img :src="charLibThumbUrl(e)" loading="lazy"
-                         style="width:100%;display:block;aspect-ratio:16/9;object-fit:contain">
+                    <div style="position:relative">
+                      <img :src="charLibThumbUrl(e)" loading="lazy"
+                           style="width:100%;display:block;aspect-ratio:16/9;object-fit:contain">
+                      <span x-show="charLibNeedsPs(e)"
+                            title="Photoshop本線化はまだ（rembgの仮切り抜き）。host_workerが裏で仕上げ次第、自動でPS版に差し替わります"
+                            style="position:absolute;top:3px;left:3px;font-size:9px;padding:1px 6px;border-radius:99px;background:#78350f;color:#fde68a">仮</span>
+                    </div>
                     <div style="padding:4px 6px;display:flex;align-items:center;gap:4px;background:#0f172a">
                       <span style="font-size:11px" x-text="e.review_status === 'pending' ? '⏳' : '✔'"></span>
                       <span style="font-size:10px" x-show="e.usable?.panel" title="背景付きコマとして使える">🖼️</span>
@@ -5737,6 +5749,7 @@ function app() {
 
     // 🖥️ ホスト工程ブリッジ（host_worker.py・AROLL_TAB_REDESIGN_PLAN.md Phase 0）
     psassistWorker: null,         // GET /psassist/worker（プロジェクト非依存・タブを開いた時だけ叩く）
+    psCutoutPending: null,        // P4: この話数が使うキャラのPS切り抜き未処理枚数の合計（null=未取得）
     psassistJobs: [],             // その話数のジョブ状態（新しい順）
     psassistJobBusy: false,       // ジョブ投入中
     psassistJobPollTimer: null,   // ポーリング用 setInterval の id
@@ -8512,6 +8525,21 @@ function app() {
         this.psassistWorker = r.ok ? await r.json() : null;
       } catch { this.psassistWorker = null; }
     },
+    // P4（Docs/CUTOUT_PS_PRIMARY_PLAN.md）: この話数が使うキャラだけを対象にps-statusを
+    // 合算する（全キャラ分を毎回叩くのは無駄）。host_workerがPS本線化に対応していない
+    // 環境（capabilitiesにlibrary_cutoutが無い）では意味を持たないので取得しない。
+    async loadPsCutoutStatus() {
+      this.psCutoutPending = null;
+      if (!this.psassistWorker?.capabilities?.includes('library_cutout')) return;
+      const charIds = [...new Set((this.arollManifest?.panels || [])
+        .map(p => p.cutout_char_id).filter(Boolean))];
+      if (!charIds.length) { this.psCutoutPending = 0; return; }
+      try {
+        const results = await Promise.all(charIds.map(id =>
+          fetch(`${FAPI}/panel-library/${id}/ps-status`).then(r => r.ok ? r.json() : null)));
+        this.psCutoutPending = results.reduce((sum, r) => sum + (r?.pending || 0), 0);
+      } catch { this.psCutoutPending = null; }
+    },
     // qaMerged から EXPORT_STALE / EXPORT_MISSING を持つ行だけを拾う
     // （「納品PNGを更新」の対象＝もう計算材料はある。§3-a と同じ考え方）。
     get psassistExportTargets() {
@@ -9009,6 +9037,11 @@ function app() {
     // 🖼️パネルが無い（＝切り抜き専用）entryは必ず灰色地の切り抜きを見せる
     charLibThumbUrl(item) {
       return item.usable?.panel ? this.charLibImageUrl(item) : this.charLibCutoutUrl(item);
+    },
+    // P4（Docs/CUTOUT_PS_PRIMARY_PLAN.md）: バックエンドのneeds_ps_cutoutと同じ判定。
+    // rembgの仮切り抜きのまま＝host_workerがまだPSで仕上げていない（見た目だけの印。動作には影響しない）。
+    charLibNeedsPs(item) {
+      return !!item.image && item.kind !== 'cutout' && item.cutout_method !== 'ps_select_subject';
     },
     // ② の試算。**生成の前に無料で埋まる行を確定させる**ための窓口。
     // 「賄えない行」は在庫から無理に埋めない（ワンパターンの発生源になる）。
@@ -9553,6 +9586,7 @@ function app() {
       await this.loadPsassistQa();
       await this.loadPsassistPlan();
       await this.loadPsassistWorker();   // タブを開いた時だけ（話数を切り替えるたびには叩かない）
+      await this.loadPsCutoutStatus();   // P4: 上のworker/manifestに依存するのでこの後
       await this.loadPsassistJobs();
     },
     async loadArollSync() {
