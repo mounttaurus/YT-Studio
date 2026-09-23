@@ -43,6 +43,7 @@ PSASSIST_ROOT = os.path.dirname(SCRIPTS_DIR)
 
 sys.path.insert(0, SCRIPTS_DIR)
 from _rootenv import load_root_env  # noqa: E402
+import ps_cutout_lib  # noqa: E402
 import qa_check  # noqa: E402
 
 load_root_env()
@@ -56,9 +57,14 @@ sys.path.insert(0, os.path.join(PSASSIST_ROOT, "psassist-agent"))
 # Phase 5 で組版の全工程を載せた。director はこの文字列だけを知る（§2-6）。
 # ★Photoshop を占有するものと、しないものを分けて持つ。UI が警告を出し分けるため。
 # resync（T3）は①③④⑤を1ジョブで連鎖する複合工程。lines必須（対象を明示する設計）。
-CAPABILITIES = ["build_plan", "cutout", "build_panel", "qa_check", "export_png", "resync"]
-NEEDS_PHOTOSHOP = {"cutout", "build_panel", "export_png", "resync"}
-JOB_KINDS = set(CAPABILITIES)
+_JOB_KINDS_LIST = ["build_plan", "cutout", "build_panel", "qa_check", "export_png", "resync"]
+JOB_KINDS = set(_JOB_KINDS_LIST)  # jobs/queue/ 経由で受け付ける実際のジョブ種別
+
+# P1（Docs/CUTOUT_PS_PRIMARY_PLAN.md）: 在庫スイープ。jobs/queue/ を経由しない常駐機能
+# なので JOB_KINDS には入れない。heartbeat の capabilities にだけ乗せて director/§5 の
+# PS環境判定に使わせる。
+CAPABILITIES = _JOB_KINDS_LIST + ["library_cutout"]
+NEEDS_PHOTOSHOP = {"cutout", "build_panel", "export_png", "resync", "library_cutout"}
 DEFAULT_INTERVAL = 1.5
 
 # P2b（AROLL_TAB_REDESIGN_PLAN.md §6-d）: build_panel を何行ずつに割って
@@ -189,6 +195,91 @@ def find_episodes(shared_dir: str) -> list[dict]:
 
 def ep_label(info: dict) -> str:
     return "%s/ep%02d" % (info["project_id"], info["episode"])
+
+
+# ── 在庫スイープ（P1: Docs/CUTOUT_PS_PRIMARY_PLAN.md） ───────────────────
+# エピソードのジョブを拾わなかった周期にだけ、PS未処理の在庫entryを1件だけ進める。
+# jobs/queue/ を経由しない常駐機能。
+
+def find_library_files(shared_dir: str) -> list[str]:
+    pattern = os.path.join(shared_dir, "characters", "*", "panel_library", "library.json")
+    return sorted(glob.glob(pattern))
+
+
+def pick_library_sweep_target(shared_dir: str) -> dict | None:
+    """PS未処理の在庫entryを1件探す。**`library.json` は読むだけ**（書かない＝§1-2）。
+
+    `cutouts_ps/{slot_id}.png` か `.error.json` が既にあるものは飛ばす
+    （前回のスイープが出した置き場をコンテナがまだ取り込んでいない／前回失敗した）。
+    """
+    for lib_path in find_library_files(shared_dir):
+        lib_dir = os.path.dirname(lib_path)
+        try:
+            with open(lib_path, encoding="utf-8") as fh:
+                data = json.load(fh)
+        except Exception:
+            continue
+        for e in data.get("entries", []):
+            if not ps_cutout_lib.needs_ps_cutout(e):
+                continue
+            slot_id = e.get("slot_id")
+            image = e.get("image")
+            if not slot_id or not image:
+                continue
+            staged = os.path.join(lib_dir, "cutouts_ps", slot_id + ".png")
+            error = os.path.join(lib_dir, "cutouts_ps", slot_id + ".error.json")
+            if os.path.exists(staged) or os.path.exists(error):
+                continue
+            src = os.path.join(lib_dir, image)
+            if not os.path.exists(src):
+                continue
+            return {
+                "lib_dir": lib_dir, "slot_id": slot_id, "src": src,
+                "char_id": os.path.basename(os.path.dirname(lib_dir)),
+            }
+    return None
+
+
+def run_library_sweep_step(shared_dir: str) -> None:
+    """在庫スイープを1件だけ進める。
+
+    子プロセス（`library_cutout_sweep.py`）に切り出す理由は他のPS工程と同じ
+    （`_run_script` の docstring 参照＝Photoshopを触るスクリプトを import すると
+    1プロセスで複数の呼び出し元を抱える worker の設計と噛み合わない）。
+    成功したら `cutouts_ps/{slot_id}.png` に原子的に置く（tmp→rename）。
+    失敗したら `.error.json` を残す（取り込み側・P2 が確認するまで rembg 版のまま）。
+    """
+    target = pick_library_sweep_target(shared_dir)
+    if target is None:
+        return
+    out_dir = os.path.join(target["lib_dir"], "cutouts_ps")
+    os.makedirs(out_dir, exist_ok=True)
+    slot_id = target["slot_id"]
+    out_tmp = os.path.join(out_dir, slot_id + ".png.tmp")
+    out_final = os.path.join(out_dir, slot_id + ".png")
+    error_path = os.path.join(out_dir, slot_id + ".error.json")
+    label = "%s/%s" % (target["char_id"], slot_id)
+    log: list[str] = []
+    print("[library] %s を PS で切り抜き中..." % label)
+    try:
+        _run_script(
+            [sys.executable, os.path.join("scripts", "library_cutout_sweep.py"),
+             "--src", target["src"], "--out", out_tmp],
+            {}, log, "library_cutout_sweep",
+        )
+        os.replace(out_tmp, out_final)
+        print("[library] %s 完了" % label)
+    except Exception as e:
+        if os.path.exists(out_tmp):
+            try:
+                os.remove(out_tmp)
+            except OSError:
+                pass
+        try:
+            write_json_atomic(error_path, {"error": str(e)[:500], "at": now_iso()})
+        except OSError as werr:
+            print("  [library] .error.json 書き込み失敗（次の周期で再試行）: %s" % werr)
+        print("[library] %s 失敗: %s" % (label, e))
 
 
 # ── PSD 保存監視（qa_check.watch() のロジックをプロジェクト横断に展開） ───
@@ -635,11 +726,13 @@ def main() -> None:
             except OSError as e:
                 print("  [heartbeat] 書き込み失敗（次の周期で再試行）: %s" % e)
 
-            # ── ジョブを1件だけ処理（作成順） ──
+            # ── ジョブを1件だけ処理（作成順）。無ければ在庫スイープを1件進める ──
             picked = pick_oldest_job(episodes)
             job_ep_dir = picked[0] if picked else None
             if picked:
                 process_job(*picked)
+            else:
+                run_library_sweep_step(shared_dir)
 
             # ── PSD保存監視。exportジョブを処理した直後の同エピソードは今回だけ見送る ──
             for info in episodes:

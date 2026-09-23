@@ -17,7 +17,6 @@ import glob
 import io
 import json
 import os
-import shutil
 import sys
 import time
 
@@ -28,6 +27,7 @@ from PIL import Image
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from _rootenv import load_root_env  # noqa: E402
+import ps_cutout_lib  # noqa: E402
 
 load_root_env()
 
@@ -59,26 +59,6 @@ def stocked_line_ids() -> set:
     with open(AROLL_JSON, encoding="utf-8") as fh:
         ar = json.load(fh)
     return {p["line_id"] for p in ar.get("panels", []) if p.get("cutout_slot_id")}
-
-JSX = r"""
-(function () {
-  var d = app.activeDocument;
-  var desc = new ActionDescriptor();
-  desc.putBoolean(stringIDToTypeID("sampleAllLayers"), false);
-  executeAction(stringIDToTypeID("autoCutout"), desc, DialogModes.NO);
-  if (d.activeLayer.isBackgroundLayer) { d.activeLayer.isBackgroundLayer = false; }
-  var md = new ActionDescriptor();
-  md.putClass(stringIDToTypeID("new"), stringIDToTypeID("channel"));
-  var ref = new ActionReference();
-  ref.putEnumerated(stringIDToTypeID("channel"), stringIDToTypeID("channel"),
-                    stringIDToTypeID("mask"));
-  md.putReference(stringIDToTypeID("at"), ref);
-  md.putEnumerated(stringIDToTypeID("using"), stringIDToTypeID("userMaskEnabled"),
-                   stringIDToTypeID("revealSelection"));
-  executeAction(stringIDToTypeID("make"), md, DialogModes.NO);
-  return "ok";
-})();
-"""
 
 
 def analyze(png: str) -> dict:
@@ -144,13 +124,7 @@ def main() -> None:
             continue
         t0 = time.time()
         try:
-            shutil.copyfile(src, WORK)
-            doc = ps.Open(WORK)
-            try:
-                ps.DoJavaScript(JSX)
-                doc.SaveAs(out, opts, True, 2)
-            finally:
-                doc.Close(2)
+            ps_cutout_lib.cutout_one(ps, opts, src, out, WORK)
             stats[line_id] = analyze(out)
             stats[line_id]["sec"] = round(time.time() - t0, 1)
             done += 1

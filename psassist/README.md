@@ -132,6 +132,15 @@ python scripts/host_worker.py --shared "<別のリポ>/shared"
 稼働中の director が読む `<稼働側>/shared/_psassist/worker.json` が永遠に生まれず、
 「ボタンが出ない」だけが症状として出た。
 
+### 在庫スイープ（キャラ在庫のPS切り抜き。P1）
+
+エピソードの `jobs/queue/` を1周期分見ても拾うジョブが無かった時だけ、
+`shared/characters/*/panel_library/library.json` を走査して PS未処理（`ps_cutout_lib.needs_ps_cutout`）の
+entry を1件だけ切り抜く。成功したら `panel_library/cutouts_ps/{slot_id}.png` に置く
+（`library.json` は読むだけで書かない・取り込みはコンテナ側の役目＝P2）。
+失敗したら `.error.json` を残し、rembg 版のまま在庫は使える。
+詳細・不変条件は `Docs/CUTOUT_PS_PRIMARY_PLAN.md`。
+
 工程1〜4（プラン生成・切り抜き・組版）は下記の通り単発実行のまま
 （Phase 5 でジョブキュー化を検討）。
 
