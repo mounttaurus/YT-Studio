@@ -4430,7 +4430,7 @@
               <div style="display:contents">
                 <span style="font-size:10px;color:#64748b" x-text="axis[1]"></span>
                 <select style="font-size:11px;padding:2px;width:100%" :disabled="charLib.busy"
-                        :value="charLib.detail[axis[0]] || ''"
+                        x-effect="(v => $nextTick(() => { $el.value = v }))(charLib.detail[axis[0]] || '')"
                         @change="saveCharLibLabel(charLib.detail, axis[0], $event.target.value)">
                   <option value="">（未設定）</option>
                   <template x-for="o in (studioPresets[axis[0]] || [])" :key="o.id">
