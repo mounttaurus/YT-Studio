@@ -8598,7 +8598,15 @@ function app() {
     // 後から「🔧要組み直しを選択」→手動の組み直しで拾える＝データが失われるわけではない）
     async psassistResync(lineIds, { silent = false } = {}) {
       const lines = lineIds && lineIds.length ? lineIds : [];
-      if (!lines.length || !this.psassistAlive) return;
+      if (!lines.length) return;
+      if (!this.psassistAlive) {
+        // ⚠️ host_worker（ホスト常駐・Photoshop）はDockerコンテナの外側で動くプロセスなので、
+        // 起動し忘れたまま気づかず「選び直したのに反映されない」に見えるのが一番の事故りどころ。
+        // 黙って諦めない（2026-09-23・実機で踏んだ穴）。
+        const msg = 'host_worker が起動していないため自動組み直しをスキップしました（start-psassist-worker.ps1 を起動してください）';
+        if (silent) { this.arollMsg = '⚠️ ' + msg; } else { alert(msg); }
+        return;
+      }
       if (this.psassistJobBusy || this.psassistLatestJob?.status === 'running') {
         if (silent) { this.arollMsg = '♻️ 他の組版ジョブが実行中のため自動組み直しを見送りました。後で「🔧要組み直しを選択」から反映してください'; }
         else { alert('別のジョブが実行中です'); }
