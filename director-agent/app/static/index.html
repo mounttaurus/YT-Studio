@@ -4928,7 +4928,7 @@
             <div style="display:flex;gap:4px;flex-wrap:wrap">
               <template x-for="axis in [['emotion','表情'],['shot','ショット'],['angle','アングル'],['pose','ポーズ(任意)']]" :key="axis[0]">
                 <select style="font-size:10px;padding:2px"
-                        :value="arollPanelOf(qaDetail.line_id).slot?.[axis[0]] || ''"
+                        x-effect="(v => $nextTick(() => { $el.value = v }))(arollPanelOf(qaDetail.line_id).slot?.[axis[0]] || '')"
                         @change="arollSetSlot(arollPanelOf(qaDetail.line_id), axis[0], $event.target.value)">
                   <option value="" x-text="axis[1]"></option>
                   <template x-for="o in (studioPresets[axis[0]] || [])" :key="o.id">
