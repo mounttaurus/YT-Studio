@@ -106,11 +106,14 @@ def compute_slot_key(characters: list[str] | None, slot: dict | None) -> str | N
     return f"{chars_key}|{emotion}|{shot}|{angle}"
 
 
-def _library_lookup(panel: dict) -> dict | None:
+def _library_lookup(panel: dict, exclude_slot_ids: set[str] | None = None) -> dict | None:
     """パネルの演技スロットにキャラ所有ライブラリ（Phase 3）の一致があれば返す。
 
     単独キャラのパネルのみ対象（2ショットはライブラリ非対応）。世代違い
     （appearance_version不一致）は panel_library_manager.find_current 側で除外される。
+
+    exclude_slot_ids: 1話分のバッチ処理中に呼び出し側が蓄積する「既に他の行へ割り当てた
+    slot_id」。find_current にそのまま中継する（詳細はそちらのdocstring）。
     """
     chars = [c for c in (panel.get("characters") or []) if c]
     if len(chars) != 1:
@@ -119,7 +122,8 @@ def _library_lookup(panel: dict) -> dict | None:
     emotion, shot, angle = slot.get("emotion"), slot.get("shot"), slot.get("angle")
     if not (emotion and shot and angle):
         return None
-    entry = panel_library_manager.find_current(chars[0], emotion, shot, angle)
+    entry = panel_library_manager.find_current(chars[0], emotion, shot, angle,
+                                                exclude_slot_ids=exclude_slot_ids)
     if entry is None:
         return None
     return {"char_id": chars[0], **entry}
@@ -1306,6 +1310,7 @@ async def generate_line_image(
     project_id: str, episode: int, line_id: str,
     allow_paid_fallback: bool = False, log: list[str] | None = None,
     use_library: bool = True, library_only: bool = False,
+    exclude_slot_ids: set[str] | None = None,
 ) -> dict:
     """1行分のパネル画像を生成してマニフェストへ反映する（成功/失敗とも記録）。
 
@@ -1317,6 +1322,11 @@ async def generate_line_image(
     ValueErrorを返す（無音の意図しない課金を防ぐ）。「根拠（slot）を変更したら自動で
     再解決する」UI操作のように、ユーザーがドロップダウンを触っただけで課金が走ると
     驚かせてしまう場面で使う。use_library=Falseと同時指定は矛盾するため呼び出し禁止。
+
+    exclude_slot_ids: 1話分のバッチ処理中に呼び出し側（run_batch）が蓄積する「既に他の
+    行へ割り当てたslot_id」。_library_lookup にそのまま中継する
+    （詳細 panel_library_manager.find_current のdocstring）。単発の1行呼び出し
+    （手動の「作り直す」等）では省略してよい。
     """
     manifest = load_manifest(project_id, episode)
     if manifest is None:
@@ -1340,7 +1350,7 @@ async def generate_line_image(
     sibling_ids = [lid for lid in (cut or {}).get("line_ids", []) if lid != line_id]
 
     if use_library:
-        lib_hit = _library_lookup(panel)
+        lib_hit = _library_lookup(panel, exclude_slot_ids=exclude_slot_ids)
         if lib_hit is not None:
             src = panel_library_manager.library_dir(lib_hit["char_id"]) / lib_hit["image"]
             filename = panel_filename(line_id)
@@ -1635,14 +1645,26 @@ def build_generation_plan(
     min_gap = max(0, min_gap)
     order_by_id = {p["line_id"]: p.get("order", 0) for p in targets}
 
+    # ⚠️ **1話の中で同じslot_idを二度割り当てない**（2026-09-23）。times_usedの生涯累計
+    # だけでは、新しく追加したバリアントに複数行が引き寄せられて同じ絵に収束することがある
+    # （詳細 memory/aroll-duplicate-cutout-same-batch）。ここでの判定は実際に消費する
+    # run_batch のループと**同じアルゴリズム（順番にexclude_slot_idsを蓄積）**でなければ、
+    # 見積もり（ここ）と実際の課金結果がズレる事故になるので、両方を必ず対で直すこと。
+    used_slots: dict[str, set[str]] = {}
     library_entries: list[dict] = []
     remaining: list[dict] = []
     for p in targets:
-        lib_hit = _library_lookup(p) if use_library else None
+        lib_hit = None
+        if use_library:
+            chars = [c for c in (p.get("characters") or []) if c]
+            cid = chars[0] if len(chars) == 1 else None
+            exclude = used_slots.get(cid) if cid else None
+            lib_hit = _library_lookup(p, exclude_slot_ids=exclude)
         if lib_hit is not None:
             library_entries.append({
                 "line_id": p["line_id"], "char_id": lib_hit["char_id"], "slot_id": lib_hit["slot_id"],
             })
+            used_slots.setdefault(lib_hit["char_id"], set()).add(lib_hit["slot_id"])
         else:
             remaining.append(p)
 
@@ -1788,13 +1810,25 @@ async def run_batch(
     }
     log: list[str] = job["log"]
 
+    # ⚠️ build_generation_plan の見積もりと同じアルゴリズム（char_idごとに使用済み
+    # slot_idを蓄積）で実適用する。片方だけ直すと見積もりと実際の課金結果がズレる
+    # （詳細 memory/aroll-duplicate-cutout-same-batch・2026-09-23）。
+    used_slots: dict[str, set[str]] = {}
     for entry in plan["library"]:
         if job["cancel"]:
             break
         lid = entry["line_id"]
         job["current_line"] = lid
         try:
-            await generate_line_image(project_id, episode, lid, log=log, use_library=True)
+            char_hint = entry.get("char_id")
+            exclude = used_slots.get(char_hint) if char_hint else None
+            result_panel = await generate_line_image(
+                project_id, episode, lid, log=log, use_library=True,
+                exclude_slot_ids=exclude,
+            )
+            got_char, got_slot = result_panel.get("cutout_char_id"), result_panel.get("cutout_slot_id")
+            if got_char and got_slot:
+                used_slots.setdefault(got_char, set()).add(got_slot)
             job["library_done"] += 1
             log.append(f"📚 {lid} ライブラリ引用完了 ({job['library_done']}/{job['library_total']})")
         except Exception as e:

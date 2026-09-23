@@ -249,7 +249,8 @@ def list_entries(char_id: str, *, emotion: str = "", shot: str = "", angle: str 
     return out
 
 
-def find_current(char_id: str, emotion: str, shot: str, angle: str) -> dict | None:
+def find_current(char_id: str, emotion: str, shot: str, angle: str,
+                 exclude_slot_ids: set[str] | None = None) -> dict | None:
     """slot(emotion/shot/angle)に一致し、appearance_versionが今と同じ・かつ承認済みのentryのうち
     「最も使われていない」1件を返す（ローテーション。2026-08-21）。
 
@@ -258,13 +259,21 @@ def find_current(char_id: str, emotion: str, shot: str, angle: str) -> dict | No
 
     候補が複数ある場合は`times_used`（record_usageで実消費のたびに+1される）が最小のものを選ぶ。
     タイブレークはslot_id昇順（決定的にするため）。新規追加したバリアントはtimes_used=0から
-    始まるため自然に優先消費され、シリーズを通算して均等にローテーションする（1話内のdedupに
-    閉じない。Docs/AROLL_ASSET_PLAN.md §16参照）。
+    始まるため自然に優先消費され、シリーズを通算して均等にローテーションする。
+
+    exclude_slot_ids: 呼び出し側が「同一バッチ内で既に他の行に割り当てた」slot_idを渡す。
+    ⚠️ **times_usedの生涯累計だけでは1話内のdedupを保証できない**（2026-09-23実測）:
+    新しく追加したバリアントはtimes_usedが低いため、1話の中で同じ演技スロットを要求する
+    行が複数あると、record_usageで+1されてもなお他候補より低く、同じslot_idへ複数回
+    収束することがある（詳細 memory/aroll-duplicate-cutout-same-batch）。
+    呼び出し側（build_generation_plan/run_batch）が1話分のループを回しながら
+    このバッチで使ったslot_idを蓄積し、都度渡すことでこれを防ぐ。
 
     ⚠️ この関数自体は状態を変更しない（ドライラン安全）。実際に選んだentryを消費したら、
     呼び出し側が必ず record_usage() を呼ぶこと（generate_line_imageのみが呼ぶ想定。
     generation_plan_estimateのようなドライランは呼んではいけない）。
     """
+    exclude_slot_ids = exclude_slot_ids or set()
     current = appearance_version(char_id)
     candidates = [
         e for e in load_index(char_id).get("entries", [])
@@ -277,6 +286,7 @@ def find_current(char_id: str, emotion: str, shot: str, angle: str) -> dict | No
         and e.get("emotion") == emotion and e.get("shot") == shot and e.get("angle") == angle
         and e.get("appearance_version") == current
         and e.get("review_status", "approved") == "approved"
+        and e.get("slot_id") not in exclude_slot_ids
     ]
     if not candidates:
         return None
