@@ -706,12 +706,23 @@ def register_from_image(
 
     ⚠️ **冪等**。同じ行の同じ画像は二度登録しない（``source.image_hash`` で照合）。
     承認 → 別の編集 → 再承認、が日常的に起きるため、ここが冪等でないと在庫が重複で膨らむ。
+
+    ⚠️ **`source.image_hash` を持たない旧形式entry（2026-08-21以前・T1導入前）はこの照合を
+    すり抜ける。** 2026-09-23、実データで13組（アオイ8・ルカ5）の完全同一画像が別slot_idで
+    二重登録されているのを発見した（詳細 memory/aroll-duplicate-cutout-same-batch）。
+    旧形式entryは実ファイルを都度読んでハッシュ化するフォールバックで拾う。
     """
     img_hash = hashlib.sha256(data).hexdigest()[:16]
     src = dict(source or {}, image_hash=img_hash)
     idx = load_index(char_id)
+    img_dir = images_dir(char_id)
     for e in idx.get("entries", []):
-        if (e.get("source") or {}).get("image_hash") == img_hash:
+        existing_hash = (e.get("source") or {}).get("image_hash")
+        if existing_hash is None:
+            legacy_path = img_dir / f"{e['slot_id']}.png"
+            if legacy_path.exists():
+                existing_hash = hashlib.sha256(legacy_path.read_bytes()).hexdigest()[:16]
+        if existing_hash == img_hash:
             return {"registered": False, "reason": "同じ画像が既に在庫にある",
                     "slot_id": e.get("slot_id")}
 
