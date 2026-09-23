@@ -412,6 +412,7 @@ class PanelLibraryGenerateRequest(BaseModel):
     shot: str
     angle: str
     pose: str = ""
+    facing: str = ""            # 空なら"front"扱い（2026-09-23新設。panel_presets参照）
     style: str = "kamishibai"
     model: str = ""             # 空ならNANOBANANA_MODEL既定
     replace_stale: bool = True  # 同スロットの旧世代entryを置き換える
@@ -433,7 +434,8 @@ async def generate_panel_library_entry(char_id: str, req: PanelLibraryGenerateRe
     try:
         entry = await panel_library_manager.generate_and_register(
             char_id, emotion=req.emotion, shot=req.shot, angle=req.angle, pose=req.pose,
-            style_name=req.style, model=req.model, replace_stale=req.replace_stale,
+            facing=req.facing, style_name=req.style, model=req.model,
+            replace_stale=req.replace_stale,
         )
     except ValueError as e:
         # ⚠️ ここに来る時点で character_manager.read_character は通過済み（キャラは実在する）。
@@ -450,6 +452,7 @@ class PanelLibraryVariantsRequest(BaseModel):
     shot: str
     angle: str
     poses: list[str]            # 既存pose語彙のid列（panel_presets参照）。1件ごとに1バリアント生成
+    facings: list[str] = []     # 既存facing語彙のid列。省略/空なら["front"]。poses×facingsの直積で生成
     style: str = "kamishibai"
     model: str = ""
 
@@ -475,7 +478,7 @@ async def generate_panel_library_variants(char_id: str, req: PanelLibraryVariant
     try:
         entries = await panel_library_manager.generate_variants(
             char_id, emotion=req.emotion, shot=req.shot, angle=req.angle, poses=req.poses,
-            style_name=req.style, model=req.model,
+            facings=req.facings or None, style_name=req.style, model=req.model,
         )
     except ValueError as e:
         # 同上（generate_and_register を内部で呼ぶので同じ検証が効く）
@@ -518,13 +521,14 @@ class PanelLibraryEntryUpdateRequest(BaseModel):
     shot: str | None = None
     angle: str | None = None
     pose: str | None = None
+    facing: str | None = None   # 2026-09-23新設（panel_presets参照）
     note: str | None = None
 
 
 @router.patch("/characters/{char_id}/panel_library/{slot_id}")
 async def update_panel_library_entry(char_id: str, slot_id: str,
                                      req: PanelLibraryEntryUpdateRequest):
-    """entryのラベル（emotion/shot/angle/pose）を人が直す。LLMの誤ラベルの受け皿。
+    """entryのラベル（emotion/shot/angle/pose/facing）を人が直す。LLMの誤ラベルの受け皿。
 
     ⚠️ **slot_idは変わらない。** 実体ファイル名かつ aroll.json の参照先なので、
     ラベルを直すたびに改名すると話数をまたいだ参照が切れる。slot_idは識別子であって
@@ -533,7 +537,7 @@ async def update_panel_library_entry(char_id: str, slot_id: str,
     try:
         entry = panel_library_manager.update_entry(
             char_id, slot_id, emotion=req.emotion, shot=req.shot,
-            angle=req.angle, pose=req.pose, note=req.note)
+            angle=req.angle, pose=req.pose, facing=req.facing, note=req.note)
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
     if entry is None:

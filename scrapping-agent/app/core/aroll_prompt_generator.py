@@ -124,7 +124,8 @@ _SHOT_PATTERNS = [
     ("waist_up",     re.compile(r"waist-?up", re.I)),
     ("full_body",    re.compile(r"full body|head to toe", re.I)),
     ("wide",         re.compile(r"wide shot", re.I)),
-    ("profile",      re.compile(r"profile view|side face|from the side", re.I)),
+    # ⚠️ `profile`（横顔）は 2026-09-23 に削除した。向きの概念なので facing 軸へ移設済み
+    # （`Docs/FACING_AXIS_PLAN.md`）。shot はもう profile を語彙に持たない。
 ]
 _ANGLE_PATTERNS = [
     ("low_angle",     re.compile(r"low[- ]angle|looking up at|from below", re.I)),
@@ -132,7 +133,7 @@ _ANGLE_PATTERNS = [
     ("three_quarter", re.compile(r"three-?quarter|3/4", re.I)),
     ("eye_level",     re.compile(r"eye-?level|front view|straight on", re.I)),
     ("dutch",         re.compile(r"dutch angle|tilted frame|off-kilter", re.I)),
-    ("from_behind",   re.compile(r"from behind|back view", re.I)),
+    # ⚠️ `from_behind`（背後から）は 2026-09-23 に削除した。facing 軸（back）へ移設済み。
 ]
 _EMOTION_PATTERNS = [
     ("angry",      re.compile(r"angry|furrow|scowl|glar|fierce|indignan", re.I)),

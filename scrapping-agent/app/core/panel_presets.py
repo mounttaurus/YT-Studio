@@ -4,7 +4,12 @@ shared/imagegen/panel_presets.json に外出しし、ユーザーが項目を追
 無ければデフォルトを書き出す（style_manager と同じ方針）。
 
 構造: { group: [ {"id": str, "label_ja": str, "prompt": str}, ... ] }
-group = emotion | pose | shot | angle | scene
+group = emotion | pose | shot | angle | facing | scene
+
+⚠️ **向きは `facing` が唯一の軸**（2026-09-23 新設・`Docs/FACING_AXIS_PLAN.md`）。
+以前は pose の facing_left/facing_right/profile_left/profile_right・angle の from_behind・
+shot の profile に向きが分散していた。それらは語彙から削除済み。左右は**画面の左右**
+（視聴者から見た左右。キャラ自身の左右ではない。実物2枚を目視して確認済み）。
 """
 import json
 import os
@@ -69,20 +74,10 @@ DEFAULT_PRESETS = {
         {"id": "sweat_drop",   "label_ja": "冷や汗",     "prompt": "anime sweat drop, nervous, awkward"},
         {"id": "held_breath",  "label_ja": "息を呑む",   "prompt": "holding breath, frozen for a beat, wide-eyed stillness"},
         {"id": "clenched_fist","label_ja": "拳を握る",   "prompt": "clenched fist, quiet resolve"},
-        # ⚠️ 向きは 2026-09-06 追加。それまで**体の向きを指定する手段が無く**、同じ感情の在庫が
-        # 「同じ向き・同じ姿勢で画角ラベルだけ違う絵」ばかりになっていた（ルカで実測。
-        # thoughtful 23枚が実質3種）。angle(shot/angle)は**カメラ**の位置で、これは**被写体**の向き。
-        {"id": "facing_left",  "label_ja": "左を向く",   "prompt": "body turned to the left, three-quarter view facing left, shoulders angled away from the camera"},
-        {"id": "facing_right", "label_ja": "右を向く",   "prompt": "body turned to the right, three-quarter view facing right, shoulders angled away from the camera"},
-        # ⚠️ `facing_*` は**斜め45度**（three-quarter）であって横顔ではない。真横が要る時はこちら。
-        # 2026-09-06 追加：facing_* だけでは横顔が一枚も出ず、原因が prompt の "three-quarter view"
-        # という自己指定だったため、真横を別のポーズとして分けた。
-        {"id": "profile_left", "label_ja": "真横（左向き）",
-         "prompt": ("strict side profile facing left, the head seen fully from the side, "
-                    "nose lips and chin drawn in clean silhouette, the far eye not visible")},
-        {"id": "profile_right", "label_ja": "真横（右向き）",
-         "prompt": ("strict side profile facing right, the head seen fully from the side, "
-                    "nose lips and chin drawn in clean silhouette, the far eye not visible")},
+        # ⚠️ 向きの4値（facing_left/facing_right/profile_left/profile_right）は
+        # 2026-09-23 に `facing` 軸へ移設して削除した（`Docs/FACING_AXIS_PLAN.md`）。
+        # pose は**アクション**だけを言う。向きは build_panel_prompt の facing_id で指定する。
+        # 旧在庫の pose にこれらの値が残っている場合の読み替えは LEGACY_FACING を参照。
     ],
     "shot": [
         {"id": "face_closeup","label_ja": "顔アップ",     "prompt": "extreme close-up of the face"},
@@ -90,7 +85,9 @@ DEFAULT_PRESETS = {
         {"id": "waist_up",    "label_ja": "ウエストアップ","prompt": "waist-up shot"},
         {"id": "full_body",   "label_ja": "全身",         "prompt": "full body shot, head to toe"},
         {"id": "wide",        "label_ja": "引き（全景）", "prompt": "wide shot showing the full scene"},
-        {"id": "profile",     "label_ja": "横顔",         "prompt": "profile view, side face, looking off to the side"},
+        # ⚠️ `profile`（横顔）は 2026-09-23 に削除した。画角ではなく向きの概念だったため
+        # `facing` 軸（left_profile/right_profile）へ移設（`Docs/FACING_AXIS_PLAN.md`）。
+        # shot × facing の組み合わせで同じ構図を表現できる。
         {"id": "eyes_only",   "label_ja": "瞳アップ",     "prompt": "extreme close-up on the eyes only, dramatic focal point"},
         # ⚠️ `face_closeup`（顔アップ）とは**別物**として 2026-09-06 に追加した。
         # face_closeup は "extreme close-up of the face" と書いてあるのに、実際の生成物は
@@ -109,7 +106,25 @@ DEFAULT_PRESETS = {
         {"id": "low_angle",     "label_ja": "煽り（下から）","prompt": "low angle shot, camera looking up"},
         {"id": "high_angle",    "label_ja": "俯瞰（上から）","prompt": "high angle shot, camera looking down"},
         {"id": "dutch",         "label_ja": "傾き",         "prompt": "dutch angle, tilted frame, off-kilter"},
-        {"id": "from_behind",   "label_ja": "背後から",     "prompt": "shot from behind the character, back view"},
+        # ⚠️ `from_behind`（背後から）は 2026-09-23 に削除した。カメラ位置の軸に向きが
+        # 混入していたため `facing` 軸（back）へ移設（`Docs/FACING_AXIS_PLAN.md`）。
+    ],
+    "facing": [
+        # ⚠️ 2026-09-23 新設。キャラの向き専用の軸（`Docs/FACING_AXIS_PLAN.md`）。
+        # 左右は**画面の左右**（視聴者から見た左右）。ID は旧 pose/angle の値と同じにして
+        # あるので、既存384件はそのままこの軸の値として読める（移行はslot_idを変えない）。
+        {"id": "front",         "label_ja": "正面",         "prompt": "facing the viewer"},
+        {"id": "left_3q",       "label_ja": "左斜め",
+         "prompt": "body turned to the left, three-quarter view facing left, shoulders angled away from the camera"},
+        {"id": "left_profile",  "label_ja": "左真横",
+         "prompt": ("strict side profile facing left, the head seen fully from the side, "
+                    "nose lips and chin drawn in clean silhouette, the far eye not visible")},
+        {"id": "right_3q",      "label_ja": "右斜め",
+         "prompt": "body turned to the right, three-quarter view facing right, shoulders angled away from the camera"},
+        {"id": "right_profile", "label_ja": "右真横",
+         "prompt": ("strict side profile facing right, the head seen fully from the side, "
+                    "nose lips and chin drawn in clean silhouette, the far eye not visible")},
+        {"id": "back",          "label_ja": "背面（後ろ姿）", "prompt": "shot from behind the character, back view"},
     ],
     "scene": [
         {"id": "solo",         "label_ja": "単独",     "prompt": "single character alone"},
@@ -118,7 +133,44 @@ DEFAULT_PRESETS = {
     ],
 }
 
-GROUPS = ("emotion", "pose", "shot", "angle", "scene")
+GROUPS = ("emotion", "pose", "shot", "angle", "facing", "scene")
+
+# --------------------------------------------------------------------- 向きの旧値読み替え
+#
+# 向きが pose/angle/shot に混ざっていた頃（〜2026-09-23）の値 → 新 facing 軸での読み替え。
+# ⚠️ **ここが唯一の本籍**（`Docs/FACING_AXIS_PLAN.md` §2-2）。cutout_selector・移行スクリプト・
+# API入口・stock_gap/stock_yield は全部ここを import すること（コピーを作らない）。
+LEGACY_FACING: dict[tuple[str, str], str] = {
+    ("pose", "facing_left"): "left_3q",
+    ("pose", "facing_right"): "right_3q",
+    ("pose", "profile_left"): "left_profile",
+    ("pose", "profile_right"): "right_profile",
+    ("angle", "from_behind"): "back",
+}
+
+# 語彙から消した値を、元の軸でどう置き換えるか（None = 未設定に戻す）。
+# pose の向き系4値は「動作」の情報を持たないので None に戻す（不明を制約にしない設計に合わせる）。
+# angle.from_behind はカメラの高さが不明になるので中立の既定 eye_level。
+# shot.profile は向きの左右が読み取れないので None（実測の段で埋め直す。移行スクリプト側の仕事）。
+LEGACY_REPLACEMENT: dict[tuple[str, str], str | None] = {
+    ("pose", "facing_left"): None,
+    ("pose", "facing_right"): None,
+    ("pose", "profile_left"): None,
+    ("pose", "profile_right"): None,
+    ("angle", "from_behind"): "eye_level",
+    ("shot", "profile"): None,
+}
+
+
+def legacy_facing(pose: str | None, angle: str | None) -> str | None:
+    """旧ラベル（pose/angle）から向きを読む。分からなければ None（呼び出し側が front 扱いにする）。
+
+    優先順位は angle.from_behind（背面）を pose より先に見る ── 背面のポーズラベルは
+    存在しないので、from_behind と向き系 pose が両方付いている entry では背面を優先する。
+    """
+    if (angle or "") == "from_behind":
+        return LEGACY_FACING[("angle", "from_behind")]
+    return LEGACY_FACING.get(("pose", pose or ""))
 
 
 def load_presets() -> dict:
@@ -127,11 +179,21 @@ def load_presets() -> dict:
         return dict(DEFAULT_PRESETS)
     try:
         data = json.loads(PRESETS_FILE.read_text(encoding="utf-8"))
-        # 後方互換: 既存ファイルに無いgroupはデフォルトで補完（破壊しない）
         changed = False
+        # 後方互換: 既存ファイルに無いgroupはデフォルトで補完（破壊しない）
         for g in GROUPS:
             if g not in data:
                 data[g] = DEFAULT_PRESETS[g]
+                changed = True
+        # 向きの軸移設（2026-09-23）: 語彙から消した旧値を共有JSONからも取り除く。
+        # ⚠️ 足すだけで消さない従来の補完ロジックだと、コードから消してもJSONに残った旧値が
+        # UIの選択肢に出続ける（[[presets-live-in-code-and-shared-data]]）。ユーザーが自分で
+        # 追加したidは触らない＝LEGACY_REPLACEMENTに載っているidだけを対象にする。
+        for (axis, legacy_id) in LEGACY_REPLACEMENT:
+            items = data.get(axis, [])
+            kept = [i for i in items if i.get("id") != legacy_id]
+            if len(kept) != len(items):
+                data[axis] = kept
                 changed = True
         # 後方互換: 既存groupにデフォルトの項目(id)が無ければ末尾に追加（ユーザー編集は保持）
         for g in GROUPS:
@@ -164,16 +226,21 @@ def fragment(group: str, item_id: str) -> str:
 
 def build_panel_prompt(
     appearance_prompt: str, style_prefix: str,
-    *, emotion_id="", pose_id="", shot_id="", angle_id="", scene_id="",
+    *, emotion_id="", pose_id="", shot_id="", angle_id="", facing_id="", scene_id="",
     background_mode="flat", extra_prompt="",
 ) -> str:
-    """構造化入力を1本の英語プロンプトに組み立てる。順序は画角→ポーズ→表情→構図→背景。"""
+    """構造化入力を1本の英語プロンプトに組み立てる。順序は画角→アングル→向き→ポーズ→表情→構図→背景。
+
+    facing_id: 2026-09-23 新設。空文字なら断片が入らない（front を明示したい時は "front" を渡す。
+    未指定のままだと angle が斜めでも「正面」として在庫に入ってしまう ── Docs/FACING_AXIS_PLAN.md Q3）。
+    """
     bg = BACKGROUND_MODES.get(background_mode, "")
     parts = [
         style_prefix.strip().rstrip(","),
         appearance_prompt.strip(),
         fragment("shot", shot_id),
         fragment("angle", angle_id),
+        fragment("facing", facing_id),
         fragment("pose", pose_id),
         fragment("emotion", emotion_id),
         fragment("scene", scene_id),

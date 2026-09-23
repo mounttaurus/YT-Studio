@@ -654,16 +654,20 @@ async def list_panel_library(char_id: str, emotion: str = "", shot: str = "", an
 
 
 async def generate_panel_library_entry(char_id: str, emotion: str, shot: str, angle: str,
-                                        pose: str = "", style: str = "kamishibai",
+                                        pose: str = "", facing: str = "",
+                                        style: str = "kamishibai",
                                         model: str = "", replace_stale: bool = True) -> dict:
     """キャラのライブラリに1スロット生成・登録する(NanoBanana・外部API課金)。
 
-    emotion/shot/angle は list_panel_presets の id から選ぶ。model省略時は既定
-    (NANOBANANA_MODEL)。廉価版で量産したい時は "gemini-3.1-flash-lite-image" を明示指定する。
+    emotion/shot/angle/facing は list_panel_presets の id から選ぶ。facing省略時は"front"
+    (2026-09-23新設。キャラの向き専用軸。詳細 Docs/FACING_AXIS_PLAN.md ── pose には
+    向きを混ぜない。旧 pose="facing_left"/"profile_left" 等はこのバージョンでは語彙に無い)。
+    model省略時は既定(NANOBANANA_MODEL)。廉価版で量産したい時は
+    "gemini-3.1-flash-lite-image" を明示指定する。
     replace_stale=true(既定)は同じスロットの旧世代(外見更新前)entryを実体ごと置き換える。
     COST分類＝確認ゲート対象。
     """
-    body = {"emotion": emotion, "shot": shot, "angle": angle, "pose": pose,
+    body = {"emotion": emotion, "shot": shot, "angle": angle, "pose": pose, "facing": facing,
             "style": style, "model": model, "replace_stale": replace_stale}
     return await dc.request("POST", f"api/scrapping/characters/{char_id}/panel_library/generate", json=body)
 
@@ -674,17 +678,21 @@ async def delete_panel_library_entry(char_id: str, slot_id: str) -> dict:
 
 
 async def generate_panel_library_variants(char_id: str, emotion: str, shot: str, angle: str,
-                                           poses: list[str], style: str = "kamishibai",
+                                           poses: list[str], facings: list[str] | None = None,
+                                           style: str = "kamishibai",
                                            model: str = "") -> dict:
-    """同じ(emotion,shot,angle)でposeだけ変えた複数バリアントを一括生成する(NanoBanana・外部API課金)。
+    """同じ(emotion,shot,angle)で pose × facing を変えた複数バリアントを一括生成する(NanoBanana・外部API課金)。
 
     matching key(emotion/shot/angle)は変えない(組み合わせ爆発回避)。poseは既存語彙
-    (list_panel_presetsのpose)から選ぶ。生成物は全てreview_status="pending"で登録され、
+    (list_panel_presetsのpose)から選ぶ。facings省略時は["front"]
+    (2026-09-23新設。list_panel_presetsのfacing。詳細 Docs/FACING_AXIS_PLAN.md)。
+    ⚠️ **生成件数は poses × facings の直積**（例: pose3つ×facing2つ＝6枚課金）。
+    生成物は全てreview_status="pending"で登録され、
     approve_panel_library_entryで承認するまでAロール生成からは引かれない(色ブレ等の個体差が
     無審査で本番に流れるのを防ぐ設計。実測で瞳の色が違う個体が出た実例あり)。COST分類。
     """
     body = {"emotion": emotion, "shot": shot, "angle": angle, "poses": poses,
-            "style": style, "model": model}
+            "facings": facings or [], "style": style, "model": model}
     return await dc.request("POST", f"api/scrapping/characters/{char_id}/panel_library/generate_variants", json=body)
 
 

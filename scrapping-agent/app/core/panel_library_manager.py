@@ -35,7 +35,8 @@ from app.core import (
     shot_meter, style_manager,
 )
 
-SCHEMA_VERSION = "1.3.0"  # 1.3.0: mask を追加（analyze_alpha実測・psassistの採寸本籍。追加のみ・後方互換）
+SCHEMA_VERSION = "1.4.0"  # 1.3.0: mask を追加。1.4.0: facing軸の新設・pose/angle/shotの向き系値を削除
+                          # （後方互換=null facingはorientation()がfrontとして読む。Docs/FACING_AXIS_PLAN.md）
 #                          1.2.0: rebless_log / diversity を追加
 #                          1.1.0: kind="cutout" / cutout / measured / fingerprint を追加
 
@@ -185,15 +186,26 @@ def demote_from_line(char_ids: list[str], project_id: str, episode: int,
     return touched
 
 
-def _facing_from_labels(pose: str | None, angle: str | None) -> str:
-    """向きをラベルから導く。
+def _normalize_legacy_axes(
+    *, shot: str, angle: str, pose: str | None,
+) -> tuple[str, str, str | None, str]:
+    """旧向き系の値（pose の facing_left/facing_right/profile_left/profile_right・
+    angle の from_behind・shot の profile）を新 `facing` 軸へ読み替える。
 
-    ⚠️ **定義の本籍は `cutout_selector.orientation`。** ここは登録時に `facing` を埋めるための
-    入口で、同じ結果にならなければならない（あちらは保存済み `facing` を優先して読む）。
-    循環importを避けるため辞書だけを借りる。
+    2026-09-23 の facing 軸新設（`Docs/FACING_AXIS_PLAN.md` §2-2, F2-4）で追加。
+    MCPクライアントの再起動前や、移行前に分類済みの `aroll.json` 行がまだ旧値を
+    送ってくる可能性があるため、``generate_and_register`` / ``register_from_image`` の
+    入口でここに吸収する（``update_entry`` は逆に旧値を**語彙外として400で拒否**する。
+    人が直接ラベルを選ぶ経路は新語彙だけを見せたいので、そちらには適用しない）。
+
+    戻り値: (shot, angle, pose, facing)。shot が profile の読み替え先（None）になった場合は
+    slot_key が必須のため bust に寄せる（移行スクリプトの既定と同じ・§4-2 M3）。
     """
-    from app.core import cutout_selector
-    return cutout_selector.orientation({"pose": pose, "angle": angle})
+    facing = panel_presets.legacy_facing(pose, angle) or "front"
+    pose = panel_presets.LEGACY_REPLACEMENT.get(("pose", pose or ""), pose)
+    angle = panel_presets.LEGACY_REPLACEMENT.get(("angle", angle or ""), angle)
+    shot = panel_presets.LEGACY_REPLACEMENT.get(("shot", shot or ""), shot) or "bust"
+    return shot, angle, pose, facing
 
 
 def usable_as(entry: dict) -> dict:
@@ -395,6 +407,7 @@ def approve_entry(char_id: str, slot_id: str) -> dict | None:
 def update_entry(char_id: str, slot_id: str, *,
                  emotion: str | None = None, shot: str | None = None,
                  angle: str | None = None, pose: str | None = None,
+                 facing: str | None = None,
                  note: str | None = None) -> dict | None:
     """entryのラベル（演技スロット）を人が直す。Noneを渡した軸は触らない。
 
@@ -413,9 +426,15 @@ def update_entry(char_id: str, slot_id: str, *,
 
     空文字は「未設定に戻す」＝許可する。emotionが空の在庫は find_current に引かれない
     （感情未指定の行は自動割当を拒否する、という安全弁と同じ側に倒れるだけ）。
+
+    ⚠️ **facing に旧pose/angleの向き系値（facing_left等）は渡せない。** 2026-09-23の
+    軸分離で語彙から削除済みなので、他の軸と同じ検証で400になる（意図的。人が直接選ぶ経路は
+    新語彙だけを見せる。旧値を後方互換で吸収するのは生成系の入口だけ ──
+    `_normalize_legacy_axes` の docstring参照）。facing を直すと ``facing_source="user"`` を刻む
+    （食い違いの再発防止＝以後この1枚は自動処理で上書きされない）。
     """
     vocab = panel_presets.load_presets()
-    axes = {"emotion": emotion, "shot": shot, "angle": angle, "pose": pose}
+    axes = {"emotion": emotion, "shot": shot, "angle": angle, "pose": pose, "facing": facing}
     for axis, val in axes.items():
         if not val:
             continue
@@ -430,11 +449,16 @@ def update_entry(char_id: str, slot_id: str, *,
         for axis, val in axes.items():
             if val is None:
                 continue
-            # poseだけ「未設定=None」で持つ（register_from_imageの pose or None と同じ表現）
-            new = (val or None) if axis == "pose" else val
+            # pose/facingだけ「未設定=None」で持つ（register_from_imageの pose or None と同じ表現）
+            new = (val or None) if axis in ("pose", "facing") else val
             if e.get(axis) != new:
                 e[axis] = new
                 changed.append(axis)
+                if axis == "facing":
+                    e["facing_source"] = "user"
+                    # 移行スクリプトが立てた「要目視」フラグは、人が実際にfacingを見て
+                    # 直した時点で役目を終える（Docs/FACING_AXIS_PLAN.md §4-3）。
+                    e.pop("facing_needs_review", None)
         if note is not None and e.get("note") != note:
             e["note"] = note
             changed.append("note")
@@ -719,11 +743,16 @@ async def _generate_and_measure(
 
 
 async def generate_and_register(
-    char_id: str, *, emotion: str, shot: str, angle: str, pose: str = "",
+    char_id: str, *, emotion: str, shot: str, angle: str, pose: str = "", facing: str = "",
     style_name: str = "kamishibai", model: str = "", replace_stale: bool = True,
     review_status: str = "approved",
 ) -> dict:
     """1スロット生成し、panel_library/images/へ保存・索引登録して返す。
+
+    facing: 2026-09-23 新設。空文字なら旧pose/angleから読み替え、それも無ければ "front"
+    （`_normalize_legacy_axes`）。**この関数が向きの唯一の書き込み口**にしたことで、
+    手動生成経由の entry も必ず facing を持つようになる（以前は null のまま登録されていた・
+    実測で本番在庫に1件確認済み。`Docs/FACING_AXIS_PLAN.md` §1）。
 
     背景を抜いて指紋を計算し、透過PNGを cutouts/ に保存する＝**その場で切り抜きの在庫にもなる**。
     ⚠️ 2026-08-29に受け入れ検査（既存と近すぎたら作り直す）を撤去した。理由は
@@ -746,6 +775,11 @@ async def generate_and_register(
     if not (emotion and shot and angle):
         raise ValueError("emotion・shot・angle は全て必須です"
                          "（空だと在庫が自動割当から見えなくなり、課金だけ発生します）")
+    # ⚠️ 旧クライアント（MCP再起動前・移行前に分類済みの値）が pose="facing_left" 等を
+    # 送ってくる可能性があるので、ここで新語彙へ読み替える（詳細は関数の docstring）。
+    shot, angle, pose, legacy_facing = _normalize_legacy_axes(shot=shot, angle=angle, pose=pose or None)
+    facing = facing or legacy_facing
+    pose = pose or ""
 
     # 画像生成の可否は character_manager.can_generate_images が本籍
     # （uses_images ・ appearance_prompt ・ reference の3段。判定順で理由が変わる）。
@@ -763,7 +797,7 @@ async def generate_and_register(
 
     body = panel_presets.build_panel_prompt(
         appearance, prefix, emotion_id=emotion, shot_id=shot, angle_id=angle,
-        pose_id=pose, background_mode="flat",
+        facing_id=facing, pose_id=pose, background_mode="flat",
     )
     prompt = f"{body}, {BACKGROUND_FRAGMENT}. {PROMPT_SUFFIX}"
     refs = _resolve_refs(char_id)
@@ -800,6 +834,7 @@ async def generate_and_register(
     entry = {
         "slot_id": slot_id,
         "emotion": emotion, "shot": shot, "angle": angle, "pose": pose or None,
+        "facing": facing, "facing_source": "llm",
         "appearance_version": ver,
         "aspect": "16:9",
         "image": f"images/{slot_id}.png",
@@ -845,6 +880,12 @@ def register_from_image(
     二重登録されているのを発見した（詳細 memory/aroll-duplicate-cutout-same-batch）。
     旧形式entryは実ファイルを都度読んでハッシュ化するフォールバックで拾う。
     """
+    # ⚠️ Aロール承認経路は台本のslotをそのまま渡すので、移行前に分類された行はpose/angleに
+    # 旧向き系の値を持っている可能性がある。ここで新語彙へ読み替える（関数群の詳細は
+    # _normalize_legacy_axes の docstring）。
+    shot, angle, pose, facing = _normalize_legacy_axes(shot=shot, angle=angle, pose=pose or None)
+    pose = pose or ""
+
     img_hash = hashlib.sha256(data).hexdigest()[:16]
     src = dict(source or {}, image_hash=img_hash)
     idx = load_index(char_id)
@@ -888,7 +929,7 @@ def register_from_image(
         # 実物と31〜47%しか一致しないので、カメラプランは下の measured/facing を見る。
         # ここで入れ忘れると、新しい絵だけラベル頼りになって寄り引きが崩れる。
         "measured": shot_meter.measure(rgba), "measured_source": "mask",
-        "facing": _facing_from_labels(pose, angle), "facing_source": "llm",
+        "facing": facing, "facing_source": "llm",
         "style": style_name, "model": model or None, "prompt": prompt,
         "provider": provider, "source": src, "created_at": _now(), "note": "",
         "review_status": review_status, "times_used": 0,
@@ -900,13 +941,18 @@ def register_from_image(
 
 async def generate_variants(
     char_id: str, *, emotion: str, shot: str, angle: str, poses: list[str],
+    facings: list[str] | None = None,
     style_name: str = "kamishibai", model: str = "",
 ) -> list[dict]:
-    """同じ(emotion,shot,angle)にposeだけを変えて複数バリアントを一括生成する。
+    """同じ(emotion,shot,angle)に pose × facing を変えて複数バリアントを一括生成する。
 
     matching key（slot_key）はemotion/shot/angleの3軸のまま変えない（組み合わせ爆発を避ける。
     Docs/AROLL_SLOT_REUSE_BRIEF.md §2-2の踏襲）。poseは既存の固定語彙（panel_presets.py）から
     選ぶ想定＝真に自由なLLM即興文にはしない（識別情報のブレを最小化するため）。
+
+    facings: 2026-09-23 新設（`Docs/FACING_AXIS_PLAN.md`）。省略時は ``["front"]``。
+    ⚠️ **生成件数は poses × facings の直積**（例: pose3つ×facing2つ＝6枚課金）。
+    まとめて増やしすぎないよう呼び出し側（UI・MCP）で件数を表示すること。
 
     生成物は全てreview_status="pending"で登録される。承認するまでfind_current（Aロール消費）
     からは見えない＝人が目視確認してapprove_entry()を呼ぶまで本番に流れない設計。
@@ -919,10 +965,11 @@ async def generate_variants(
     """
     entries = []
     for pose in poses:
-        entry = await generate_and_register(
-            char_id, emotion=emotion, shot=shot, angle=angle, pose=pose,
-            style_name=style_name, model=model, replace_stale=False,
-            review_status="pending",
-        )
-        entries.append(entry)
+        for facing in (facings or ["front"]):
+            entry = await generate_and_register(
+                char_id, emotion=emotion, shot=shot, angle=angle, pose=pose, facing=facing,
+                style_name=style_name, model=model, replace_stale=False,
+                review_status="pending",
+            )
+            entries.append(entry)
     return entries

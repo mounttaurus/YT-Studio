@@ -3525,7 +3525,7 @@
                   <!-- 1枚だけ生成 -->
                   <div style="background:#0f172a;border-radius:8px;padding:14px;margin:14px 0">
                     <h3 style="font-size:13px;color:#e2e8f0;margin:0 0 8px">1枚だけ生成（即許可・背景除去も自動・必ず在庫に入る）</h3>
-                    <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:12px">
+                    <div style="display:grid;grid-template-columns:repeat(5,1fr);gap:12px">
                       <label style="font-size:12px;color:#cbd5e1">表情
                         <select x-model="charLib.gen.emotion" style="width:100%;margin-top:4px"
                                 x-effect="(v => $nextTick(() => { $el.value = v }))(charLib.gen.emotion)">
@@ -3545,6 +3545,13 @@
                                 x-effect="(v => $nextTick(() => { $el.value = v }))(charLib.gen.angle)">
                           <option value="">（未選択）</option>
                           <template x-for="p in (studioPresets.angle||[])" :key="p.id"><option :value="p.id" x-text="p.label_ja"></option></template>
+                        </select>
+                      </label>
+                      <label style="font-size:12px;color:#cbd5e1">向き（任意・既定=正面）
+                        <select x-model="charLib.gen.facing" style="width:100%;margin-top:4px"
+                                x-effect="(v => $nextTick(() => { $el.value = v }))(charLib.gen.facing)">
+                          <option value="">（未選択＝正面）</option>
+                          <template x-for="p in (studioPresets.facing||[])" :key="p.id"><option :value="p.id" x-text="p.label_ja"></option></template>
                         </select>
                       </label>
                       <label style="font-size:12px;color:#cbd5e1">ポーズ（任意）
@@ -3611,6 +3618,21 @@
                         </label>
                       </template>
                     </div>
+                    <div style="font-size:12px;color:#cbd5e1;margin:10px 0 4px">
+                      向き（複数選択・未選択=正面のみ。⚠️ 生成件数は pose × 向き の直積）
+                    </div>
+                    <div style="display:flex;flex-wrap:wrap;gap:8px;margin-bottom:10px">
+                      <template x-for="p in (studioPresets.facing||[])" :key="p.id">
+                        <label style="display:flex;align-items:center;gap:4px;cursor:pointer;font-size:11px;background:#1e293b;padding:3px 8px;border-radius:99px">
+                          <input type="checkbox" :checked="charLib.variantGen.facings.includes(p.id)" @change="toggleCharLibVariantFacing(p.id)">
+                          <span x-text="p.label_ja"></span>
+                        </label>
+                      </template>
+                    </div>
+                    <div x-show="charLib.variantGen.poses.length && charLib.variantGen.facings.length > 1"
+                         style="font-size:10px;color:#f59e0b;margin:-4px 0 8px">
+                      ⚠️ <span x-text="charLib.variantGen.poses.length * charLib.variantGen.facings.length"></span>枚生成されます（pose<span x-text="charLib.variantGen.poses.length"></span>×向き<span x-text="charLib.variantGen.facings.length"></span>）
+                    </div>
                     <div style="display:flex;gap:12px;align-items:end">
                       <label style="font-size:12px;color:#cbd5e1">モデル
                         <select x-model="charLib.variantGen.model" style="width:220px;margin-top:4px">
@@ -3634,8 +3656,8 @@
                       1枚ずつ「1枚だけ生成」を呼ぶのと同じ経路 ── <b>受け入れ検査つき・即許可・✂️切り抜きも作る</b>
                       （バリアント一括生成とは違い、未許可にはならない）。同時1枚ずつ・間隔を空けて送るのでレート制限には配慮する。
                     </p>
-                    <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:12px">
-                      <template x-for="axis in [['emotion','表情'],['shot','ショット'],['angle','アングル'],['pose','ポーズ']]" :key="axis[0]">
+                    <div style="display:grid;grid-template-columns:repeat(5,1fr);gap:12px">
+                      <template x-for="axis in [['emotion','表情'],['shot','ショット'],['angle','アングル'],['facing','向き'],['pose','ポーズ']]" :key="axis[0]">
                         <div>
                           <label style="font-size:12px;color:#cbd5e1" x-text="axis[1]"></label>
                           <select :disabled="charLib.batchRand[axis[0]]" x-model="charLib.batchGen[axis[0]]"
@@ -3655,7 +3677,7 @@
                     <div style="font-size:10px;color:#4b5563;margin-top:8px;line-height:1.6">
                       <b>emotion・shot・angle は必ず「固定値を選ぶ」か「🎲ランダムにする」のどちらか</b>にすること
                       （どちらも満たさないまま空で生成すると、その絵は自動割当から永久に見えなくなる ── バックエンドも拒否する）。
-                      poseだけは未選択のまま（固定・ランダムどちらもOFF）で構わない。
+                      pose・向きは未選択のまま（固定・ランダムどちらもOFF）で構わない（向きは未選択=正面）。
                     </div>
 
                     <div style="display:grid;grid-template-columns:1fr 1fr 2fr;gap:12px;align-items:end;margin-top:12px">
@@ -3758,6 +3780,9 @@
                 <button class="btn btn-sm" x-show="charLibCounts.stale"
                         :style="charLib.status === 'stale' ? 'background:#7f1d1d;color:#fecaca' : ''"
                         @click="charLibSetFilter('status', 'stale')" x-text="`世代違い ${charLibCounts.stale}`"></button>
+                <button class="btn btn-sm" x-show="charLibCounts.needsReview"
+                        :style="charLib.status === 'needs_review' ? 'background:#7f1d1d;color:#fecaca' : ''"
+                        @click="charLibSetFilter('status', 'needs_review')" x-text="`⚠️向き要目視 ${charLibCounts.needsReview}`"></button>
               </div>
 
               <!-- 感情 -->
@@ -3809,11 +3834,15 @@
                       <span x-show="charLibNeedsPs(e)"
                             title="Photoshop本線化はまだ（rembgの仮切り抜き）。host_workerが裏で仕上げ次第、自動でPS版に差し替わります"
                             style="position:absolute;top:3px;left:3px;font-size:9px;padding:1px 6px;border-radius:99px;background:#78350f;color:#fde68a">仮</span>
+                      <span x-show="e.facing_needs_review"
+                            title="facing軸の移行で向きが機械では決められませんでした（要目視）"
+                            style="position:absolute;top:3px;right:3px;font-size:9px;padding:1px 6px;border-radius:99px;background:#7f1d1d;color:#fecaca">⚠️向き</span>
                     </div>
                     <div style="padding:4px 6px;display:flex;align-items:center;gap:4px;background:#0f172a">
                       <span style="font-size:11px" x-text="e.review_status === 'pending' ? '⏳' : '✔'"></span>
                       <span style="font-size:10px" x-show="e.usable?.panel" title="背景付きコマとして使える">🖼️</span>
                       <span style="font-size:10px" x-show="e.usable?.cutout" title="合成素材として使える">✂️</span>
+                      <span style="font-size:10px;color:#a78bfa" :title="`向き: ${charLibFacingLabel(e)}`" x-text="charLibFacingGlyph(e)"></span>
                       <span style="font-size:9px;color:#94a3b8;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;flex:1"
                             x-text="(charLib.charId === '*' ? (charaName(e.char_id) + ' / ') : '') + (e.emotion || '感情なし')"></span>
                       <span style="font-size:9px;color:#64748b" x-text="`${e.times_used || 0}回`"></span>
@@ -4445,8 +4474,13 @@
             <span x-show="charLib.detail.label_source === 'user'"
                   style="color:#86efac;text-transform:none;letter-spacing:0">— 手で直し済み</span>
           </div>
+          <div x-show="charLib.detail.facing_needs_review"
+               style="font-size:10px;color:#fca5a5;background:#450a0a;border-radius:6px;padding:6px 8px;margin-bottom:8px;line-height:1.6">
+            ⚠️ <b>要目視</b>：facing軸の移行で向きが機械では決められませんでした。絵を見て「向き」を選び直してください
+            （選ぶとこの表示は消えます）。
+          </div>
           <div style="display:grid;grid-template-columns:70px 1fr;gap:6px 8px;align-items:center">
-            <template x-for="axis in [['emotion','表情'],['shot','ショット'],['angle','アングル'],['pose','ポーズ']]" :key="axis[0]">
+            <template x-for="axis in [['emotion','表情'],['shot','ショット'],['angle','アングル'],['facing','向き'],['pose','ポーズ']]" :key="axis[0]">
               <div style="display:contents">
                 <span style="font-size:10px;color:#64748b" x-text="axis[1]"></span>
                 <select style="font-size:11px;padding:2px;width:100%" :disabled="charLib.busy"
@@ -5500,7 +5534,7 @@ function app() {
     newCharaUploading: false,
     // 演技スロットの語彙（表情/ポーズ/ショット/アングル/シーン）。本籍は panel_presets。
     // ⚠️ 🎬紙芝居タブは撤去したが、この語彙は 🖼️Aロール・✂️切り抜き・📚キャラ画像が使う
-    studioPresets: { emotion: [], pose: [], shot: [], angle: [], scene: [] },
+    studioPresets: { emotion: [], pose: [], shot: [], angle: [], facing: [], scene: [] },
     modelInfo: { checkpoints: [], loras: [], vaes: [] },
     modelDl: { url: '', kind: 'lora', filename: '' },
     modelDownloads: [],
@@ -5560,11 +5594,12 @@ function app() {
       charId: '', items: [], busy: false, msg: '', detail: null,
       usable: 'all', status: 'all', emotion: 'all', shot: 'all',
       genBusy: false, variantBusy: false,
-      gen: { emotion: '', shot: '', angle: '', pose: '', model: 'gemini-3.1-flash-lite-image' },
-      variantGen: { emotion: '', shot: '', angle: '', poses: [], model: 'gemini-3.1-flash-lite-image' },
+      // facing（向き）は2026-09-23新設。省略/空文字は"front"扱い（バックエンド側の既定）
+      gen: { emotion: '', shot: '', angle: '', pose: '', facing: '', model: 'gemini-3.1-flash-lite-image' },
+      variantGen: { emotion: '', shot: '', angle: '', poses: [], facings: [], model: 'gemini-3.1-flash-lite-image' },
       // 🎲 バッチ生成（旧🎬紙芝居のノリ。固定 or ランダムを軸ごとに選び panel_library/generate をN回呼ぶ）
-      batchGen: { emotion: '', shot: '', angle: '', pose: '', model: 'gemini-3.1-flash-lite-image' },
-      batchRand: { emotion: false, shot: false, angle: false, pose: false },
+      batchGen: { emotion: '', shot: '', angle: '', pose: '', facing: '', model: 'gemini-3.1-flash-lite-image' },
+      batchRand: { emotion: false, shot: false, angle: false, pose: false, facing: false },
       batch: { count: 10, intervalMs: 3500 },
       batchBusy: false, batchStopFlag: false,
       batchProgress: { done: 0, total: 0, failed: 0 },
@@ -7994,6 +8029,10 @@ function app() {
       const i = this.charLib.variantGen.poses.indexOf(id);
       if (i >= 0) this.charLib.variantGen.poses.splice(i, 1); else this.charLib.variantGen.poses.push(id);
     },
+    toggleCharLibVariantFacing(id) {
+      const i = this.charLib.variantGen.facings.indexOf(id);
+      if (i >= 0) this.charLib.variantGen.facings.splice(i, 1); else this.charLib.variantGen.facings.push(id);
+    },
     async generateCharLib() {
       if (this.charLib.genBusy || !this.charLib.charId || this.charLib.charId === '*') return;
       const g = this.charLib.gen;
@@ -8002,7 +8041,8 @@ function app() {
       try {
         const r = await fetch(`${FAPI}/characters/${this.charLib.charId}/panel_library/generate`, {
           method: 'POST', headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ emotion: g.emotion, shot: g.shot, angle: g.angle, pose: g.pose, model: g.model }),
+          body: JSON.stringify({ emotion: g.emotion, shot: g.shot, angle: g.angle, pose: g.pose,
+                                  facing: g.facing, model: g.model }),
         });
         if (!r.ok) { const e = await r.json().catch(() => ({})); this.charLib.msg = `生成失敗: ${e.detail || r.status}`; return; }
         this.charLib.msg = '1枚生成しました（許可済み・即座にAロールから引かれます）';
@@ -8022,7 +8062,8 @@ function app() {
       try {
         const r = await fetch(`${FAPI}/characters/${this.charLib.charId}/panel_library/generate_variants`, {
           method: 'POST', headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ emotion: g.emotion, shot: g.shot, angle: g.angle, poses: g.poses, model: g.model }),
+          body: JSON.stringify({ emotion: g.emotion, shot: g.shot, angle: g.angle, poses: g.poses,
+                                  facings: g.facings, model: g.model }),
         });
         if (!r.ok) { const e = await r.json().catch(() => ({})); this.charLib.msg = `生成失敗: ${e.detail || r.status}`; return; }
         const d = await r.json();
@@ -8042,7 +8083,7 @@ function app() {
     },
     // 🎲ONの項目をランダム、OFFは現在の固定値。同一組み合わせはバッチ内で極力回避
     _buildCharLibBatchQueue() {
-      const groups = ['emotion', 'shot', 'angle', 'pose'];
+      const groups = ['emotion', 'shot', 'angle', 'facing', 'pose'];
       const n = parseInt(this.charLib.batch.count) || 0;
       const seen = new Set();
       const out = [];
@@ -8983,6 +9024,7 @@ function app() {
           // 上限は✂️切り抜きとしての消費にのみ意味を持つ（find_current(🖼️パネル)に上限は無い）
           if (st === 'exhausted' && !(e.usable?.cutout && (e.times_used || 0) >= cap)) return false;
           if (st === 'stale' && !e.is_stale) return false;
+          if (st === 'needs_review' && !e.facing_needs_review) return false;
         }
         if (exclude !== 'emotion' && this.charLib.emotion !== 'all'
             && (e.emotion || '感情なし') !== this.charLib.emotion) return false;
@@ -9040,9 +9082,19 @@ function app() {
         unused: it.filter(e => !(e.times_used || 0)).length,
         exhausted: it.filter(e => e.usable?.cutout && (e.times_used || 0) >= cap).length,
         stale: it.filter(e => e.is_stale).length,
+        needsReview: it.filter(e => e.facing_needs_review).length,
         panelUsable: it.filter(e => e.usable?.panel).length,
         cutoutUsable: it.filter(e => e.usable?.cutout).length,
       };
+    },
+    // 向きの1文字インジケータ（目視で誤りに気づけるように。Docs/FACING_AXIS_PLAN.md §5）。
+    // facing未設定（移行前の旧データ・稀）はfrontとみなす（orientation()の後方互換と同じ扱い）。
+    _CHAR_LIB_FACING_GLYPH: { front: '正', left_3q: '↖', left_profile: '←', right_3q: '↗', right_profile: '→', back: '背' },
+    charLibFacingGlyph(e) {
+      return this._CHAR_LIB_FACING_GLYPH[e.facing || 'front'] || '正';
+    },
+    charLibFacingLabel(e) {
+      return (this.studioPresets.facing || []).find(p => p.id === (e.facing || 'front'))?.label_ja || '正面';
     },
     charLibTally(rows, pick) {
       const m = new Map();

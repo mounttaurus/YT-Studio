@@ -19,7 +19,7 @@ import json
 import os
 from pathlib import Path
 
-from app.core import character_manager, panel_library_manager, shot_meter
+from app.core import character_manager, panel_library_manager, panel_presets, shot_meter
 
 OVERRIDES_NAME = "character_overrides.json"
 
@@ -138,10 +138,11 @@ def _ref(char_id: str, slot_id: str) -> str:
 # ⚠️ **真横(profile_*)と斜め45度(facing_*)は別クラスにする**（2026-09-20 目視で判断）。
 # 真横は遠目の目が見えず輪郭だけ、斜めは両目が見えて体だけ振れている ── 別カットとして読める。
 # 同じ "left" に畳むと互いを「近すぎ」と潰し合い、せっかくの変化が使えなくなる。
-_ORIENTATION_BY_POSE = {
-    "profile_left": "left_profile", "facing_left": "left_3q",
-    "profile_right": "right_profile", "facing_right": "right_3q",
-}
+#
+# ⚠️ 2026-09-23、向きは独立軸 `facing` に一本化した（`Docs/FACING_AXIS_PLAN.md`）。
+# 「pose/angleから向きを読み替える」ロジックの本籍は `panel_presets.legacy_facing`
+# （旧在庫・移行前に分類済みのデータとの後方互換用）。ここではそれを呼ぶだけにする
+# （旧 `_ORIENTATION_BY_POSE` 辞書のコピーを持たない＝1事実1ホーム）。
 
 
 def orientation(entry: dict | None) -> str:
@@ -149,9 +150,8 @@ def orientation(entry: dict | None) -> str:
 
     "front" / "left_3q" / "left_profile" / "right_3q" / "right_profile" / "back"。
 
-    保存済みの `facing` があればそれを使う（`psassist/Docs/CHARACTER_CUTOUT_PLAN.md` §4 で
-    予約されていたフィールド。`facing_source` に出どころが入る）。無ければラベルから導く
-    ── `angle="from_behind"` は背面なので pose より優先する。
+    保存済みの `facing` があればそれを使う。無ければ旧ラベル（pose/angle）から
+    `panel_presets.legacy_facing` で読み替える（移行前の在庫・後方互換）。
 
     ⚠️ **`facing` を正本にする**のは、後から視覚モデルや手タグで**上書きできる**ようにするため。
     ラベル由来の値は `facing_source="llm"` で入っているので、精度が足りなければそこだけ直せる。
@@ -160,9 +160,7 @@ def orientation(entry: dict | None) -> str:
     stored = e.get("facing")
     if stored:
         return stored
-    if (e.get("angle") or "") == "from_behind":
-        return "back"
-    return _ORIENTATION_BY_POSE.get(e.get("pose") or "", "front")
+    return panel_presets.legacy_facing(e.get("pose"), e.get("angle")) or "front"
 
 
 def _looks_same(a: dict, b: dict, fn, threshold: float) -> bool:
@@ -190,13 +188,17 @@ def _pose_conflicts(want: str | None, have: str | None) -> bool:
     そこで「分からないものは制約にしない・分かっていて食い違う時だけ弾く」に倒す。
     今日は何も弾かないが、pose を持つ在庫が増えるにつれて自然に効き始める。
 
-    ⚠️ **向きのポーズ（profile_*/facing_*）はここで比べない**（2026-09-20）。あれは
+    ⚠️ **向きのポーズ（旧 profile_*/facing_*）はここで比べない**（2026-09-20）。あれは
     アクションではなく**体の向き**で、担当軸は `facing`／カメラプランの方。
     ここで弾いていたせいで、向きを増やすために買った在庫が**候補に入る前に消えて**いた
     （実測: カメラプランが back や left_profile を希望しても 62カット中60カットが正面）。
     在庫の pose 被覆が上がるほど悪化する性質だったので、軸の取り違えとして直す。
+
+    ⚠️ 2026-09-23、向き系4値は pose の語彙から削除したが、**この判定自体は残す**。
+    移行前に分類済みの `aroll.json` 行（要求側 want）が旧値をまだ持っている間の
+    後方互換のため（`panel_presets.LEGACY_FACING` に載っている pose 値かどうかで判定）。
     """
-    if want in _ORIENTATION_BY_POSE or have in _ORIENTATION_BY_POSE:
+    if ("pose", want or "") in panel_presets.LEGACY_FACING or ("pose", have or "") in panel_presets.LEGACY_FACING:
         return False
     return bool(want and have and want != have)
 
