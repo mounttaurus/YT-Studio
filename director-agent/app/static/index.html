@@ -3520,25 +3520,29 @@
                     <h3 style="font-size:13px;color:#e2e8f0;margin:0 0 8px">1枚だけ生成（即許可・背景除去も自動・必ず在庫に入る）</h3>
                     <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:12px">
                       <label style="font-size:12px;color:#cbd5e1">表情
-                        <select x-model="charLib.gen.emotion" style="width:100%;margin-top:4px">
+                        <select x-model="charLib.gen.emotion" style="width:100%;margin-top:4px"
+                                x-effect="(v => $nextTick(() => { $el.value = v }))(charLib.gen.emotion)">
                           <option value="">（未選択）</option>
                           <template x-for="p in (studioPresets.emotion||[])" :key="p.id"><option :value="p.id" x-text="p.label_ja"></option></template>
                         </select>
                       </label>
                       <label style="font-size:12px;color:#cbd5e1">ショット
-                        <select x-model="charLib.gen.shot" style="width:100%;margin-top:4px">
+                        <select x-model="charLib.gen.shot" style="width:100%;margin-top:4px"
+                                x-effect="(v => $nextTick(() => { $el.value = v }))(charLib.gen.shot)">
                           <option value="">（未選択）</option>
                           <template x-for="p in (studioPresets.shot||[])" :key="p.id"><option :value="p.id" x-text="p.label_ja"></option></template>
                         </select>
                       </label>
                       <label style="font-size:12px;color:#cbd5e1">アングル
-                        <select x-model="charLib.gen.angle" style="width:100%;margin-top:4px">
+                        <select x-model="charLib.gen.angle" style="width:100%;margin-top:4px"
+                                x-effect="(v => $nextTick(() => { $el.value = v }))(charLib.gen.angle)">
                           <option value="">（未選択）</option>
                           <template x-for="p in (studioPresets.angle||[])" :key="p.id"><option :value="p.id" x-text="p.label_ja"></option></template>
                         </select>
                       </label>
                       <label style="font-size:12px;color:#cbd5e1">ポーズ（任意）
-                        <select x-model="charLib.gen.pose" style="width:100%;margin-top:4px">
+                        <select x-model="charLib.gen.pose" style="width:100%;margin-top:4px"
+                                x-effect="(v => $nextTick(() => { $el.value = v }))(charLib.gen.pose)">
                           <option value="">（未選択）</option>
                           <template x-for="p in (studioPresets.pose||[])" :key="p.id"><option :value="p.id" x-text="p.label_ja"></option></template>
                         </select>
@@ -3570,19 +3574,22 @@
                     </p>
                     <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:12px">
                       <label style="font-size:12px;color:#cbd5e1">表情
-                        <select x-model="charLib.variantGen.emotion" style="width:100%;margin-top:4px">
+                        <select x-model="charLib.variantGen.emotion" style="width:100%;margin-top:4px"
+                                x-effect="(v => $nextTick(() => { $el.value = v }))(charLib.variantGen.emotion)">
                           <option value="">（未選択）</option>
                           <template x-for="p in (studioPresets.emotion||[])" :key="p.id"><option :value="p.id" x-text="p.label_ja"></option></template>
                         </select>
                       </label>
                       <label style="font-size:12px;color:#cbd5e1">ショット
-                        <select x-model="charLib.variantGen.shot" style="width:100%;margin-top:4px">
+                        <select x-model="charLib.variantGen.shot" style="width:100%;margin-top:4px"
+                                x-effect="(v => $nextTick(() => { $el.value = v }))(charLib.variantGen.shot)">
                           <option value="">（未選択）</option>
                           <template x-for="p in (studioPresets.shot||[])" :key="p.id"><option :value="p.id" x-text="p.label_ja"></option></template>
                         </select>
                       </label>
                       <label style="font-size:12px;color:#cbd5e1">アングル
-                        <select x-model="charLib.variantGen.angle" style="width:100%;margin-top:4px">
+                        <select x-model="charLib.variantGen.angle" style="width:100%;margin-top:4px"
+                                x-effect="(v => $nextTick(() => { $el.value = v }))(charLib.variantGen.angle)">
                           <option value="">（未選択）</option>
                           <template x-for="p in (studioPresets.angle||[])" :key="p.id"><option :value="p.id" x-text="p.label_ja"></option></template>
                         </select>
@@ -3625,7 +3632,8 @@
                         <div>
                           <label style="font-size:12px;color:#cbd5e1" x-text="axis[1]"></label>
                           <select :disabled="charLib.batchRand[axis[0]]" x-model="charLib.batchGen[axis[0]]"
-                                  style="width:100%;margin-top:4px">
+                                  style="width:100%;margin-top:4px"
+                                  x-effect="(v => $nextTick(() => { $el.value = v }))(charLib.batchGen[axis[0]])">
                             <option value="">（未選択）</option>
                             <template x-for="p in (studioPresets[axis[0]]||[])" :key="p.id">
                               <option :value="p.id" x-text="p.label_ja"></option>
