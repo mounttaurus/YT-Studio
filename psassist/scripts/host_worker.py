@@ -255,7 +255,10 @@ def run_library_sweep_step(shared_dir: str) -> None:
     out_dir = os.path.join(target["lib_dir"], "cutouts_ps")
     os.makedirs(out_dir, exist_ok=True)
     slot_id = target["slot_id"]
-    out_tmp = os.path.join(out_dir, slot_id + ".png.tmp")
+    # ⚠️ Photoshopの SaveAs は最後の拡張子だけを .png に置き換える
+    # （"X.png.tmp" → "X.png.png" になり、下のrenameが失敗する）ので、
+    # 一時名は先頭側に印を付ける形にして「.png」を最後に保つ。
+    out_tmp = os.path.join(out_dir, slot_id + ".ps-tmp.png")
     out_final = os.path.join(out_dir, slot_id + ".png")
     error_path = os.path.join(out_dir, slot_id + ".error.json")
     label = "%s/%s" % (target["char_id"], slot_id)
