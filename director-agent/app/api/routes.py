@@ -111,6 +111,61 @@ _PSASSIST_JOB_KINDS = {"build_plan", "cutout", "build_panel", "qa_check", "expor
 # resync も「要組み直しの行だけ」を明示させる設計のため同じ扱い）。
 _PSASSIST_KINDS_ALLOW_ALL = {"build_plan", "cutout", "build_panel", "qa_check"}
 
+# P3（Docs/CUTOUT_PS_PRIMARY_PLAN.md）: 最終出力に近い3工程だけ、PS切り抜きの
+# 未処理を確認してから積む。build_plan/cutout/qa_checkはゲートしない
+#（qa_checkは検査であって最終出力ではなく、build_planは絵そのものに触れない）。
+_PS_GATE_KINDS = {"build_panel", "resync", "export_png"}
+
+
+async def _ps_cutout_gate(project_id: str, episode_number: int, lines: list[str]) -> dict | None:
+    """対象行にPS切り抜き未処理のものがあれば `{ps_pending_lines, worker_alive}` を返す。
+
+    Docs/CUTOUT_PS_PRIMARY_PLAN.md P3・§5。**PS環境が無効な環境では常にNone**
+    （CUTOUT_PS=off、またはworker.json自体が無い＝psassist未導入・rembgのみで完結する
+    環境）。待ちもゲートも出さないのが公開リポ利用者への約束（§1-4）。
+    """
+    if os.getenv("CUTOUT_PS", "auto").strip().lower() == "off":
+        return None
+    worker = project_manager.get_psassist_worker()
+    if worker is None or "library_cutout" not in (worker.get("capabilities") or []):
+        return None  # psassist未導入、またはPS本線化に未対応のworker
+
+    async with httpx.AsyncClient(timeout=30.0) as client:
+        try:
+            r = await client.get(
+                f"{SCRAPPING_AGENT_URL}/projects/{project_id}/episodes/{episode_number}/aroll")
+        except httpx.RequestError:
+            return None  # aroll.json自体が引けない時はゲートより先の別のエラーに任せる
+        if r.status_code >= 400:
+            return None
+        panels = (r.json() or {}).get("panels") or []
+
+        target_lines = set(lines) if lines else None  # 空 = 全件（呼び出し側の慣習に合わせる）
+        by_char: dict[str, list[tuple[str, str]]] = {}
+        for p in panels:
+            line_id, slot_id, char_id = p.get("line_id"), p.get("cutout_slot_id"), p.get("cutout_char_id")
+            if not (line_id and slot_id and char_id):
+                continue
+            if target_lines is not None and line_id not in target_lines:
+                continue
+            by_char.setdefault(char_id, []).append((line_id, slot_id))
+
+        pending_lines: list[str] = []
+        for char_id, items in by_char.items():
+            try:
+                # ps-status は呼ぶだけで取り込みを1回走らせる（§4 P2・P3の取り決め通り）
+                sr = await client.get(f"{SCRAPPING_AGENT_URL}/panel-library/{char_id}/ps-status")
+            except httpx.RequestError:
+                continue
+            if sr.status_code >= 400:
+                continue
+            pending_slots = set((sr.json() or {}).get("pending_slot_ids") or [])
+            pending_lines += [line_id for line_id, slot_id in items if slot_id in pending_slots]
+
+    if not pending_lines:
+        return None
+    return {"ps_pending_lines": pending_lines, "worker_alive": bool(worker.get("alive"))}
+
 
 @router.post("/projects/{project_id}/episodes/{episode_number}/psassist/jobs")
 async def create_psassist_job(project_id: str, episode_number: int, request: Request):
@@ -125,6 +180,12 @@ async def create_psassist_job(project_id: str, episode_number: int, request: Req
     elif not isinstance(lines, list) or not lines:
         # ⚠️ 空リストは「対象ゼロ」。export_png は対象行の明示を必須にする
         raise HTTPException(status_code=400, detail="lines is required (empty = no target)")
+
+    if kind in _PS_GATE_KINDS and not body.get("force"):
+        gate = await _ps_cutout_gate(project_id, episode_number, lines)
+        if gate:
+            raise HTTPException(status_code=409, detail=gate)
+
     job = project_manager.enqueue_psassist_job(
         project_id, episode_number, kind, lines, body.get("args") or {})
     if job is None:

@@ -8541,6 +8541,40 @@ function app() {
           hint: '合成結果を検査してサムネと指摘を作ります（Photoshop不要・196枚で約1分）' },
       ];
     },
+    // P3（Docs/CUTOUT_PS_PRIMARY_PLAN.md）: build_panel/resync/export_pngは、対象行の
+    // PS切り抜きがまだ未処理だと409で返る（{ps_pending_lines, worker_alive}）。
+    // 「待つ」＝何もしない（呼び出し側でメッセージを出す）／「このまま進める」＝force再送。
+    // 新しいUI部品は作らず、他のPhotoshop占有確認と同じconfirm()に相乗りする。
+    async postPsassistJob(kind, lines, { silent = false } = {}) {
+      const body = { kind };
+      if (lines) body.lines = lines;
+      let r = await fetch(`${this.qaBase}/jobs`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body),
+      });
+      if (r.status === 409) {
+        const d = await r.json().catch(() => ({}));
+        const detail = d.detail || {};
+        if (Array.isArray(detail.ps_pending_lines)) {
+          // silent（選び直し直後の自動組み直し等）は確認を出さず進める＝自動化を止めない（§1-5）。
+          // 取りこぼしはslot_id自体は変わらないので「♻️要組み直し」バッジで後から拾える。
+          let proceed = silent;
+          if (!silent) {
+            const workerMsg = detail.worker_alive ? 'worker: 稼働中' : 'worker: 停止中（待っても進みません）';
+            proceed = confirm(
+              `🖼️ PS切り抜きが未処理の行が ${detail.ps_pending_lines.length} 行あります（${workerMsg}）。\n\n`
+              + `[OK] このまま進める（rembgの仮絵のまま組みます。後でPS版に差し替わったら「♻️要組み直し」で拾えます）\n`
+              + `[キャンセル] 待つ（今回は何もしません）`);
+          }
+          if (!proceed) return { ok: false, cancelled: true };
+          r = await fetch(`${this.qaBase}/jobs`, {
+            method: 'POST', headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ ...body, force: true }),
+          });
+        }
+      }
+      return { ok: r.ok, response: r };
+    },
     // 汎用のジョブ投入。lines を省略すると工程1〜4は全件を意味する
     async psassistRunStep(kind, label, needsPhotoshop) {
       if (this.psassistJobBusy || !this.psassistAlive) return;
@@ -8555,11 +8589,9 @@ function app() {
       this.psassistJobBusy = true;
       this.psassistCancelRequested = false;   // 新しいジョブなので前回の中断要求状態を捨てる
       try {
-        const r = await fetch(`${this.qaBase}/jobs`, {
-          method: 'POST', headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ kind }),   // lines 省略＝全件
-        });
-        if (!r.ok) { const d = await r.json().catch(() => ({})); alert('ジョブ投入エラー: ' + (d.detail || r.status)); return; }
+        const { ok, cancelled, response } = await this.postPsassistJob(kind);   // lines 省略＝全件
+        if (cancelled) return;
+        if (!ok) { const d = await response.json().catch(() => ({})); alert('ジョブ投入エラー: ' + (d.detail || response.status)); return; }
         await this.loadPsassistJobs();
         this.psassistPollJob();
       } finally { this.psassistJobBusy = false; }
@@ -8588,12 +8620,9 @@ function app() {
       if (!lines.length || this.psassistJobBusy) return;
       this.psassistJobBusy = true;
       try {
-        const r = await fetch(`${this.qaBase}/jobs`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ kind: 'export_png', lines }),
-        });
-        if (!r.ok) { const d = await r.json().catch(() => ({})); alert('ジョブ投入エラー: ' + (d.detail || r.status)); return; }
+        const { ok, cancelled, response } = await this.postPsassistJob('export_png', lines);
+        if (cancelled) return;
+        if (!ok) { const d = await response.json().catch(() => ({})); alert('ジョブ投入エラー: ' + (d.detail || response.status)); return; }
         await this.loadPsassistJobs();
         this.psassistPollJob();
       } finally {
@@ -8626,13 +8655,11 @@ function app() {
       this.psassistJobBusy = true;
       this.psassistCancelRequested = false;
       try {
-        const r = await fetch(`${this.qaBase}/jobs`, {
-          method: 'POST', headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ kind: 'resync', lines }),
-        });
-        if (!r.ok) {
-          const d = await r.json().catch(() => ({}));
-          const msg = 'ジョブ投入エラー: ' + (d.detail || r.status);
+        const { ok, cancelled, response } = await this.postPsassistJob('resync', lines, { silent });
+        if (cancelled) return;   // silentは常にforce再送するのでここに来るのは非silentの「待つ」選択時のみ
+        if (!ok) {
+          const d = await response.json().catch(() => ({}));
+          const msg = 'ジョブ投入エラー: ' + (d.detail || response.status);
           if (silent) { this.arollMsg = msg; } else { alert(msg); }
           return;
         }

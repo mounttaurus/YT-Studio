@@ -390,6 +390,9 @@ async def panel_library_ps_status(char_id: str):
     """
     if character_manager.read_character(char_id) is None:
         raise HTTPException(status_code=404, detail=f"character not found: {char_id}")
+    # P3: ゲート判定の直前に取り込みを1回走らせてから状態を見る（Docs/CUTOUT_PS_PRIMARY_PLAN.md §4）。
+    # 定期タスク（15秒間隔）を待たずに最新化する。取り込む物が無ければ即returnで安い。
+    panel_library_manager.adopt_ps_cutouts(char_id)
     entries = panel_library_manager.load_index(char_id).get("entries", [])
     pending_ids = [e["slot_id"] for e in entries if panel_library_manager.needs_ps_cutout(e)]
     stage_dir = panel_library_manager.cutouts_ps_dir(char_id)

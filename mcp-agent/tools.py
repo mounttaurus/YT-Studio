@@ -1072,7 +1072,7 @@ async def psassist_jobs(project_id: str, episode_number: int) -> dict:
 
 
 async def psassist_run(project_id: str, episode_number: int, kind: str,
-                       lines: Optional[list[str]] = None) -> dict:
+                       lines: Optional[list[str]] = None, force: bool = False) -> dict:
     """host_worker.py（ホスト常駐のPhotoshop工程）へジョブを1件キューに積む。
 
     ⚠️ **`cutout` / `build_panel` / `export_png` / `resync` は Photoshop を占有する。** 他の用途で
@@ -1090,6 +1090,12 @@ async def psassist_run(project_id: str, episode_number: int, kind: str,
     直した行だけ描き出すつもりが古い版のまま飛ばされる。直した行のline_idを明示すること。
     resyncの理由: 「要組み直し」の対象を明示させる設計（全件を毎回殴らない）。
 
+    force: build_panel/resync/export_pngで、対象行にPS切り抜き未処理（rembgの仮絵のまま）の
+    ものがあると既定では409で止まる（`Docs/CUTOUT_PS_PRIMARY_PLAN.md` P3）。409が返ったら
+    detailの`ps_pending_lines`（対象行）・`worker_alive`（host_workerの生死）をユーザーに見せて
+    「待つ（何もしない）」か「このまま進める」か確認し、進める場合だけforce=Trueで呼び直すこと。
+    PS環境を使っていない環境（CUTOUT_PS=off・worker.json無し）ではそもそも409にならない。
+
     ⚠️ **先に psassist_worker_status() で alive を確認すること。** worker が動いていないと
     ジョブはキューに積まれるだけで何も実行されない（無言で放置される）。
     進捗は psassist_jobs をポーリングして status/log を見る。
@@ -1097,6 +1103,8 @@ async def psassist_run(project_id: str, episode_number: int, kind: str,
     body: dict = {"kind": kind}
     if lines is not None:
         body["lines"] = lines
+    if force:
+        body["force"] = True
     return await dc.request(
         "POST", f"projects/{project_id}/episodes/{episode_number}/psassist/jobs", json=body)
 
