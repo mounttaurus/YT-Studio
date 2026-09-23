@@ -513,6 +513,129 @@ def delete_entry(char_id: str, slot_id: str) -> bool:
     return True
 
 
+def cutouts_ps_dir(char_id: str) -> Path:
+    return library_dir(char_id) / "cutouts_ps"
+
+
+def needs_ps_cutout(entry: dict) -> bool:
+    """在庫スイープ／取り込みの対象判定（Docs/CUTOUT_PS_PRIMARY_PLAN.md §3）。
+
+    元画像(`image`)があり、psassist取り込み由来（`kind == "cutout"`）ではなく、
+    まだPS版に置き換わっていない（`cutout_method != "ps_select_subject"`）もの。
+
+    ⚠️ **`psassist/scripts/ps_cutout_lib.needs_ps_cutout` と同じ定義を保つこと。**
+    ホスト（host_worker）はこのモジュールをimportできないため複製している。
+    ズレたら「hostがスイープする分」と「コンテナが取り込み待ちとみなす分」が
+    食い違い、片方が永久に処理されない。
+    """
+    return (
+        bool(entry.get("image"))
+        and entry.get("kind") != "cutout"
+        and entry.get("cutout_method") != "ps_select_subject"
+    )
+
+
+def _write_ps_error(stage_dir: Path, slot_id: str, msg: str) -> None:
+    try:
+        (stage_dir / f"{slot_id}.error.json").write_text(
+            json.dumps({"error": msg, "at": _now()}, ensure_ascii=False), encoding="utf-8")
+    except OSError:
+        pass
+
+
+def _unlink_quiet(p: Path) -> None:
+    try:
+        p.unlink()
+    except OSError:
+        pass
+
+
+def adopt_ps_cutouts(char_id: str) -> dict:
+    """`host_worker` が `cutouts_ps/` へ置いたPS切り抜きを在庫へ取り込む（P2）。
+
+    Docs/CUTOUT_PS_PRIMARY_PLAN.md §1-2: **`library.json` を書くのはコンテナだけ**。
+    ホストは置き場へPNGを出すだけで、指紋・マスクの再計算とindex更新はここが行う。
+
+    `cutouts_ps/{slot_id}.png` を1件ずつ検査して:
+      - 対応する entry が無い → 孤立ファイルとして削除するだけ（索引は汚さない）。
+      - 元画像と寸法が違う／アルファがほぼ空 → 取り込まず `.error.json` を残して削除
+        （host側の失敗と同じ形の marker。`pick_library_sweep_target` はこれを見て
+        再スイープを止める。再試行させたい時は `.error.json` を消すだけでよい＝§7）。
+      - OK → `cutouts/{slot_id}.png` を上書きし、fingerprint/mask を測り直して
+        `cutout_method="ps_select_subject"` ・ `recut_ps_at` を記録する。
+
+    `library.json` への書き込みは対象キャラにつき最大1回（`save_index` は
+    ロック無しで上書きするため、複数回書くほど競合の窓が広がる）。
+    """
+    stage_dir = cutouts_ps_dir(char_id)
+    pngs = sorted(p for p in stage_dir.glob("*.png") if p.is_file()) if stage_dir.exists() else []
+    result = {"adopted": [], "errors": [], "orphaned": []}
+    if not pngs:
+        return result
+
+    idx = load_index(char_id)
+    by_slot = {e.get("slot_id"): e for e in idx.get("entries", [])}
+    changed = False
+
+    for png_path in pngs:
+        slot_id = png_path.stem
+        entry = by_slot.get(slot_id)
+        if entry is None:
+            # 対応するentryが無い＝孤立（削除された後に取り残された等）。索引には触れない。
+            _unlink_quiet(png_path)
+            result["orphaned"].append(slot_id)
+            continue
+
+        try:
+            rgba = Image.open(png_path).convert("RGBA")
+        except Exception as e:
+            _write_ps_error(stage_dir, slot_id, f"PNGを開けない: {e}")
+            _unlink_quiet(png_path)
+            result["errors"].append(slot_id)
+            continue
+
+        src_rel = entry.get("image")
+        src_path = (library_dir(char_id) / src_rel).resolve() if src_rel else None
+        src_size = None
+        if src_path and src_path.is_file():
+            try:
+                with Image.open(src_path) as src_img:
+                    src_size = src_img.size
+            except Exception:
+                src_size = None
+        if src_size is not None and rgba.size != src_size:
+            _write_ps_error(
+                stage_dir, slot_id,
+                f"寸法不一致（元画像 {src_size} / PS出力 {rgba.size}）")
+            _unlink_quiet(png_path)
+            result["errors"].append(slot_id)
+            continue
+
+        fp = fingerprint.for_entry(rgba)
+        if not fp.get("dhash") or _too_empty(fp):
+            _write_ps_error(stage_dir, slot_id, "アルファがほぼ空（被写体選択が失敗した可能性）")
+            _unlink_quiet(png_path)
+            result["errors"].append(slot_id)
+            continue
+
+        (library_dir(char_id) / "cutouts").mkdir(parents=True, exist_ok=True)
+        buf = io.BytesIO()
+        rgba.save(buf, "PNG")
+        (library_dir(char_id) / "cutouts" / f"{slot_id}.png").write_bytes(buf.getvalue())
+        entry["cutout"] = f"cutouts/{slot_id}.png"
+        entry["fingerprint"] = fp
+        entry["mask"] = cutout_engine.analyze_alpha(rgba)
+        entry["cutout_method"] = "ps_select_subject"
+        entry["recut_ps_at"] = _now()
+        changed = True
+        result["adopted"].append(slot_id)
+        _unlink_quiet(png_path)
+
+    if changed:
+        save_index(char_id, idx)
+    return result
+
+
 def _resolve_refs(char_id: str) -> list[tuple[bytes, str, str]]:
     """aroll_manager._resolve_refsと同じ方式（単独キャラなので最大2枚）。"""
     c = character_manager.read_character(char_id)

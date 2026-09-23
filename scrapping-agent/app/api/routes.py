@@ -379,6 +379,31 @@ async def list_panel_library(char_id: str, emotion: str = "", shot: str = "", an
     }
 
 
+@router.get("/panel-library/{char_id}/ps-status")
+async def panel_library_ps_status(char_id: str):
+    """切り抜きのPS本線化（Docs/CUTOUT_PS_PRIMARY_PLAN.md P2）の進み具合。
+
+    pending: まだhost_workerがスイープしていない（rembg版のまま）
+    staged:  host_workerが cutouts_ps/ へ置いた・まだ取り込んでいない
+    done:    PS版済み（元からPS取り込み分の kind="cutout" も含む）
+    errors:  取り込み失敗が cutouts_ps/ に残っている件数
+    """
+    if character_manager.read_character(char_id) is None:
+        raise HTTPException(status_code=404, detail=f"character not found: {char_id}")
+    entries = panel_library_manager.load_index(char_id).get("entries", [])
+    pending_ids = [e["slot_id"] for e in entries if panel_library_manager.needs_ps_cutout(e)]
+    stage_dir = panel_library_manager.cutouts_ps_dir(char_id)
+    staged = len(list(stage_dir.glob("*.png"))) if stage_dir.exists() else 0
+    errors = len(list(stage_dir.glob("*.error.json"))) if stage_dir.exists() else 0
+    return {
+        "pending": len(pending_ids),
+        "staged": staged,
+        "done": len(entries) - len(pending_ids),
+        "errors": errors,
+        "pending_slot_ids": pending_ids,
+    }
+
+
 class PanelLibraryGenerateRequest(BaseModel):
     emotion: str
     shot: str

@@ -442,9 +442,11 @@ def _select_from(cands: list[dict], recent: list[dict], th: dict,
             off += 2
         return off
 
-    # カメラプランの段 → 直前と被らない → 使用回数が少ない → 直近から遠い → slot_id
+    # カメラプランの段 → 直前と被らない → 使用回数が少ない → PS済みを優先（同点の時だけ・
+    # Docs/CUTOUT_PS_PRIMARY_PLAN.md P2） → 直近から遠い → slot_id
     near, best = min(ok, key=lambda x: (
         off_plan(x[1]), monotony(x[1]), x[1].get("times_used", 0),
+        0 if x[1].get("cutout_method") == "ps_select_subject" else 1,
         -x[0], x[1].get("slot_id", "")))
     why = "距離 %.3f・使用 %d回" % (near, best.get("times_used", 0))
     if prev_tags and _tags(best) == prev_tags:
