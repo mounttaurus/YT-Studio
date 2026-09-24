@@ -503,12 +503,36 @@ def background_candidates(
     return out
 
 
+def _current_script_texts(episode_dir: str) -> dict[str, str]:
+    """確定台本の {line_id: 現在のテキスト}（空セリフ行は除外）。
+
+    script.json が無い/読めない場合は空dict を返す（aroll.json 側の値へフォールバックさせる
+    ための安全側の挙動。台本タブ側の scrapping-agent._script_lines_by_id と同じ判定）。
+    """
+    script_path = os.path.join(episode_dir, "script.json")
+    try:
+        with open(script_path, encoding="utf-8") as fh:
+            script = json.load(fh)
+    except (OSError, json.JSONDecodeError):
+        return {}
+    return {
+        l.get("id"): l.get("text", "")
+        for l in (script or {}).get("lines", [])
+        if l.get("id") and (l.get("text") or "").strip()
+    }
+
+
 # ------------------------------------------------------------------ 本体
 def build(paths: Paths | None = None) -> dict[str, Any]:
     paths = paths or Paths.from_env()
     aroll_path = os.path.join(paths.episode_dir, "a_roll", "aroll.json")
     with open(aroll_path, encoding="utf-8") as fh:
         aroll = json.load(fh)
+    # D1（2026-09-24）: 吹き出しに書くセリフは確定台本からだけ読む。aroll.json側のtextは
+    # 下ごしらえ時点の写しで、台本を編集しても自動更新されないため、これを直接使うと
+    # 古いセリフのまま吹き出しが組まれ続ける（Docs/AROLL_UNIFIED_FLOW_PLAN.md §19）。
+    # 台本から消えた行（orphanでcurrent_scriptに無い）はaroll.json側の値にフォールバックする。
+    current_script = _current_script_texts(paths.episode_dir)
     backgrounds = load_backgrounds(paths.backgrounds_dir)
     masks = load_mask_stats(paths.out_dir)
     library_entry_cache: dict[str, dict] = {}
@@ -526,7 +550,7 @@ def build(paths: Paths | None = None) -> dict[str, Any]:
 
     panels: list[dict[str, Any]] = []
     for p in aroll.get("panels", []):
-        text = (p.get("text") or "").strip()
+        text = (current_script.get(p.get("line_id")) or p.get("text") or "").strip()
         if not text:
             continue  # 空行はパネル対象外（DATA_SCHEMA §6d と同じ扱い）
 

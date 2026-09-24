@@ -2833,8 +2833,13 @@
                           <div style="color:#60a5fa" x-text="p.speaker_name || p.speaker_id"></div>
                           <div style="font-size:9px;color:#4b5563" x-text="p.section"></div>
                         </td>
-                        <td style="padding:6px 4px;color:#cbd5e1;line-height:1.5"
-                            :title="p.text" x-text="p.text"></td>
+                        <td style="padding:6px 4px;color:#cbd5e1;line-height:1.5">
+                          <div :title="p.text" x-text="p.text"></div>
+                          <!-- D3（2026-09-24）: 絵が古い行は生成時のセリフも見せる。
+                               「まとめて確定」を押す前に、絵に影響する変更か見比べて判断できる -->
+                          <div x-show="p.sync === 'stale' && p.source_text" style="font-size:9px;color:#a16207;margin-top:2px"
+                               :title="p.source_text" x-text="`生成時: ${p.source_text}`"></div>
+                        </td>
                         <td style="padding:6px 4px">
                           <div style="display:flex;gap:3px;flex-wrap:wrap;align-items:center">
                             <span x-show="!(p.characters||[]).length" style="font-size:10px;color:#93c5fd"
@@ -9037,8 +9042,8 @@ function app() {
       if (!a.cutout_slot_id && !a.image) return 'ungenerated';
       const planPanels = this.psassistPlan?.panels;
       if (!planPanels || !planPanels.some(p => p.line_id === lineId)) return 'unplanned';
-      const built = (this.qa?.panels || []).some(p => p.line_id === lineId);
-      if (!built) return 'unbuilt';
+      const qaPanel = (this.qa?.panels || []).find(p => p.line_id === lineId);
+      if (!qaPanel) return 'unbuilt';
       if (a.cutout_slot_id) {
         const planSlot = this.arollPlanCutoutSlot(lineId);
         if (planSlot !== a.cutout_slot_id) return 'restale';
@@ -9049,6 +9054,9 @@ function app() {
         const curVersion = this.charLibVersions[a.cutout_char_id]?.[a.cutout_slot_id];
         if (planVersion && curVersion && planVersion !== curVersion) return 'restale';
       }
+      // D2（2026-09-24）: 絵は同じでも、セリフが変わって吹き出しの文字が古いまま
+      //（qa_check.pyがPSD実物の文字レイヤーと今の台本を突き合わせて検知）。
+      if (qaPanel.text_stale) return 'restale';
       return 'built';
     },
     // まだ組んでいない行のサムネ。割当済みの切り抜き → 生成した絵、の順で出す

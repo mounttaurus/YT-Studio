@@ -864,12 +864,23 @@ def _used_slot_tags(panel: dict) -> dict | None:
 
 
 def annotate_manifest(project_id: str, episode: int, manifest: dict) -> dict:
-    """マニフェストのコピーに sync 等を付けて返す（レスポンス専用・ファイルには書かない）。"""
+    """マニフェストのコピーに sync 等を付けて返す（レスポンス専用・ファイルには書かない）。
+
+    ⚠️ **表示するセリフは常に確定台本の現在の文面にする**（2026-09-24）。``panel["text"]``は
+    下ごしらえ（``build_or_update_manifest``）時点の写しで、台本を編集しただけでは更新されない。
+    これを直さないと、「絵が古い」を確定/このままでよいで解消した後もコマ一覧には古いセリフが
+    表示され続け、ユーザーが古いセリフを見ながら絵を判断することになる（吹き出しの文字が
+    古いまま納品される穴の一部・Docs/AROLL_UNIFIED_FLOW_PLAN.md §19）。
+    orphan行（台本から消えた）は lines_by_id に無いので写しのまま残す
+    （「消えた行のPNGが残っている」という事実を見せる用途なので、これは正しい）。
+    """
     lines_by_id = _script_lines_by_id(project_id, episode)
     out_dir = aroll_dir(project_id, episode)
     out = dict(manifest)
     out["panels"] = [
-        {**p, "sync": _panel_sync(p, lines_by_id.get(p.get("line_id")), out_dir),
+        {**p,
+         "text": (lines_by_id.get(p.get("line_id")) or {}).get("text", p.get("text", "")),
+         "sync": _panel_sync(p, lines_by_id.get(p.get("line_id")), out_dir),
          "used_slot": _used_slot_tags(p)}
         for p in manifest.get("panels", [])
     ]

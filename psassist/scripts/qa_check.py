@@ -80,6 +80,42 @@ VIEW_W = 1376
 SEV_ORDER = {"clean": 0, "advisory": 1, "blocking": 2}
 
 
+# ── D2（2026-09-24）: 吹き出しの文字が台本の今の文面と食い違っていないか ──────────
+#
+# ★方針は上のdocstringと同じ「実物を読む」: plan_builder が計算した文字ではなく、
+# PSDのテキストレイヤーに実際に書き込まれている文字列(layer.text)を読んで比べる。
+# build_plan だけを後から走らせてもPSDは古いままなので、プラン上の文字と実物は
+# ズレることがある（そのズレを見逃さないため）。
+#
+# ⚠️ psassist-agent/app/core/plan_builder._current_script_texts と同じロジックだが、
+# qa_check.py はホスト常駐スクリプトとして独立に動くため意図的に複製している
+# （psassist-agent への依存を増やすと host_worker.py 側の import 経路にも影響するため）。
+
+def _current_script_texts(episode_dir: str) -> dict[str, str]:
+    """確定台本の {line_id: 現在のテキスト}（空セリフ行は除外）。読めなければ空dict。"""
+    script_path = os.path.join(episode_dir, "script.json")
+    try:
+        with open(script_path, encoding="utf-8") as fh:
+            script = json.load(fh)
+    except (OSError, json.JSONDecodeError):
+        return {}
+    return {
+        l.get("id"): l.get("text", "")
+        for l in (script or {}).get("lines", [])
+        if l.get("id") and (l.get("text") or "").strip()
+    }
+
+
+def _bubble_text_key(s: str | None) -> str:
+    """吹き出し比較用の正規化。改行と前後の空白だけ吸収し、句読点や「！」「？」は残す。
+
+    絵のstale判定（aroll_manager.normalize_text）より厳密でよい ── 「、」を「。」に
+    直した程度の推敲でも吹き出しの文字自体は変わるし、「！」→「？」はバブルの形まで
+    変わるので、絵より先に気づけた方が良い。
+    """
+    return (s or "").replace("\r", "").replace("\n", "").strip()
+
+
 # ── PSD 読み取り ────────────────────────────────────────────────────────
 
 def layer_alpha(layer, canvas: tuple[int, int]) -> np.ndarray | None:
@@ -251,7 +287,8 @@ def bbox_of(mask: np.ndarray) -> list[int] | None:
 
 # ── 1枚ぶんの検査 ───────────────────────────────────────────────────────
 
-def check_panel(psd_path: str, meta: dict, bgs: dict, export_png: str | None) -> dict:
+def check_panel(psd_path: str, meta: dict, bgs: dict, export_png: str | None,
+                line_id: str = "", current_script: dict | None = None) -> dict:
     psd = PSDImage.open(psd_path)
     canvas = (psd.width, psd.height)
     L = classify_layers(psd)
@@ -280,6 +317,19 @@ def check_panel(psd_path: str, meta: dict, bgs: dict, export_png: str | None) ->
         add("NO_ADJUSTMENT", "advisory", "色調整レイヤーがありません（後から色を合わせられません）")
     for e in L["empty"]:
         add("EMPTY_LAYER", "advisory", "空のレイヤーが残っています: %s" % e.name)
+
+    # ── ⑦ 吹き出しの文字が台本の今の文面と食い違う（D1/D2・2026-09-24） ──
+    # 台本から消えた行(current_scriptに無い)は比較しない（絵のstale判定と同じ扱い）。
+    text_stale = False
+    now_text = (current_script or {}).get(line_id)
+    if L["text"] is not None and now_text:
+        try:
+            psd_text = L["text"].text
+        except Exception:
+            psd_text = None
+        if psd_text is not None and _bubble_text_key(psd_text) != _bubble_text_key(now_text):
+            text_stale = True
+            add("TEXT_STALE", "advisory", "セリフが変わりました（吹き出しの文字が古いままです）")
 
     bg_id = L["visible_bg"].name if L["visible_bg"] is not None else None
     measured["background"] = bg_id
@@ -405,7 +455,8 @@ def check_panel(psd_path: str, meta: dict, bgs: dict, export_png: str | None) ->
         if SEV_ORDER[it["severity"]] > SEV_ORDER[sev]:
             sev = it["severity"]
 
-    return {"psd": psd, "severity": sev, "issues": issues, "measured": measured}
+    return {"psd": psd, "severity": sev, "issues": issues, "measured": measured,
+            "text_stale": text_stale}
 
 
 # ── 表示用画像 ──────────────────────────────────────────────────────────
@@ -480,6 +531,8 @@ def build_ctx(episode: str, psd_dir_name: str = "psd_final",
         "report_path": report_path, "ep": ep, "plan": plan, "meta": meta,
         "bgs": bgs, "have_export": have_export, "src": psd_dir_name,
         "no_images": no_images,
+        # D2: 吹き出しの文字が今の台本と食い違っていないかの比較対象（§19）
+        "current_script": _current_script_texts(ep),
     }
 
 
@@ -540,6 +593,7 @@ def run_pass(ctx: dict, files: list[str], *, verbose: bool) -> dict:
     psd_dir, qa_dir = ctx["psd_dir"], ctx["qa_dir"]
     export_dir, report_path = ctx["export_dir"], ctx["report_path"]
     meta, bgs, have_export = ctx["meta"], ctx["bgs"], ctx["have_export"]
+    current_script = ctx.get("current_script") or {}
     plan = ctx["plan"]
 
     old = {}
@@ -557,7 +611,7 @@ def run_pass(ctx: dict, files: list[str], *, verbose: bool) -> dict:
         m = meta.get(line_id, {})
         exp = os.path.join(export_dir, "panel_%s.png" % line_id) if have_export else None
         try:
-            r = check_panel(os.path.join(psd_dir, fn), m, bgs, exp)
+            r = check_panel(os.path.join(psd_dir, fn), m, bgs, exp, line_id, current_script)
         except Exception as e:
             panels.append({
                 "line_id": line_id, "order": m.get("order"),
@@ -578,7 +632,10 @@ def run_pass(ctx: dict, files: list[str], *, verbose: bool) -> dict:
             "line_id": line_id,
             "order": m.get("order"),
             "speaker": m.get("speaker"),
-            "text": (m.get("text") or {}).get("raw"),
+            # D1と同じ穴（2026-09-24）: (m["text"]["raw"]) はプラン作成時点の写しで、
+            # QA詳細（director-agentの🔍合成チェック）がこれをそのまま表示していた。
+            # 今の台本テキストがあればそちらを優先し、消えた行だけプランの写しへ落ちる。
+            "text": current_script.get(line_id) or (m.get("text") or {}).get("raw"),
             "psd": "psassist/%s/%s" % (ctx["src"], fn),
             "export": "psassist/export/panel_%s.png" % line_id if (
                 exp and os.path.exists(exp)) else None,
@@ -587,6 +644,7 @@ def run_pass(ctx: dict, files: list[str], *, verbose: bool) -> dict:
             "severity": r["severity"],
             "issues": r["issues"],
             "measured": r["measured"],
+            "text_stale": r.get("text_stale", False),
         })
         if verbose and (i % 25 == 0 or i == len(files)):
             print("  %3d/%3d  %.0f秒" % (i, len(files), time.time() - t0))
