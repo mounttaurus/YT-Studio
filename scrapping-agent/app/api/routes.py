@@ -2040,10 +2040,6 @@ class ArollAutoAssignBackgroundsRequest(BaseModel):
     line_ids: Optional[list[str]] = None
 
 
-class ArollSyncAcceptRequest(BaseModel):
-    line_ids: Optional[list[str]] = None   # 未指定=unknown（記録なし既存資産）のみ確定
-
-
 class ArollGenerateRequest(BaseModel):
     line_ids: Optional[list[str]] = None
     only_missing: bool = True              # done行スキップ（レジューム/失敗のみ再試行）
@@ -2155,15 +2151,6 @@ async def aroll_sync_report(project_id: str, episode_number: int):
     return aroll_manager.sync_report(project_id, episode_number)
 
 
-@router.post("/projects/{project_id}/episodes/{episode_number}/aroll/sync/accept")
-async def aroll_sync_accept(project_id: str, episode_number: int, req: ArollSyncAcceptRequest):
-    """「この絵は今の台本のままでよい」と追認する（画像は再生成しない）。
-
-    line_ids 省略時は unknown（生成時テキスト未記録の既存資産）だけを現在のテキストで確定する。
-    """
-    return aroll_manager.accept_current_text(project_id, episode_number, req.line_ids)
-
-
 class ArollApproveImagesRequest(BaseModel):
     line_ids: list[str] | None = None   # 省略で全行。行ごとの再承認にも同じ口を使う
     register: bool = True               # false にすると承認だけして在庫に積まない
@@ -2180,6 +2167,9 @@ async def aroll_approve_images(project_id: str, episode_number: int,
 
     承認後に作り直す・在庫から差し替える・切り抜きを選び直すと承認は自動的に外れる。
     作り直しの場合だけ、その行から取り込んだ在庫が `pending` へ降格する。
+
+    台本との同期（`GET .../aroll/sync` の stale/unknown）もここで一緒に解消する
+    （旧 `/aroll/sync/accept` は撤去・本エンドポイントへ統合。2026-09-24）。
     """
     try:
         return aroll_manager.approve_images(

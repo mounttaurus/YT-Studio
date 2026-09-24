@@ -1006,13 +1006,16 @@ stale にならない（長音「ー」など表意上の差は残す）。
 | `sync` | 意味 | 回復方法 |
 |---|---|---|
 | `ok` | 画像あり・生成時テキストと現在の台本が一致 | — |
-| `stale` | 画像はあるがセリフが変わった＝絵が古い | 行単位で作り直す or `POST .../aroll/sync/accept` で追認 |
+| `stale` | 画像はあるがセリフが変わった＝絵が古い | 行単位で作り直す or コマ一覧で対象行を選び「まとめて確定」 |
 | `missing` | 行はあるが画像が無い（未生成/失敗/**台本に後から追加された行**） | パネル未作成の行は先に `/aroll/prompts` |
 | `orphan` | パネルはあるが台本から行が消えた | 編集には使われない（PNGは手動削除） |
-| `unknown` | 画像はあるが生成時テキスト未記録（この機能以前の資産） | `POST .../aroll/sync/accept`（line_ids省略）で現在の台本に確定 |
+| `unknown` | 画像はあるが生成時テキスト未記録（この機能以前の資産） | コマ一覧で対象行を選び「まとめて確定」 |
 
-`POST .../aroll/sync/accept` は**画像を再生成しない**。`line_ids` 省略時は `unknown` だけを対象に
-する（＝既存資産の移行用。staleを黙って飲まない）。`stale` を追認する場合は `line_ids` で明示する。
+**「確定」とstale/unknownの解消は同じ入口**（2026-09-24統合）。`POST .../aroll/approve-images`
+（コマ一覧の「まとめて確定」）は `image_approved_at` を立てると同時に、対象行が stale/unknown
+なら `source_text`/`source_text_hash`/`prompt_text_hash` も今の台本テキストで更新する＝
+**画像を再生成せずに** sync を `ok` に戻す。旧 `POST .../aroll/sync/accept`（個別の「このままでよい」）
+は撤去した。
 
 ⚠️ **台本のフル再生成（scripting の `/generate`・`/regenerate`）だけは `line_id` を position 由来で
 振り直す**＝Aロールとの紐付けが全滅する。台本の手直しは行単位API（挿入/削除/入替/`regenerate-lines`）で行うこと。

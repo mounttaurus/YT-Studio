@@ -884,7 +884,8 @@ async def aroll_sync(project_id: str, episode_number: int) -> dict:
     - missing … 画像が無い行。status=no_panel なら先に generate_aroll_prompts が必要
     - orphan  … 台本から消えた行のPNGが残っているだけ（編集には使われない）
     - unknown … この機能以前に生成された資産（生成時テキストの記録なし）
-    stale/unknown の「このままでよい」追認はユーザーがUI(director:8005 🖼️Aロールタブ)で行う。
+    stale/unknown は絵を作り直さなくても aroll_approve_images(line_ids=[…]) を呼べば、
+    承認と同時に生成時テキストの記録も今の台本へ更新され sync が ok に戻る（2026-09-24統合）。
     """
     return await dc.get(f"api/scrapping/projects/{project_id}/episodes/{episode_number}/aroll/sync")
 

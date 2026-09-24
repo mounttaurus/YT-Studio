@@ -2266,7 +2266,9 @@
                     <span x-text="arollBgAssignBusy ? '割当中...' : '🏞️ 未割当の行に自動割当'"></span>
                   </button>
                 </div>
-                <!-- 台本との同期状態（差分検知） -->
+                <!-- 台本との同期状態（差分検知）── 解消操作はコマ一覧「✓まとめて確定」に統合済み
+                     （2026-09-24。旧・個別「このままでよい」と役割が重なっていたため一本化。
+                     経緯 memory/aroll-sync-approve-unification.md）。ここはサマリ表示のみ。 -->
                 <div class="card" x-show="arollSync?.has_manifest"
                      :style="arollDriftCount ? 'border-color:#a16207' : ''">
                   <h2>台本との同期
@@ -2278,43 +2280,16 @@
                   </h2>
                   <div x-show="arollDriftCount" style="font-size:11px;color:#94a3b8;margin-top:6px;line-height:1.7">
                     台本を後から追加・削除・推敲すると、生成済みのAロールとズレます。
-                    <b>絵が古い</b>＝セリフが変わったのに絵が生成時のまま（下の一覧で「↻ 生成し直す」）。
+                    <b>絵が古い</b>／<b>記録なし</b>＝下の<b>コマ一覧</b>で対象行を選び「✓まとめて確定」を押すと、
+                    画像は作り直さずにこの記録も今の台本テキストで確定します。
                     <b>画像なし</b>＝台本に追加された行（パネルが無い行は「下ごしらえ → プロンプトを作り直す」を実行してから生成）。
                     <b>行が消えた</b>＝台本から削除された行のPNGがディスクに残っている（編集には使われません）。
                   </div>
                   <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-top:10px">
                     <button class="btn btn-sm" @click="loadArollSync()">🔄 再チェック</button>
-                    <button class="btn btn-sm" x-show="arollSyncItems.length"
-                            @click="arollSyncOpen = !arollSyncOpen"
-                            x-text="arollSyncOpen ? '▲ 明細を閉じる' : `▼ ズレている行を見る（${arollSyncItems.length}）`"></button>
-                    <button class="btn btn-sm" x-show="arollSyncCounts.unknown"
-                            :disabled="arollSyncBusy" @click="arollAcceptSync(null)"
-                            title="この機能より前に生成された画像は「どのセリフから描いたか」の記録がありません。現在の台本テキストで確定します（画像は作り直しません）"
-                            x-text="`✓ 記録なし${arollSyncCounts.unknown}行を現在の台本で確定`"></button>
-                  </div>
-                  <div x-show="arollSyncOpen" style="display:flex;flex-direction:column;gap:6px;margin-top:10px">
-                    <template x-for="it in arollSyncItems" :key="it.line_id">
-                      <div style="display:flex;gap:10px;align-items:flex-start;padding:6px 8px;background:#0f172a;border-radius:6px">
-                        <span style="font-size:11px;color:#4b5563;min-width:28px" x-text="it.order ?? '—'"></span>
-                        <span class="status-badge" style="white-space:nowrap"
-                              :style="arollSyncStyle(it.sync)" x-text="arollSyncLabel(it.sync)"></span>
-                        <div style="flex:1;font-size:11px;line-height:1.6;min-width:0">
-                          <div style="color:#cbd5e1" x-text="it.current_text || '（台本から削除された行）'"></div>
-                          <div x-show="it.sync === 'stale'" style="color:#a16207;margin-top:2px">
-                            生成時: <span x-text="it.source_text"></span>
-                          </div>
-                          <div x-show="it.sync === 'missing' && it.status === 'no_panel'" style="color:#64748b;margin-top:2px">
-                            パネル未作成 —「下ごしらえ → プロンプトを作り直す」が必要です
-                          </div>
-                          <div x-show="it.prompt_stale" style="color:#64748b;margin-top:2px">
-                            プロンプトも古いテキスト由来です（①を overwrite で作り直すと更新されます）
-                          </div>
-                        </div>
-                        <button class="btn btn-sm" x-show="it.sync === 'stale'"
-                                :disabled="arollSyncBusy" @click="arollAcceptSync([it.line_id])"
-                                title="セリフは変わったが、この絵のままで問題ないと追認する">✓ このままでよい</button>
-                      </div>
-                    </template>
+                    <button class="btn btn-sm" x-show="arollSyncCounts.stale + arollSyncCounts.unknown"
+                            @click="arollFocusDrift()"
+                            x-text="`▼ コマ一覧でズレている行を見る（${arollSyncCounts.stale + arollSyncCounts.unknown}）`"></button>
                   </div>
                 </div>
                   </div>
@@ -2697,11 +2672,15 @@
             </template>
 
             <!-- コマ一覧（表）— 一括操作の場所。1行の作り込みはクリックでモーダルへ -->
-            <div class="card" x-show="arollManifest">
-              <h2>コマ一覧
+            <div class="card" x-show="arollManifest" id="aroll-panel-table">
+              <h2 style="cursor:pointer" @click="arollPanelTableOpen = !arollPanelTableOpen">
+                <span x-text="arollPanelTableOpen ? '▼' : '▶'"></span>
+                コマ一覧
                 <span style="font-weight:400;text-transform:none;color:#4b5563;font-size:11px"
-                      x-text="`${arollPanels.length}行 — 行をクリックすると1行の詳細（生成・在庫から選ぶ・確定）が開きます`"></span>
+                      x-text="`${arollPanels.length}行` + (arollPanelTableOpen ? ' — 行をクリックすると1行の詳細（生成・在庫から選ぶ・確定）が開きます' : '')"></span>
               </h2>
+              <template x-if="arollPanelTableOpen">
+              <div>
               <!-- カットの説明。⚠️「N行まとめる」と要約しないこと ──
                    ランの最終行は必ず単独の「決め」で、前振りだけを秒数でまとめている。 -->
               <div x-show="arollCuts" style="font-size:11px;color:#64748b;margin:-4px 0 8px;line-height:1.7">
@@ -2900,6 +2879,8 @@
                 </table>
               </div>
               <div x-show="!arollRowsFiltered.length" class="empty" style="padding:24px">該当する行はありません</div>
+              </div>
+              </template>
             </div>
 
           </div>
@@ -5872,8 +5853,7 @@ function app() {
     arollOrCredits: null,         // OpenRouter残高（課金退避ON時に表示）
     arollImgVersion: 0,           // サムネのキャッシュバスター
     arollSync: null,              // /aroll/sync（確定台本との差分レポート）
-    arollSyncOpen: false,         // 差分の明細を開いているか
-    arollSyncBusy: false,
+    arollPanelTableOpen: true,    // コマ一覧セクションの開閉
     arollExportBusy: false,
     arollExportResult: null,      // 直近の /aroll/export レスポンス
     arollApproveBusy: false,
@@ -9626,9 +9606,6 @@ function app() {
       const c = this.arollSyncCounts;
       return c.stale + c.missing + c.orphan + c.unknown;
     },
-    get arollSyncItems() {
-      return (this.arollSync?.items || []).filter(it => it.sync !== 'ok');
-    },
     arollSyncLabel(s) {
       return { ok: '✔ 一致', stale: '⚠ 絵が古い', missing: '✘ 画像なし',
                orphan: '🗑 行が消えた', unknown: '? 記録なし' }[s] || s;
@@ -9892,28 +9869,14 @@ function app() {
         this.arollSync = r.ok ? await r.json() : null;
       } catch { this.arollSync = null; }
     },
-    async arollAcceptSync(lineIds) {
-      // 「この絵は今の台本のままでよい」の追認（画像は再生成しない）
-      const n = lineIds ? lineIds.length : this.arollSyncCounts.unknown;
-      if (!n) return;
-      const what = lineIds
-        ? `${n}行を「今の台本のままでよい」と確定します（画像は作り直しません）。`
-        : `記録なし${n}行を現在の台本テキストで確定します（画像は作り直しません）。`;
-      if (!confirm(what + '\n続行しますか？')) return;
-      this.arollSyncBusy = true;
-      try {
-        const r = await fetch(`${this.arollApiBase}/sync/accept`, {
-          method: 'POST', headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ line_ids: lineIds || null }),
-        });
-        const d = await r.json();
-        if (!r.ok) throw new Error(d.detail || '確定に失敗しました');
-        this.arollMsg = `✔ ${(d.accepted || []).length}行を現在の台本で確定しました`;
-        await this.loadArollManifest();
-        await this.loadArollSync();
-      } catch (e) {
-        this.arollMsg = `確定に失敗: ${e.message}`;
-      } finally { this.arollSyncBusy = false; }
+    // 「台本との同期」カードから、ズレている行をコマ一覧側で見る（解消操作はそちらの
+    // 「✓まとめて確定」に統合済み。2026-09-24）。
+    arollFocusDrift() {
+      this.arollRowFilter = 'drift';
+      this.arollPanelTableOpen = true;
+      this.$nextTick(() => {
+        document.getElementById('aroll-panel-table')?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+      });
     },
     // ─── T2: 行の絵の確定状況（image_approved_at） ──────────────────────
     //
@@ -9944,8 +9907,10 @@ function app() {
         const d = await r.json();
         if (!r.ok) throw new Error(d.detail || '確定に失敗しました');
         this.arollMsg = `✔ ${d.approved}件を確定しました`
-          + (d.registered ? `（うち${d.registered}件は旧データのため在庫へ新規登録）` : '');
+          + (d.registered ? `（うち${d.registered}件は旧データのため在庫へ新規登録）` : '')
+          + (d.synced ? `（うち${d.synced}件は台本とのズレも解消）` : '');
         await this.loadArollManifest();
+        await this.loadArollSync();
       } catch (e) {
         this.arollMsg = `確定に失敗: ${e.message}`;
       } finally { this.arollApproveBusy = false; }

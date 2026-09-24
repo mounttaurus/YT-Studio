@@ -912,15 +912,24 @@ def approve_images(project_id: str, episode: int, line_ids: list[str] | None = N
     「キャラが1人に確定していない」「slotが揃っていない」「切り抜きに失敗した」に加えて
     **``can_generate_images`` が False**（参照画像が無い等）── ここが同じキャラの
     並行在庫ができる唯一の入口なので硬く拒否する（ユーザー判断 2026-08-29）。
+
+    **台本との同期（sync）もここで一緒に解消する**（2026-09-24統合）。生成/在庫差し替えの
+    全経路は絵を書き換えるたびに ``source_text_hash`` を今の台本テキストで焼き直しており
+    （「絵が変われば同期記録も更新する」という不変条件）、承認だけがそこから外れていた。
+    承認は「この絵を今の台本に対する最終稿として使う」という人の意思表示そのものなので、
+    対象行が stale/unknown（≒旧 ``POST .../aroll/sync/accept`` の対象）なら
+    ``source_text``/``source_text_hash``/``prompt_text_hash`` も今のテキストで更新する。
+    line が見つからない（orphan＝台本から消えた行）場合は現在のテキストが無いので触らない。
     """
     manifest = load_manifest(project_id, episode)
     if manifest is None:
         raise ValueError("aroll.json not found")
     out_dir = aroll_dir(project_id, episode)
+    lines_by_id = _script_lines_by_id(project_id, episode)
     # ⚠️ 空リストは「1行も選んでいない」。falsy判定にすると全行が対象になってしまう
     #（省略＝None が「全行」で、[] とは別物）
     wanted = None if line_ids is None else set(line_ids)
-    approved, registered, skipped = [], [], []
+    approved, registered, skipped, synced = [], [], [], []
 
     for p in manifest.get("panels", []):
         lid = p.get("line_id")
@@ -933,6 +942,15 @@ def approve_images(project_id: str, episode: int, line_ids: list[str] | None = N
         data = (out_dir / img).read_bytes()
         p["image_approved_at"] = _now()
         p["image_approved_hash"] = hashlib.sha256(data).hexdigest()[:16]
+        line = lines_by_id.get(lid)
+        if line is not None:
+            h = text_hash(line.get("text"))
+            if p.get("source_text_hash") != h:
+                p["source_text"] = line.get("text", "")
+                p["source_text_hash"] = h
+                if (p.get("prompt") or "").strip():
+                    p["prompt_text_hash"] = h
+                synced.append(lid)
         approved.append(lid)
         if not register or p.get("cutout_slot_id"):
             # T1で既に登録済み（pending）。確定は image_approved_at を立てるだけで、
@@ -973,48 +991,8 @@ def approve_images(project_id: str, episode: int, line_ids: list[str] | None = N
 
     save_manifest(project_id, episode, manifest)
     return {"approved": len(approved), "registered": len(registered),
-            "line_ids": approved, "entries": registered, "skipped": skipped}
-
-
-def accept_current_text(
-    project_id: str, episode: int, line_ids: list[str] | None = None,
-) -> dict:
-    """生成済みパネルの「生成時テキスト」を現在の台本テキストで確定する（画像は再生成しない）。
-
-    - line_ids 省略時は unknown（記録が無い既存資産）だけを対象にする＝安全な移行用。
-    - line_ids 指定時は stale も対象にできる＝「この程度の推敲なら絵はこのままでよい」の追認。
-    """
-    manifest = load_manifest(project_id, episode)
-    if manifest is None:
-        return {"accepted": [], "skipped": []}
-
-    lines_by_id = _script_lines_by_id(project_id, episode)
-    out_dir = aroll_dir(project_id, episode)
-    # ⚠️ 空リストは「1行も選んでいない」。falsy判定にすると全行が対象になってしまう
-    #（省略＝None が「全行」で、[] とは別物）
-    wanted = None if line_ids is None else set(line_ids)
-    accepted, skipped = [], []
-
-    for p in manifest.get("panels", []):
-        lid = p.get("line_id")
-        line = lines_by_id.get(lid)
-        state = _panel_sync(p, line, out_dir)
-        if wanted is not None and lid not in wanted:
-            continue
-        if state not in (SYNC_UNKNOWN, SYNC_STALE) or (wanted is None and state != SYNC_UNKNOWN):
-            skipped.append({"line_id": lid, "sync": state})
-            continue
-        h = text_hash(line.get("text"))
-        p["source_text"] = line.get("text", "")
-        p["source_text_hash"] = h
-        # 絵を追認するならプロンプトも現テキスト基準とみなす（旧資産のブートストラップ）
-        if (p.get("prompt") or "").strip():
-            p["prompt_text_hash"] = h
-        accepted.append(lid)
-
-    if accepted:
-        save_manifest(project_id, episode, manifest)
-    return {"accepted": accepted, "skipped": skipped}
+            "line_ids": approved, "entries": registered, "skipped": skipped,
+            "synced": len(synced)}
 
 
 # ---------------------------------------------------------------------------
