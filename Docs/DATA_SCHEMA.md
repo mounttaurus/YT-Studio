@@ -1015,7 +1015,9 @@ stale にならない（長音「ー」など表意上の差は残す）。
 （コマ一覧の「まとめて確定」）は `image_approved_at` を立てると同時に、対象行が stale/unknown
 なら `source_text`/`source_text_hash`/`prompt_text_hash` も今の台本テキストで更新する＝
 **画像を再生成せずに** sync を `ok` に戻す。旧 `POST .../aroll/sync/accept`（個別の「このままでよい」）
-は撤去した。
+は撤去した。⚠️ **`line_ids` 省略（全行）の承認では `unknown` だけを直し、`stale` は解消しない**
+（人が絵を見て押した根拠が無いため。旧 sync/accept の「staleを黙って飲まない」を引き継ぐ）。
+`stale` を解消するには行を明示して承認する。
 
 ⚠️ **台本のフル再生成（scripting の `/generate`・`/regenerate`）だけは `line_id` を position 由来で
 振り直す**＝Aロールとの紐付けが全滅する。台本の手直しは行単位API（挿入/削除/入替/`regenerate-lines`）で行うこと。

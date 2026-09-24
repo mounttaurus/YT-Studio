@@ -300,6 +300,10 @@ def build_or_update_manifest(
     """script.json の行順にマニフェストを構築/更新する。
 
     既存パネルは line_id で引き継ぐ:
+    - **既存パネルの項目は全部引き継ぎ、ここで再計算する項目だけを上書きする。**
+      ⚠️ 引き継ぐ項目を固定リストで列挙しないこと ── 後から足した項目（確定・背景・
+      在庫の紐付け）がリストから漏れ、下ごしらえ/台本の再承認のたびに全行から黙って
+      消えていた（2026-09-24発見・修正）
     - 生成済み画像(status/image)は常に保持
     - prompt は overwrite=True か既存が空の時だけ新プロンプトで置き換える
       （ユーザー編集 prompt_source="user" は overwrite=True でも保持）
@@ -343,7 +347,9 @@ def build_or_update_manifest(
             slot = prev.get("slot")
             slot_source = prev.get("slot_source") or "none"
 
-        panels.append({
+        # 台本に戻ってきた行は orphan ではない
+        panel = {k: v for k, v in prev.items() if k != "orphan"}
+        panel.update({
             "line_id": lid,
             "order": ln.get("order", i),
             "section": ln.get("section") or "main",
@@ -366,6 +372,7 @@ def build_or_update_manifest(
             "source_text": prev.get("source_text", ""),
             "source_text_hash": prev.get("source_text_hash", ""),
         })
+        panels.append(panel)
 
     # 台本から消えた行のうち画像を持つものは証拠として残す（バッチ対象からは常に除外）
     live_ids = {p["line_id"] for p in panels}
@@ -920,6 +927,11 @@ def approve_images(project_id: str, episode: int, line_ids: list[str] | None = N
     対象行が stale/unknown（≒旧 ``POST .../aroll/sync/accept`` の対象）なら
     ``source_text``/``source_text_hash``/``prompt_text_hash`` も今のテキストで更新する。
     line が見つからない（orphan＝台本から消えた行）場合は現在のテキストが無いので触らない。
+
+    ⚠️ **行を明示しない（全行）承認では stale を解消しない**（unknown＝記録が無いだけの旧資産は直す）。
+    「人が絵を見て押した」という根拠は行を指定した時にしか成り立たない。全行承認で stale まで
+    消すと、セリフが変わったのに誰も絵を見ていない行が黙って「一致」になる
+    （旧 sync/accept の「staleを黙って飲まない」を引き継ぐ。MCP の既定は全行なので要注意）。
     """
     manifest = load_manifest(project_id, episode)
     if manifest is None:
@@ -945,7 +957,8 @@ def approve_images(project_id: str, episode: int, line_ids: list[str] | None = N
         line = lines_by_id.get(lid)
         if line is not None:
             h = text_hash(line.get("text"))
-            if p.get("source_text_hash") != h:
+            prev_hash = p.get("source_text_hash")
+            if prev_hash != h and (wanted is not None or not prev_hash):
                 p["source_text"] = line.get("text", "")
                 p["source_text_hash"] = h
                 if (p.get("prompt") or "").strip():
@@ -1517,6 +1530,11 @@ def request_stop(project_id: str, episode: int) -> bool:
     return False
 
 
+def _panel_decided(p: dict) -> bool:
+    """その行の絵が決まっているか（実生成済み or 在庫の切り抜きを適用済み）。"""
+    return p.get("status") == "done" or bool(p.get("cutout_slot_id"))
+
+
 def select_targets(
     project_id: str, episode: int, manifest: dict,
     line_ids: list[str] | None, only_missing: bool,
@@ -1562,9 +1580,7 @@ def select_targets(
             continue
         if wanted is not None and not any(m.get("line_id") in wanted for m in members):
             continue
-        if only_missing and all(
-            m.get("status") == "done" or m.get("cutout_slot_id") for m in members
-        ):
+        if only_missing and all(_panel_decided(m) for m in members):
             continue
         targets.append(head)
     return targets
@@ -1887,6 +1903,13 @@ def cutout_plan(project_id: str, episode: int) -> dict:
 
     ⚠️ times_used は増やさない。実際に消費した時だけ record_usage を呼ぶこと
        （find_current と同じ約束。ドライランで増やすとローテーションが狂う）。
+
+    ⚠️ **件数（from_stock / need_generation とその _cuts）は「まだ絵が1枚も決まっていない
+    カット」だけを数える**（2026-09-24）。選定は文脈（直前との距離・カメラプラン）のため
+    全カットで行うが、決定済みのカットまで数えると「在庫でN行」が実際に埋まる数より多く出て、
+    UI の課金見積り（生成対象 − from_stock_cuts）が実際より安く出ていた。
+    一部だけ決まっているカット（既存カットに新しい行が入った等）も決定済みとして扱う
+    ── 在庫で選び直すと確定済みの行の絵まで替わるため。各行の ``decided`` で区別できる。
     """
     manifest = load_manifest(project_id, episode)
     if manifest is None:
@@ -1926,16 +1949,21 @@ def cutout_plan(project_id: str, episode: int) -> dict:
                    "facing": cam.get(c["cut_id"], {}).get("facing")} for c in cuts]
 
     plan = cutout_selector.plan_episode(seq, want_shots)
-    lines, from_stock_cuts = [], 0
+    lines, from_stock_cuts, open_cuts = [], 0, 0
     for c, r in zip(cuts, plan):
         e = r.get("entry")
-        if e:
-            from_stock_cuts += 1
+        decided = any(_panel_decided(panels_by_id[lid])
+                      for lid in c["line_ids"] if lid in panels_by_id)
+        if not decided:
+            open_cuts += 1
+            if e:
+                from_stock_cuts += 1
         for lid in c["line_ids"]:
             lines.append({
                 "line_id": lid,
                 "cut_id": c["cut_id"],
                 "cut_role": c["role"],
+                "decided": decided,
                 # カメラプランが欲しがった段（希望）。実物とズレていれば代用が起きた印
                 "planned_shot": cam.get(c["cut_id"], {}).get("shot"),
                 "planned_facing": cam.get(c["cut_id"], {}).get("facing"),
@@ -1949,16 +1977,18 @@ def cutout_plan(project_id: str, episode: int) -> dict:
                 "times_used": e.get("times_used", 0) if e else None,
                 "reason": r.get("reason"),
             })
-    from_stock = sum(1 for ln in lines if ln["slot_id"])
+    open_lines = [ln for ln in lines if not ln["decided"]]
+    from_stock = sum(1 for ln in open_lines if ln["slot_id"])
     return {
         "thresholds": cutout_selector.thresholds(),
         "total": len(lines),
         "total_cuts": len(cuts),
+        "decided_cuts": len(cuts) - open_cuts,
         "from_stock": from_stock,
         "from_stock_cuts": from_stock_cuts,
         # ⚠️ 課金の見積りは**行数ではなくカット数**で見る（1カット＝1枚）
-        "need_generation": len(lines) - from_stock,
-        "need_generation_cuts": len(cuts) - from_stock_cuts,
+        "need_generation": len(open_lines) - from_stock,
+        "need_generation_cuts": open_cuts - from_stock_cuts,
         "lines": lines,
     }
 
@@ -2138,11 +2168,19 @@ def apply_cutout_plan(project_id: str, episode: int, line_ids: list[str] | None 
     ⚠️ **空リストは「対象ゼロ」**（省略＝None が「全行」）。falsy 判定にすると、
     1行も選んでいないのに在庫で賄える全行へ適用してしまう
     （``CHARACTER_CUTOUT_PLAN.md`` §13-4 と同じ規則。approve_images/auto_assign_backgrounds と揃える）。
+
+    ⚠️ **行を明示しない時は、絵が既に決まっているカットに触らない**（``decided``。2026-09-24）。
+    ``set_cutout_selection`` はカット全体を無条件に上書きするので、ここを飛ばさないと
+    「在庫N行を割り当てる」を押すたびに確定済みのカットまで選び直され、確定も外れる。
+    行を明示した時は従来どおり（呼び出し側がその行を選び直すと決めている）。
     """
     plan = cutout_plan(project_id, episode)
     targets = None if line_ids is None else set(line_ids)
-    applied, skipped, cuts_done = [], 0, 0
+    applied, skipped, kept, cuts_done = [], 0, 0, 0
     for line in plan["lines"]:
+        if targets is None and line["decided"]:
+            kept += 1
+            continue
         if not line["slot_id"] or (targets is not None and line["line_id"] not in targets):
             skipped += 1
             continue
@@ -2158,4 +2196,4 @@ def apply_cutout_plan(project_id: str, episode: int, line_ids: list[str] | None 
         applied.extend(res.get("line_ids") or [line["line_id"]])
     applied = list(dict.fromkeys(applied))   # カット共有で重複するので畳む
     return {"applied": len(applied), "applied_cuts": cuts_done,
-            "skipped": skipped, "line_ids": applied}
+            "skipped": skipped, "kept_decided": kept, "line_ids": applied}

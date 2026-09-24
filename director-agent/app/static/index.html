@@ -2268,7 +2268,7 @@
                 </div>
                 <!-- 台本との同期状態（差分検知）── 解消操作はコマ一覧「✓まとめて確定」に統合済み
                      （2026-09-24。旧・個別「このままでよい」と役割が重なっていたため一本化。
-                     経緯 memory/aroll-sync-approve-unification.md）。ここはサマリ表示のみ。 -->
+                     仕様は Docs/DATA_SCHEMA.md の sync の節）。ここはサマリ表示のみ。 -->
                 <div class="card" x-show="arollSync?.has_manifest"
                      :style="arollDriftCount ? 'border-color:#a16207' : ''">
                   <h2>台本との同期
@@ -9255,7 +9255,7 @@ function app() {
       if (!this.cutoutPlan) return [];
       const m = {};
       for (const l of this.cutoutPlan.lines || []) {
-        if (l.slot_id) continue;
+        if (l.slot_id || l.decided) continue;
         const k = (l.reason || '').split('（')[0];
         m[k] = (m[k] || 0) + 1;
       }
@@ -9283,7 +9283,8 @@ function app() {
         });
         const d = await r.json();
         this.cutoutPlanMsg = r.ok
-          ? `${d.applied} 行に割り当てました（${d.skipped} 行は在庫で賄えないため触っていません）`
+          ? `${d.applied} 行に割り当てました（${d.skipped} 行は在庫で賄えないため触っていません`
+            + (d.kept_decided ? `・絵が決まっている ${d.kept_decided} 行はそのまま` : '') + '）'
           : `失敗: ${d.detail || r.status}`;
         if (r.ok) { await this.refreshArollTab(); await this.loadCutoutPlan(); }
       } catch (e) {

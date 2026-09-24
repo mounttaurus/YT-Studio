@@ -886,6 +886,8 @@ async def aroll_sync(project_id: str, episode_number: int) -> dict:
     - unknown … この機能以前に生成された資産（生成時テキストの記録なし）
     stale/unknown は絵を作り直さなくても aroll_approve_images(line_ids=[…]) を呼べば、
     承認と同時に生成時テキストの記録も今の台本へ更新され sync が ok に戻る（2026-09-24統合）。
+    ⚠️ line_ids を省略した全行承認では unknown しか直らない（stale はユーザーが絵を見て
+    行を指定した時だけ解消する＝人が見ていない stale を黙って一致にしない）。
     """
     return await dc.get(f"api/scrapping/projects/{project_id}/episodes/{episode_number}/aroll/sync")
 
@@ -901,6 +903,8 @@ async def aroll_cutout_plan(project_id: str, episode_number: int) -> dict:
     各行が in-stock かどうかと候補 slot_id を返す（items[].slot_id が null なら在庫では
     賄えない＝新規生成が要る行）。**run_aroll_batch で課金する前に必ずこれを呼ぶこと。**
     在庫で埋まる行を先に aroll_apply_cutout_plan で確定してから、残りだけ生成する。
+    件数（from_stock / need_generation）は絵がまだ決まっていないカットだけを数える
+    （lines[].decided=true の行は数えない）。
     """
     return await dc.get(f"api/scrapping/projects/{project_id}/episodes/{episode_number}/aroll/cutout-plan")
 
@@ -911,6 +915,8 @@ async def aroll_apply_cutout_plan(project_id: str, episode_number: int,
 
     在庫で賄えない行は触らない（そこは run_aroll_batch の担当）。
     line_ids は **省略で在庫が効く全行が対象・空リスト[]で対象ゼロ**。
+    省略時は絵が既に決まっているカットを飛ばす（kept_decided に件数）。line_ids を明示すると
+    決まっているカットでも選び直す（カット全体が替わり確定も外れる）ので注意。
     """
     body: dict = {}
     if line_ids is not None:
