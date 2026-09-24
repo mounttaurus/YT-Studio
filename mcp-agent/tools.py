@@ -881,7 +881,9 @@ async def aroll_sync(project_id: str, episode_number: int) -> dict:
 
     台本を後から追加/削除/推敲した後は必ずこれで確認する。items[].sync の意味:
     - stale   … セリフが変わったのに絵が生成時のまま → run_aroll_batch(line_ids=[…]) で描き直す
-    - missing … 画像が無い行。status=no_panel なら先に generate_aroll_prompts が必要
+    - missing … 画像が無い行。status=no_panel なら先に generate_aroll_prompts(sections=[…]) で
+                実体化してから aroll_fill_missing(line_ids=[…]) を呼ぶと無料の手段（カットの
+                引き継ぎ→在庫）で埋まる分だけ埋まり、残りは need_generation として返る（2026-09-24）
     - orphan  … 台本から消えた行のPNGが残っているだけ（編集には使われない）
     - unknown … この機能以前に生成された資産（生成時テキストの記録なし）
     stale/unknown は絵を作り直さなくても aroll_approve_images(line_ids=[…]) を呼べば、
@@ -924,6 +926,23 @@ async def aroll_apply_cutout_plan(project_id: str, episode_number: int,
     return await dc.request(
         "POST", f"api/scrapping/projects/{project_id}/episodes/{episode_number}/aroll/cutout-plan/apply",
         json=body)
+
+
+async def aroll_fill_missing(project_id: str, episode_number: int,
+                             line_ids: list[str]) -> dict:
+    """選択行のうち絵が無いものを、無料の手段だけで埋める(可逆WRITE・課金なし)。
+
+    順序: ①同じカットに既に画像を持つ行があればそれを無料でコピー ②在庫
+    (aroll_apply_cutout_plan と同じ経路)。それでも埋まらない行は need_generation
+    (カットの先頭行のみ・1カット1枚の原則)として返す。**ここでは課金しない**——
+    need_generation を課金生成したい場合は、確認の上で run_aroll_batch(line_ids=...) を
+    別途呼ぶこと。埋めた行は image_approved_at を立てない(承認は別途 aroll_approve_images)。
+
+    ⚠️ line_ids は必須(省略不可)。空リストなら何もしない。
+    """
+    return await dc.request(
+        "POST", f"api/scrapping/projects/{project_id}/episodes/{episode_number}/aroll/fill-missing",
+        json={"line_ids": line_ids})
 
 
 async def aroll_approve_images(project_id: str, episode_number: int,
@@ -1169,6 +1188,7 @@ TOOLS = [
     {"fn": aroll_export,         "side_effects": [S.WRITE]},
     {"fn": aroll_cutout_plan,    "side_effects": [S.READ]},
     {"fn": aroll_apply_cutout_plan, "side_effects": [S.WRITE]},
+    {"fn": aroll_fill_missing,   "side_effects": [S.WRITE]},
     {"fn": aroll_approve_images, "side_effects": [S.WRITE]},
     {"fn": aroll_assign_backgrounds, "side_effects": [S.WRITE]},
     {"fn": aroll_cuts,           "side_effects": [S.READ]},

@@ -2197,3 +2197,77 @@ def apply_cutout_plan(project_id: str, episode: int, line_ids: list[str] | None 
     applied = list(dict.fromkeys(applied))   # カット共有で重複するので畳む
     return {"applied": len(applied), "applied_cuts": cuts_done,
             "skipped": skipped, "kept_decided": kept, "line_ids": applied}
+
+
+def fill_missing_images(project_id: str, episode: int, line_ids: list[str]) -> dict:
+    """選択行のうち絵が無いものを、無料の手段だけで埋める（Step C・2026-09-24）。
+
+    ① 同じカットに**既に画像を持つ**メンバーがいれば、その絵を無料でコピーする
+       （``_propagate_cut_result``。台本に新しい行が既存の確定済みカットへ合流した時の経路。
+       §18-3で指摘した「生成経路はカット全体を巻き込むが在庫割当は巻き込まない」非対称を、
+       生成に回す前にここで解消する）。
+    ② それでも埋まらない行は ``apply_cutout_plan`` で在庫を試す（未決定の行だけを渡すので、
+       C0で入れた「decided なカットは触らない」判定とは無関係に動く＝行を明示した通常の適用）。
+    ③ それでも埋まらない行は生成が要る。**カットの先頭行だけ**を返す（1カット1枚の原則。
+       課金はここでは発生しない・呼び出し側が確認の上で ``/aroll/generate`` に渡す）。
+
+    ⚠️ **人が絵を見て確定したわけではないので `image_approved_at` は立てない**
+    （承認は別操作・呼び出し側の判断。合意 2026-09-24）。
+    ⚠️ カット内に ``cutout_slot_id`` はあるが実画像が無い決定形（在庫割当のみ済み・
+    Photoshop合成前）のメンバーしかいない場合はコピー元にできないため、そのカットには
+    触れず ``select_targets`` 側の既存動作に委ねる（安全側・中途半端な複製をしない）。
+    """
+    manifest = load_manifest(project_id, episode)
+    if manifest is None:
+        raise ValueError("aroll.json not found")
+    panels_by_id = {p.get("line_id"): p for p in manifest.get("panels", []) if not p.get("orphan")}
+    cuts = cut_report(project_id, episode, manifest)["cuts"]
+    cut_of = cut_planner.cut_of_line(cuts)
+
+    handled_cuts: set[str] = set()
+    filled_by_copy: list[str] = []
+    still_undecided: list[str] = []
+    for lid in line_ids:
+        p = panels_by_id.get(lid)
+        if p is None or _panel_decided(p):
+            continue
+        cut = cut_of.get(lid) or {"cut_id": lid, "line_ids": [lid]}
+        if cut["cut_id"] in handled_cuts:
+            continue
+        handled_cuts.add(cut["cut_id"])
+        members = [panels_by_id[l] for l in cut.get("line_ids", [lid]) if l in panels_by_id]
+        undecided_ids = [m["line_id"] for m in members if not _panel_decided(m)]
+        if not undecided_ids:
+            continue
+        donor = next((m for m in members if m.get("status") == "done" and m.get("image")), None)
+        if donor is not None:
+            _propagate_cut_result(project_id, episode, manifest, donor, undecided_ids)
+            filled_by_copy.extend(undecided_ids)
+        elif any(_panel_decided(m) for m in members):
+            continue   # cutout_slot_idのみの決定形はコピー元にできない。触らない
+        else:
+            still_undecided.extend(undecided_ids)
+    if filled_by_copy:
+        save_manifest(project_id, episode, manifest)
+
+    # ② 在庫（未決定の行だけを明示して渡す＝行を明示した通常の適用と同じ経路）
+    stock = apply_cutout_plan(project_id, episode, list(dict.fromkeys(still_undecided))) \
+        if still_undecided else {"line_ids": []}
+    filled = list(dict.fromkeys(filled_by_copy + stock["line_ids"]))
+    still_open = [lid for lid in still_undecided if lid not in set(stock["line_ids"])]
+
+    # ③ 残りは生成が要る（カットの先頭行だけ・ナレーション/プロンプト未生成は対象外）
+    manifest = load_manifest(project_id, episode)   # ②の保存後を読み直す
+    panels_by_id = {p.get("line_id"): p for p in manifest.get("panels", []) if not p.get("orphan")}
+    need_generation: list[str] = []
+    seen_cuts: set[str] = set()
+    for lid in still_open:
+        cut = cut_of.get(lid) or {"cut_id": lid, "line_ids": [lid]}
+        if cut["cut_id"] in seen_cuts:
+            continue
+        seen_cuts.add(cut["cut_id"])
+        head = panels_by_id.get(cut["line_ids"][0]) or panels_by_id.get(lid)
+        if head and head.get("characters") and (head.get("prompt") or "").strip():
+            need_generation.append(head["line_id"])
+
+    return {"filled": filled, "need_generation": need_generation}

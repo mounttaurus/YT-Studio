@@ -2282,7 +2282,8 @@
                     台本を後から追加・削除・推敲すると、生成済みのAロールとズレます。
                     <b>絵が古い</b>／<b>記録なし</b>＝下の<b>コマ一覧</b>で対象行を選び「✓まとめて確定」を押すと、
                     画像は作り直さずにこの記録も今の台本テキストで確定します。
-                    <b>画像なし</b>＝台本に追加された行（パネルが無い行は「下ごしらえ → プロンプトを作り直す」を実行してから生成）。
+                    <b>画像なし</b>＝台本に追加された行。<span x-show="arollNewLineCount">右の「🆕 新しい行を取り込む」を
+                    押すとコマ一覧に現れます。</span>
                     <b>行が消えた</b>＝台本から削除された行のPNGがディスクに残っている（編集には使われません）。
                   </div>
                   <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-top:10px">
@@ -2290,6 +2291,12 @@
                     <button class="btn btn-sm" x-show="arollSyncCounts.stale + arollSyncCounts.unknown"
                             @click="arollFocusDrift()"
                             x-text="`▼ コマ一覧でズレている行を見る（${arollSyncCounts.stale + arollSyncCounts.unknown}）`"></button>
+                    <!-- Step C1: no_panel行(台本に追加されたがまだパネルが無い行)を下ごしらえで
+                         実体化し、コマ一覧の通常フローに合流させる（無料・画像生成なし）。 -->
+                    <button class="btn btn-sm btn-primary" x-show="arollNewLineCount" :disabled="!!arollBusy"
+                            @click="arollIngestNewLines()"
+                            :title="`対象の章: ${arollNewLineSections.join('・')}`"
+                            x-text="`🆕 新しい行 ${arollNewLineCount}件を取り込む`"></button>
                   </div>
                 </div>
                   </div>
@@ -2709,7 +2716,7 @@
 
                 <button class="btn btn-sm" :disabled="!arollSelected.length || arollBulkBusy"
                         @click="arollBulkApprove()"
-                        title="選択行の絵はこれでいい、と確定します（無料・在庫の再利用許可とは別）">✓ まとめて確定</button>
+                        title="絵がある行はこれでいいと確定します。絵が無い行はカット引き継ぎ→在庫の順で無料に埋め（未確定のまま）、それでも埋まらなければ生成の確認が出ます">✓ まとめて確定</button>
 
                 <button class="btn btn-sm" :disabled="!arollSelected.length || arollBulkBusy || arollRunning"
                         @click="arollBulkRegenerate()"
@@ -9607,6 +9614,15 @@ function app() {
       const c = this.arollSyncCounts;
       return c.stale + c.missing + c.orphan + c.unknown;
     },
+    // Step C1: missing のうち「パネル自体が無い」＝台本に新規追加された行だけを取り出す
+    // （missing にはパネルはあるが未生成/失敗の行も混ざる。あれはコマ一覧に既に見えている）。
+    get arollNewLineItems() {
+      return (this.arollSync?.items || []).filter(it => it.sync === 'missing' && it.status === 'no_panel');
+    },
+    get arollNewLineCount() { return this.arollNewLineItems.length; },
+    get arollNewLineSections() {
+      return [...new Set(this.arollNewLineItems.map(it => it.section || 'main'))];
+    },
     arollSyncLabel(s) {
       return { ok: '✔ 一致', stale: '⚠ 絵が古い', missing: '✘ 画像なし',
                orphan: '🗑 行が消えた', unknown: '? 記録なし' }[s] || s;
@@ -9704,17 +9720,59 @@ function app() {
       const q = this.qaMerged.find(x => x.line_id === lineId);
       if (q) this.qaDetail = q;
     },
+    // Step C2（2026-09-24合意）: 選択行に絵の無い行が混ざっていたら、確定の前に無料の手段
+    // （①同じカットの既存の絵を引き継ぐ ②在庫から割り当てる）で先に埋める。それでも埋まらない
+    // 行は金額を見せて確認してから生成する。①②で自動的に入った絵は確定しない（未確定のまま
+    // 残す＝人が見て「まとめて確定」をもう一度押すまで image_approved_at は立てない）。
     async arollBulkApprove() {
       const ids = this.arollSelected;
       if (!ids.length) return;
-      // §13-4「確定は一括だけ確認を挟む」。arollApproveImages は明示idsだと
-      // 確認しない（1行ずつ押す用途のため正しい）ので、一括のこちら側で挟む。
-      if (!confirm(`選択した ${ids.length}行 の絵を「これでいい」と確定します。`
-          + `\n無料です（画像は生成しません）。続行しますか？`)) return;
+      const panelById = {};
+      for (const p of this.arollPanels) panelById[p.line_id] = p;
+      const missingIds = ids.filter(id => panelById[id]?.status !== 'done');
+      const readyIds = ids.filter(id => panelById[id]?.status === 'done');
+
       this.arollBulkBusy = true;
+      this.arollBulkMsg = '';
       try {
-        await this.arollApproveImages(ids);
-        this.arollBulkMsg = `✔ ${ids.length}行を確定しました`;
+        let filledCount = 0, needGen = [];
+        if (missingIds.length) {
+          const r = await fetch(`${this.arollApiBase}/fill-missing`, {
+            method: 'POST', headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ line_ids: missingIds }),
+          });
+          const d = await r.json().catch(() => ({}));
+          if (!r.ok) { alert('エラー: ' + (d.detail || r.status)); return; }
+          filledCount = (d.filled || []).length;
+          needGen = d.need_generation || [];
+          if (filledCount) await this.loadArollManifest();
+        }
+
+        if (needGen.length) {
+          const est = (needGen.length * 0.04).toFixed(2);
+          if (confirm(`在庫でも埋まらない ${needGen.length}行（カット単位）は新規生成が必要です`
+              + `（概算 $${est}・実課金）。生成しますか？\nキャンセルすると、埋まった分だけ処理して終わります。`)) {
+            const gr = await fetch(`${this.arollApiBase}/generate`, {
+              method: 'POST', headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ line_ids: needGen, only_missing: true,
+                                     allow_paid_fallback: this.arollPaidFallback,
+                                     aspect: this.arollAspect, style: this.arollStyle }),
+            });
+            if (!gr.ok) { const gd = await gr.json().catch(() => ({})); alert('エラー: ' + (gd.detail || gr.status)); }
+            else await this.pollArollStatus();
+          }
+        }
+
+        const msgs = [];
+        if (filledCount) msgs.push(`${filledCount}行を無料で埋めました（未確定のまま）`);
+        if (readyIds.length) {
+          if (confirm(`選択した ${readyIds.length}行 の絵を「これでいい」と確定します。`
+              + `\n無料です（画像は生成しません）。続行しますか？`)) {
+            await this.arollApproveImages(readyIds);
+            msgs.push(`${readyIds.length}行を確定しました`);
+          }
+        }
+        this.arollBulkMsg = msgs.length ? `✔ ${msgs.join('・')}` : '対象行は既に処理済みでした';
       } finally { this.arollBulkBusy = false; }
     },
     async arollBulkRegenerate() {
@@ -10006,6 +10064,40 @@ function app() {
         this.arollMsg = `✔ ${(d.manifest.panels || []).filter(p => p.prompt).length}行のプロンプトを用意しました`;
       } catch (e) {
         this.arollMsg = `プロンプト生成に失敗: ${e.message}`;
+      } finally { this.arollBusy = null; }
+    },
+    // Step C1: 台本に新規追加された行（パネル自体が無い）を、その行がある章だけ
+    // 下ごしらえして実体化する（overwrite=falseなので既存行のプロンプトには触れない）。
+    // 実体化した行はコマ一覧の通常フロー（在庫/生成/まとめて確定）に合流する。
+    async arollIngestNewLines() {
+      const sections = this.arollNewLineSections;
+      const n = this.arollNewLineCount;
+      if (!n) return;
+      if (!confirm(`台本に追加された ${n}行分のプロンプトを用意します（無料・画像生成なし）。続行しますか？`)) return;
+      this.arollBusy = 'ingest';
+      this.arollMsg = '';
+      try {
+        const r = await fetch(`${this.arollApiBase}/prompts`, {
+          method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            sections, overwrite: false, aspect: this.arollAspect, style: this.arollStyle,
+          }),
+        });
+        const d = await r.json();
+        if (!r.ok) throw new Error(d.detail || '取り込みに失敗しました');
+        // 新規行だけが背景未割当のはずなので only_missing=true で十分絞り込める
+        const br = await fetch(`${this.arollApiBase}/backgrounds/auto_assign`, {
+          method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ only_missing: true }),
+        });
+        const bd = await br.json().catch(() => ({}));
+        await this.loadArollManifest();
+        await this.loadArollSync();
+        this.arollWarnings = d.warnings || [];
+        this.arollMsg = `✔ 新しい行 ${n}件を取り込みました`
+          + (br.ok && bd.assigned ? `（背景 ${bd.assigned}件を割当）` : '');
+      } catch (e) {
+        this.arollMsg = `取り込みに失敗: ${e.message}`;
       } finally { this.arollBusy = null; }
     },
     async arollSavePrompt(p, value) {

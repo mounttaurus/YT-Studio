@@ -2437,6 +2437,24 @@ async def aroll_apply_cutout_plan(project_id: str, episode_number: int, req: Cut
         raise HTTPException(status_code=404, detail=str(e))
 
 
+class ArollFillMissingRequest(BaseModel):
+    line_ids: list[str]   # 必須。空リストは対象ゼロ（全行を暗黙に対象にしない）
+
+
+@router.post("/projects/{project_id}/episodes/{episode_number}/aroll/fill-missing")
+async def aroll_fill_missing(project_id: str, episode_number: int, req: ArollFillMissingRequest):
+    """選択行のうち絵が無いものを、無料の手段（カットの引き継ぎ→在庫）だけで埋める（Step C）。
+
+    埋めた行は承認しない（image_approved_atは立てない・人が見て確定するのは別操作）。
+    それでも埋まらない行は need_generation（カットの先頭行のみ）として返す。生成するかは
+    ユーザー判断（呼び出し側が確認の上で /aroll/generate へ）。
+    """
+    try:
+        return aroll_manager.fill_missing_images(project_id, episode_number, req.line_ids)
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+
+
 @router.post("/characters/{char_id}/panel_library/approve-all")
 async def approve_all_panel_library(char_id: str, kind: str = "cutout"):
     """指定 kind の pending をまとめて承認する（取り込み直後の194件などを一括で通す）。"""
