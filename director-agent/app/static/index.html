@@ -4948,10 +4948,6 @@
             <div :style="qaRegionStyle(qaDetail, it)"></div>
           </template>
         </div>
-        <div x-show="arollHoverPreview" style="margin-top:10px">
-          <div style="font-size:10px;color:#94a3b8;margin-bottom:4px">🔍 在庫プレビュー（マウスオーバー中）</div>
-          <img :src="arollHoverPreview" style="width:100%;border-radius:6px;background:#334155">
-        </div>
         <div style="display:flex;gap:8px;align-items:center;margin-top:10px;flex-wrap:wrap">
           <button class="btn btn-sm" @click="qaStep(-1)">← 前</button>
           <span style="font-size:11px;color:#64748b" x-text="qaPositionLabel"></span>
@@ -4963,6 +4959,10 @@
                   :disabled="psassistJobBusy || psassistLatestJob?.status === 'running'"
                   @click="psassistRunExportJob([qaDetail.line_id])"
                   title="この行だけ納品PNGを書き出し直す">🖼 この行だけ更新</button>
+        </div>
+        <div x-show="arollHoverPreview" style="margin-top:10px">
+          <div style="font-size:10px;color:#94a3b8;margin-bottom:4px">🔍 在庫プレビュー（マウスオーバー中）</div>
+          <img :src="arollHoverPreview" style="width:100%;border-radius:6px;background:#334155">
         </div>
       </div>
 
