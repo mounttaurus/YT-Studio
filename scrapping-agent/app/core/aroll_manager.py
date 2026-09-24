@@ -2036,6 +2036,7 @@ def cutout_candidates(project_id: str, episode: int, line_id: str, limit: int = 
                 default=1.0)
         items.append({
             "slot_id": e["slot_id"], "cutout": e.get("cutout"),
+            "facing": cutout_selector.orientation(e),
             "times_used": e.get("times_used", 0), "distance": round(d, 3),
             "too_close": d < th["repetitive_below"],
             "current": e["slot_id"] == p.get("library_slot_id"),

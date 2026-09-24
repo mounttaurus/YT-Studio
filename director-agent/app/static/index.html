@@ -4541,11 +4541,16 @@
                style="display:grid;grid-template-columns:repeat(auto-fill,minmax(84px,1fr));gap:6px">
             <template x-for="s in charLibSimilar" :key="s.slot_id">
               <div style="cursor:zoom-in" @click="charLibJumpTo(s.slot_id)"
-                   :title="`距離 ${s.distance}（0=同一）／${s.emotion || '感情なし'} ${s.shot || ''}／使用${s.times_used}回`">
-                <img :src="charLibCutoutUrl({ char_id: charLib.detail.char_id, cutout: s.slot_id + '.png' })"
-                     loading="lazy"
-                     :style="`width:100%;aspect-ratio:16/9;object-fit:contain;background:#808080;border-radius:4px;`
-                           + (s.too_close ? 'outline:2px solid #f87171' : '')">
+                   :title="`距離 ${s.distance}（0=同一）／${s.emotion || '感情なし'} ${s.shot || ''}／向き: ${charLibFacingLabel(s)}／使用${s.times_used}回`">
+                <div style="position:relative">
+                  <img :src="charLibCutoutUrl({ char_id: charLib.detail.char_id, cutout: s.slot_id + '.png' })"
+                       loading="lazy"
+                       :style="`width:100%;aspect-ratio:16/9;object-fit:contain;background:#808080;border-radius:4px;`
+                             + (s.too_close ? 'outline:2px solid #f87171' : '')">
+                  <span style="position:absolute;top:2px;right:2px;font-size:9px;padding:0 4px;
+                               border-radius:99px;background:rgba(15,23,42,0.85);color:#a78bfa"
+                        x-text="charLibFacingGlyph(s)"></span>
+                </div>
                 <div style="text-align:center;font-size:9px"
                      :style="s.too_close ? 'color:#f87171' : 'color:#64748b'"
                      x-text="`距離 ${s.distance}`"></div>
@@ -5092,9 +5097,15 @@
               <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:6px">
                 <template x-for="item in arollPickerItems" :key="item.slot_id">
                   <div style="cursor:pointer" :style="item.too_close ? 'opacity:0.45' : ''"
+                       :title="`向き: ${charLibFacingLabel(item)}`"
                        @click="arollPickLibraryImage(arollPanelOf(qaDetail.line_id), item)">
-                    <img :src="arollPickerImageUrl((arollPanelOf(qaDetail.line_id).characters||[])[0], item)"
-                         style="width:100%;aspect-ratio:16/9;object-fit:contain;border-radius:4px;background:#334155">
+                    <div style="position:relative">
+                      <img :src="arollPickerImageUrl((arollPanelOf(qaDetail.line_id).characters||[])[0], item)"
+                           style="width:100%;aspect-ratio:16/9;object-fit:contain;border-radius:4px;background:#334155">
+                      <span style="position:absolute;top:2px;right:2px;font-size:9px;padding:0 4px;
+                                   border-radius:99px;background:rgba(15,23,42,0.85);color:#a78bfa"
+                            x-text="charLibFacingGlyph(item)"></span>
+                    </div>
                     <div style="font-size:9px;text-align:center"
                          :style="item.too_close ? 'color:#f87171' : 'color:#64748b'"
                          x-text="`${item.distance} / ${item.times_used||0}回`"></div>

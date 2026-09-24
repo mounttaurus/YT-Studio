@@ -488,6 +488,9 @@ def nearest_in_stock(char_id: str, fingerprint: dict, *, limit: int = 5,
         out.append({
             "slot_id": e.get("slot_id"), "distance": round(d, 4),
             "emotion": e.get("emotion"), "shot": e.get("shot"), "angle": e.get("angle"),
+            # 指紋は向きを見られない（orientation()冒頭のコメント参照）ので、
+            # 「似ている」候補が実は向き違いなだけかを人が判断できるよう明示する。
+            "facing": orientation(e),
             "times_used": e.get("times_used", 0),
             "review_status": e.get("review_status", "approved"),
             # 目安の色付け用。**弾くための判定ではない**（選択側の閾値を流用しているだけ）

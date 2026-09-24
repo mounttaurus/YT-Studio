@@ -88,3 +88,7 @@ imagegen-agent/models/
 
 # 生成キューの進捗（レジューム用の実行時ファイル・コミット不要）
 scrapping-agent/scripts/*.progress.json
+
+# 切り抜きPS試験の出力とバックアップ（Docs/CUTOUT_PS_PRIMARY_PLAN.md §8・313MB）
+Cutout_PS/out/
+Cutout_PS/backup_20260923/
