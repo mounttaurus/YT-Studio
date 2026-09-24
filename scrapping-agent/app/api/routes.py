@@ -488,6 +488,55 @@ async def generate_panel_library_variants(char_id: str, req: PanelLibraryVariant
     return {"entries": entries}
 
 
+@router.post("/characters/{char_id}/panel_library/upload")
+async def upload_panel_library_image(
+    char_id: str,
+    file: UploadFile = File(...),
+    emotion: str = Form(...), shot: str = Form(...), angle: str = Form(...),
+    pose: str = Form(""), facing: str = Form(""), note: str = Form(""),
+):
+    """ユーザーが自分で作った画像を1枚、キャラ在庫へ登録する（**生成しない**）。
+
+    Docs/PANEL_LIBRARY_UPLOAD_PLAN.md。既存の`register_from_image`
+    （Aロール承認経路が内部で使うのと同じ関数）を土台にする。slot_idの命名・
+    fingerprint/mask/measuredの計算は自動なので、人が入れるのは分類ラベルだけ。
+    `review_status="pending"`で入るので、既存の「✔許可」フローで有効化する。
+    """
+    if character_manager.read_character(char_id) is None:
+        raise HTTPException(status_code=404, detail=f"character not found: {char_id}")
+    # 生成フォームと同じゲート（画像を使う設定・外見・参照画像）に揃える
+    # （Docs/PANEL_LIBRARY_UPLOAD_PLAN.md §4 Q3）。本籍はcharacter_manager.can_generate_images
+    ok, why = character_manager.can_generate_images(char_id)
+    if not ok:
+        raise HTTPException(status_code=400, detail=why)
+
+    vocab = panel_presets.load_presets()
+    for axis, val in (("emotion", emotion), ("shot", shot), ("angle", angle),
+                      ("pose", pose), ("facing", facing)):
+        if val and val not in {i.get("id") for i in vocab.get(axis, [])}:
+            raise HTTPException(
+                status_code=400,
+                detail=f"{axis} に無い値です: {val}（panel_presets の語彙から選んでください）")
+
+    data = await file.read()
+    if not data:
+        raise HTTPException(status_code=400, detail="ファイルが空です")
+    if len(data) > MAX_UPLOAD_BYTES:
+        raise HTTPException(
+            status_code=413,
+            detail=f"画像が大きすぎます（{len(data) // 1024 // 1024}MB / 上限 25MB）")
+    try:
+        result = panel_library_manager.register_from_image(
+            char_id, data, emotion=emotion, shot=shot, angle=angle, pose=pose,
+            facing=facing, provider="user_upload", review_status="pending",
+            source={"kind": "user_upload", "filename": file.filename or "", "note": note})
+    except Exception as e:
+        raise HTTPException(status_code=502, detail=f"panel library upload failed: {e}")
+    if not result.get("registered"):
+        raise HTTPException(status_code=400, detail=result.get("reason") or "登録に失敗しました")
+    return result
+
+
 class PanelLibraryReblessRequest(BaseModel):
     dry_run: bool = True        # 既定は試算。実行は明示的に false を送らせる
     note: str = ""              # 「参照画像を足しただけ」等、後から理由を追えるように
@@ -574,6 +623,20 @@ async def update_panel_library_entry(char_id: str, slot_id: str,
         entry = panel_library_manager.update_entry(
             char_id, slot_id, emotion=req.emotion, shot=req.shot,
             angle=req.angle, pose=req.pose, facing=req.facing, note=req.note)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    if entry is None:
+        raise HTTPException(status_code=404, detail=f"panel library entry not found: {slot_id}")
+    return entry
+
+
+@router.post("/characters/{char_id}/panel_library/{slot_id}/remeasure")
+async def remeasure_panel_library_entry(char_id: str, slot_id: str):
+    """外部編集（Photoshop等）でファイルの中身が変わった時、fingerprint/mask/measuredを
+    今のファイルから測り直す（Docs/PANEL_LIBRARY_FILE_PATH_PLAN.md）。ラベルは触らない。
+    """
+    try:
+        entry = panel_library_manager.remeasure_entry(char_id, slot_id)
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
     if entry is None:

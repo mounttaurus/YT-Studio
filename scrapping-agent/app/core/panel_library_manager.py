@@ -31,8 +31,8 @@ from pathlib import Path
 from PIL import Image
 
 from app.core import (
-    character_manager, cutout_engine, fingerprint, nanobanana_client, panel_presets,
-    shot_meter, style_manager,
+    background_manager, character_manager, cutout_engine, fingerprint, host_paths,
+    nanobanana_client, panel_presets, shot_meter, style_manager,
 )
 
 SCHEMA_VERSION = "1.4.0"  # 1.3.0: mask を追加。1.4.0: facing軸の新設・pose/angle/shotの向き系値を削除
@@ -257,6 +257,10 @@ def list_entries(char_id: str, *, emotion: str = "", shot: str = "", angle: str 
             "is_stale": e.get("appearance_version") != current,
             "review_status": e.get("review_status", "approved"),
             "usable": usable_as(e),
+            "image_host_path": (host_paths.to_host_path(library_dir(char_id) / e["image"])
+                                if e.get("image") else None),
+            "cutout_host_path": (host_paths.to_host_path(library_dir(char_id) / e["cutout"])
+                                 if e.get("cutout") else None),
         })
     return out
 
@@ -551,6 +555,42 @@ def update_entry(char_id: str, slot_id: str, *,
                 "is_stale": e.get("appearance_version") != appearance_version(char_id),
                 "review_status": e.get("review_status", "approved"),
                 "changed": changed}
+    return None
+
+
+def remeasure_entry(char_id: str, slot_id: str) -> dict | None:
+    """今ディスク上にある✂️切り抜きファイルから fingerprint/mask/measured を測り直す。
+
+    Docs/PANEL_LIBRARY_FILE_PATH_PLAN.md。外部編集（Photoshop等での手直し）でファイルの
+    中身が変わった時、生成時に1回だけ計算された実測値が古いまま残る問題への対処。
+
+    ⚠️ ラベル（emotion/shot/angle/facing等）・times_used・used_by・review_statusは触らない
+    （人が選んだ分類は外部編集で変わらない。決定はDocs/PANEL_LIBRARY_FILE_PATH_PLAN.md §4 Q1）。
+    fingerprint/mask/measuredは常に``cutout``（透過）から計算する ── ``image``（背景付き）は
+    全面不透明なので、同じ関数群にかけても意味のある値にならない（cutoutが無いentryは対象外）。
+    """
+    data = load_index(char_id)
+    for e in data.get("entries", []):
+        if e.get("slot_id") != slot_id:
+            continue
+        rel = e.get("cutout")
+        if not rel:
+            raise ValueError("この絵には✂️切り抜きが無く、再計測できません"
+                             "（fingerprint/mask/measuredは切り抜きから計算するため）")
+        path = library_dir(char_id) / rel
+        if not path.is_file():
+            raise ValueError(f"ファイルが見つかりません: {rel}")
+        rgba = Image.open(path).convert("RGBA")
+        e["fingerprint"] = fingerprint.for_entry(rgba)
+        e["mask"] = cutout_engine.analyze_alpha(rgba)
+        e["measured"] = shot_meter.measure(rgba)
+        e["measured_source"] = "mask"
+        e["measured_at"] = _now()
+        save_index(char_id, data)
+        return {**e,
+                "is_stale": e.get("appearance_version") != appearance_version(char_id),
+                "review_status": e.get("review_status", "approved"),
+                "usable": usable_as(e)}
     return None
 
 
@@ -937,7 +977,7 @@ async def generate_and_register(
 
 def register_from_image(
     char_id: str, data: bytes, *, emotion: str, shot: str, angle: str,
-    pose: str = "", prompt: str = "", style_name: str = "kamishibai",
+    pose: str = "", facing: str = "", prompt: str = "", style_name: str = "kamishibai",
     model: str = "", provider: str = "nanobanana", source: dict | None = None,
     review_status: str = "approved",
 ) -> dict:
@@ -959,12 +999,17 @@ def register_from_image(
     すり抜ける。** 2026-09-23、実データで13組（アオイ8・ルカ5）の完全同一画像が別slot_idで
     二重登録されているのを発見した（詳細 memory/aroll-duplicate-cutout-same-batch）。
     旧形式entryは実ファイルを都度読んでハッシュ化するフォールバックで拾う。
+
+    facing: 明示的に渡された値を優先する（Docs/PANEL_LIBRARY_UPLOAD_PLAN.md・ユーザー
+    アップロード経路が人に向きを選ばせる時用）。省略時（既定・Aロール承認経路）は従来どおり
+    ``_normalize_legacy_axes``がpose/angleから読み替える。
     """
     # ⚠️ Aロール承認経路は台本のslotをそのまま渡すので、移行前に分類された行はpose/angleに
     # 旧向き系の値を持っている可能性がある。ここで新語彙へ読み替える（関数群の詳細は
     # _normalize_legacy_axes の docstring）。
-    shot, angle, pose, facing = _normalize_legacy_axes(shot=shot, angle=angle, pose=pose or None)
+    shot, angle, pose, legacy_facing = _normalize_legacy_axes(shot=shot, angle=angle, pose=pose or None)
     pose = pose or ""
+    facing = facing or legacy_facing
 
     img_hash = hashlib.sha256(data).hexdigest()[:16]
     src = dict(source or {}, image_hash=img_hash)
@@ -980,7 +1025,15 @@ def register_from_image(
             return {"registered": False, "reason": "同じ画像が既に在庫にある",
                     "slot_id": e.get("slot_id")}
 
-    rgba, info = cutout_engine.cut_out(Image.open(io.BytesIO(data)), method="ai")
+    src_img = Image.open(io.BytesIO(data))
+    if cutout_engine.looks_precut(src_img):
+        # ユーザーが自分で切り抜いた透過PNG。cut_outは入力のアルファを毎回捨てて
+        # 再切り抜きしてしまうので、既に十分透明なら入力のアルファをそのまま使う
+        # （Docs/PANEL_LIBRARY_UPLOAD_PLAN.md §4 Q1）。
+        rgba = src_img.convert("RGBA")
+        info = {"method": "precut", "effective": "precut"}
+    else:
+        rgba, info = cutout_engine.cut_out(src_img, method="ai")
     fp = fingerprint.for_entry(rgba)
     if not fp.get("dhash") or _too_empty(fp):
         # 切り抜きに失敗した絵だけは積まない（cutout も指紋も無い entry は用途が無い）
@@ -1002,7 +1055,8 @@ def register_from_image(
 
     entry = {
         "slot_id": slot_id, "emotion": emotion, "shot": shot, "angle": angle,
-        "pose": pose or None, "appearance_version": ver, "aspect": "16:9",
+        "pose": pose or None, "appearance_version": ver,
+        "aspect": background_manager.aspect_of(*src_img.size),
         "image": f"images/{slot_id}.png", "cutout": f"cutouts/{slot_id}.png",
         "fingerprint": fp, "mask": mask, "cutout_method": info.get("effective"),
         # ⚠️ **実物の画角と向きをここで確定させる**（U2・2026-09-20）。ラベル（shot/pose）は

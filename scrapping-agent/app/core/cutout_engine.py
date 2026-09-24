@@ -428,6 +428,21 @@ def cut_out(
     return Image.fromarray(out, "RGBA"), info
 
 
+def looks_precut(img: Image.Image, *, min_transparent_ratio: float = 0.05) -> bool:
+    """入力画像が既に切り抜き済み（十分な透明部分を持つ）か。
+
+    Docs/PANEL_LIBRARY_UPLOAD_PLAN.md §4 Q1。ユーザーが自分で切り抜いた透過PNGを
+    アップロードした時、ここで再度 ``cut_out`` を掛けると自前のアルファが握りつぶされる
+    （``cut_out`` は ``img.convert("RGB")`` で入力のアルファを毎回捨てる仕様のため）。
+    非完全不透明画素が画面の ``min_transparent_ratio`` 以上あれば「既に切り抜き済み」と
+    判定し、呼び出し側は ``cut_out`` をスキップして入力のアルファをそのまま使う。
+    """
+    if img.mode not in ("RGBA", "LA") and "transparency" not in img.info:
+        return False
+    alpha = np.asarray(img.convert("RGBA"))[:, :, 3]
+    return float((alpha < 250).mean()) >= min_transparent_ratio
+
+
 def analyze_alpha(rgba: Image.Image) -> dict[str, Any]:
     """psassist の ``mask_stats.json`` と同じキーを返す（下流の互換のため）。"""
     a = np.asarray(rgba.convert("RGBA"))[:, :, 3]

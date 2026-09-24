@@ -3577,6 +3577,60 @@
                     </div>
                   </div>
 
+                  <!-- 📤 手元の画像を登録（Docs/PANEL_LIBRARY_UPLOAD_PLAN.md） -->
+                  <div style="background:#0f172a;border-radius:8px;padding:14px;margin-bottom:16px">
+                    <h3 style="font-size:13px;color:#e2e8f0;margin:0 0 8px">📤 手元の画像を登録（未許可で登録・生成はしない）</h3>
+                    <p style="font-size:11px;color:#64748b;margin:0 0 10px">
+                      自分で作った画像を1枚取り込みます。ファイル名やfingerprintは自動で決まるので、
+                      下の分類だけ選んでください。<b>未許可</b>で入るので「✔許可」してから使われます。
+                      既に透過済み（背景を抜いてある）PNGならそのまま使い、抜けていなければ自動で背景を抜きます。
+                    </p>
+                    <div style="display:grid;grid-template-columns:repeat(5,1fr);gap:12px">
+                      <label style="font-size:12px;color:#cbd5e1">表情
+                        <select x-model="charLib.upload.emotion" style="width:100%;margin-top:4px">
+                          <option value="">（未選択）</option>
+                          <template x-for="p in (studioPresets.emotion||[])" :key="p.id"><option :value="p.id" x-text="p.label_ja"></option></template>
+                        </select>
+                      </label>
+                      <label style="font-size:12px;color:#cbd5e1">ショット
+                        <select x-model="charLib.upload.shot" style="width:100%;margin-top:4px">
+                          <option value="">（未選択）</option>
+                          <template x-for="p in (studioPresets.shot||[])" :key="p.id"><option :value="p.id" x-text="p.label_ja"></option></template>
+                        </select>
+                      </label>
+                      <label style="font-size:12px;color:#cbd5e1">アングル
+                        <select x-model="charLib.upload.angle" style="width:100%;margin-top:4px">
+                          <option value="">（未選択）</option>
+                          <template x-for="p in (studioPresets.angle||[])" :key="p.id"><option :value="p.id" x-text="p.label_ja"></option></template>
+                        </select>
+                      </label>
+                      <label style="font-size:12px;color:#cbd5e1">向き（任意）
+                        <select x-model="charLib.upload.facing" style="width:100%;margin-top:4px">
+                          <option value="">（未選択＝正面）</option>
+                          <template x-for="p in (studioPresets.facing||[])" :key="p.id"><option :value="p.id" x-text="p.label_ja"></option></template>
+                        </select>
+                      </label>
+                      <label style="font-size:12px;color:#cbd5e1">ポーズ（任意）
+                        <select x-model="charLib.upload.pose" style="width:100%;margin-top:4px">
+                          <option value="">（未選択）</option>
+                          <template x-for="p in (studioPresets.pose||[])" :key="p.id"><option :value="p.id" x-text="p.label_ja"></option></template>
+                        </select>
+                      </label>
+                    </div>
+                    <div style="display:flex;gap:12px;align-items:end;margin-top:10px;flex-wrap:wrap">
+                      <label style="font-size:12px;color:#cbd5e1">画像ファイル
+                        <input type="file" x-ref="charLibUploadFile" accept="image/png,image/jpeg"
+                               style="display:block;margin-top:4px;font-size:12px"
+                               @change="charLib.upload.file = $event.target.files[0] || null">
+                      </label>
+                      <button class="btn btn-primary" :disabled="charLib.uploadBusy || !charLib.upload.file
+                                                                 || !charLib.upload.emotion || !charLib.upload.shot || !charLib.upload.angle"
+                              @click="uploadCharLibImage()">
+                        <span x-show="!charLib.uploadBusy">📤 登録</span><span x-show="charLib.uploadBusy">登録中…</span>
+                      </button>
+                    </div>
+                  </div>
+
                   <!-- バリアント一括生成 -->
                   <div style="background:#0f172a;border-radius:8px;padding:14px;margin-bottom:16px">
                     <h3 style="font-size:13px;color:#e2e8f0;margin:0 0 4px">バリアント一括生成（未許可で登録）</h3>
@@ -4526,6 +4580,39 @@
           <div x-show="charLib.detail.measured?.edges">接している辺: <span x-text="charLibEdges(charLib.detail)"></span>
             <span style="color:#64748b">（接する辺は生成時に切れている＝縮小すると断面が出る）</span></div>
           <div x-show="!charLib.detail.measured">指紋: <span x-text="charLib.detail.fingerprint?.version || '—'"></span></div>
+        </div>
+
+        <!-- ファイルの場所（Photoshop等で直接編集したい時の入口。Docs/PANEL_LIBRARY_FILE_PATH_PLAN.md） -->
+        <div style="font-size:10px;color:#4b5563;line-height:1.8;border-top:1px solid #2d3748;padding-top:8px">
+          <div style="color:#64748b;margin-bottom:4px">ファイルの場所（クリックで全選択→コピー）</div>
+          <template x-if="charLib.detail.image_host_path || charLib.detail.cutout_host_path">
+            <div style="display:flex;flex-direction:column;gap:4px">
+              <div x-show="charLib.detail.image_host_path">
+                <span style="color:#64748b">🖼️ パネル:</span>
+                <div style="padding:4px 6px;background:#0f172a;border-radius:4px;font-family:monospace;
+                            color:#94a3b8;user-select:all;word-break:break-all;margin-top:2px"
+                     x-text="charLib.detail.image_host_path"></div>
+              </div>
+              <div x-show="charLib.detail.cutout_host_path">
+                <span style="color:#64748b">✂️ 切り抜き:</span>
+                <div style="padding:4px 6px;background:#0f172a;border-radius:4px;font-family:monospace;
+                            color:#94a3b8;user-select:all;word-break:break-all;margin-top:2px"
+                     x-text="charLib.detail.cutout_host_path"></div>
+              </div>
+            </div>
+          </template>
+          <div x-show="!charLib.detail.image_host_path && !charLib.detail.cutout_host_path">
+            ホスト側パスが未設定です（install.ps1 を実行した docker-compose 環境でのみ表示できます）
+          </div>
+          <div style="margin-top:6px;display:flex;align-items:center;gap:8px;flex-wrap:wrap">
+            <button class="btn btn-sm" x-show="charLib.detail.usable?.cutout"
+                    style="font-size:10px" :disabled="charLib.busy"
+                    @click="remeasureCharLibEntry(charLib.detail)"
+                    title="外部編集(Photoshop等)でファイルの中身が変わった時、指紋・マスク・実測ショットを今のファイルから測り直します（ラベルは変わりません）">
+              🔄 この画像を再計測
+            </button>
+            <span style="color:#64748b">外部で編集した後は、ここで再計測してから使ってください。</span>
+          </div>
         </div>
 
         <div style="font-size:10px;color:#4b5563;line-height:1.8;border-top:1px solid #2d3748;padding-top:8px">
@@ -5619,6 +5706,9 @@ function app() {
       // facing（向き）は2026-09-23新設。省略/空文字は"front"扱い（バックエンド側の既定）
       gen: { emotion: '', shot: '', angle: '', pose: '', facing: '', model: 'gemini-3.1-flash-lite-image' },
       variantGen: { emotion: '', shot: '', angle: '', poses: [], facings: [], model: 'gemini-3.1-flash-lite-image' },
+      // 📤 手元の画像を登録（Docs/PANEL_LIBRARY_UPLOAD_PLAN.md）。review_status="pending"で入る
+      upload: { emotion: '', shot: '', angle: '', pose: '', facing: '', file: null, note: '' },
+      uploadBusy: false,
       // 🎲 バッチ生成（旧🎬紙芝居のノリ。固定 or ランダムを軸ごとに選び panel_library/generate をN回呼ぶ）
       batchGen: { emotion: '', shot: '', angle: '', pose: '', facing: '', model: 'gemini-3.1-flash-lite-image' },
       batchRand: { emotion: false, shot: false, angle: false, pose: false, facing: false },
@@ -8075,6 +8165,33 @@ function app() {
         this.charLib.genBusy = false;
       }
     },
+    // 📤 手元の画像を登録。Docs/PANEL_LIBRARY_UPLOAD_PLAN.md。生成せず既存画像を取り込むだけ。
+    async uploadCharLibImage() {
+      if (this.charLib.uploadBusy || !this.charLib.charId || this.charLib.charId === '*') return;
+      const u = this.charLib.upload;
+      if (!u.file) { this.charLib.msg = '画像ファイルを選んでください'; return; }
+      if (!u.emotion || !u.shot || !u.angle) { this.charLib.msg = 'emotion・shot・angleを選んでください'; return; }
+      this.charLib.uploadBusy = true; this.charLib.msg = '';
+      try {
+        const fd = new FormData();
+        fd.append('file', u.file);
+        fd.append('emotion', u.emotion); fd.append('shot', u.shot); fd.append('angle', u.angle);
+        if (u.pose) fd.append('pose', u.pose);
+        if (u.facing) fd.append('facing', u.facing);
+        if (u.note) fd.append('note', u.note);
+        const r = await fetch(`${FAPI}/characters/${this.charLib.charId}/panel_library/upload`,
+                              { method: 'POST', body: fd });
+        if (!r.ok) { const e = await r.json().catch(() => ({})); this.charLib.msg = `登録失敗: ${e.detail || r.status}`; return; }
+        this.charLib.msg = '登録しました（未許可・「未許可」チップで確認してから許可してください）';
+        u.file = null;
+        if (this.$refs.charLibUploadFile) this.$refs.charLibUploadFile.value = '';
+        await this.loadCharLib();
+      } catch (e) {
+        this.charLib.msg = `登録失敗: ${e}`;
+      } finally {
+        this.charLib.uploadBusy = false;
+      }
+    },
     async generateCharLibVariants() {
       if (this.charLib.variantBusy || !this.charLib.charId || this.charLib.charId === '*') return;
       const g = this.charLib.variantGen;
@@ -9373,6 +9490,25 @@ function app() {
         this.charLib.msg = `「${e.slot_id}」の使用回数をリセットしました`;
       } catch (err) {
         this.charLib.msg = `リセットに失敗: ${err}`;
+      } finally { this.charLib.busy = false; }
+    },
+    // 外部編集（Photoshop等）後の再計測。Docs/PANEL_LIBRARY_FILE_PATH_PLAN.md。
+    // fingerprint/mask/measuredを今のファイルから測り直す。ラベルは変わらない。
+    async remeasureCharLibEntry(e) {
+      this.charLib.busy = true;
+      try {
+        const r = await fetch(
+          `${FAPI}/characters/${e.char_id || this.charLib.charId}/panel_library/${e.slot_id}/remeasure`,
+          { method: 'POST' });
+        if (!r.ok) { this.charLib.msg = (await r.json()).detail || '再計測に失敗しました'; return; }
+        const updated = await r.json();
+        if (this.charLib.detail && this.charLib.detail.slot_id === e.slot_id) {
+          Object.assign(this.charLib.detail, updated);
+        }
+        await this.loadCharLib();
+        this.charLib.msg = `「${e.slot_id}」を再計測しました`;
+      } catch (err) {
+        this.charLib.msg = `再計測に失敗: ${err}`;
       } finally { this.charLib.busy = false; }
     },
     // 一括＝生涯上限に達した分だけ（reblessCharLib()と同じ型: dry-run→件数を見せて確認→適用）。
