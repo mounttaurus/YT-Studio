@@ -203,6 +203,16 @@ def _pose_conflicts(want: str | None, have: str | None) -> bool:
     return bool(want and have and want != have)
 
 
+def effective_max_uses(o: dict, th: dict) -> int | None:
+    """そのslotに有効な生涯上限。overrideがあればそれ（Noneなら無制限）、無ければ既定値。
+
+    ⚠️ **上限の定義はここ1箇所だけ**。`candidates()`と
+    `panel_library_manager.reset_usage_all`の両方がこれを呼ぶ（Docs/USAGE_RESET_PLAN.md）。
+    2箇所にコピーすると「上限到達」の判定がズレる（facing軸で一度踏んだ轍と同じ）。
+    """
+    return o.get("max_uses", th["max_uses"])
+
+
 def candidates(char_id: str, emotion: str | None, ov: dict | None = None,
                extra_uses: dict[str, int] | None = None,
                allow_unknown_emotion: bool = False,
@@ -248,7 +258,7 @@ def candidates(char_id: str, emotion: str | None, ov: dict | None = None,
             continue
         if _pose_conflicts(pose, e.get("pose")):
             continue  # 分かっていて食い違う時だけ弾く（詳細は _pose_conflicts）
-        cap = o.get("max_uses", th["max_uses"])
+        cap = effective_max_uses(o, th)
         uses = e.get("times_used", 0) + extra_uses.get(_ref(char_id, e["slot_id"]), 0)
         if cap is not None and uses >= cap:
             continue  # 生涯上限。離れて出ても総回数が多いとワンパターンになる

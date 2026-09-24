@@ -506,6 +506,42 @@ async def rebless_panel_library(char_id: str, req: PanelLibraryReblessRequest):
     return panel_library_manager.rebless(char_id, dry_run=req.dry_run, note=req.note)
 
 
+class PanelLibraryResetUsageRequest(BaseModel):
+    dry_run: bool = True         # 既定は試算。実行は明示的に false を送らせる（reblessと同型）
+    scope: str = "exhausted"     # "exhausted"=生涯上限に達した分だけ／"all"=全件
+    note: str = ""
+
+
+@router.post("/characters/{char_id}/panel_library/reset_usage")
+async def reset_panel_library_usage_all(char_id: str, req: PanelLibraryResetUsageRequest):
+    """times_used（生涯累計使用回数）を一括で0に戻す（Docs/USAGE_RESET_PLAN.md）。
+
+    テストの繰り返し等で生涯上限(既定3)に達し自動選定から永久に除外された絵を救うための口。
+    既定は dry_run=true（件数の試算だけ）。UIは必ず確認を挟むこと。
+    """
+    if character_manager.read_character(char_id) is None:
+        raise HTTPException(status_code=404, detail=f"character not found: {char_id}")
+    try:
+        return panel_library_manager.reset_usage_all(
+            char_id, scope=req.scope, dry_run=req.dry_run, note=req.note)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+class PanelLibraryResetUsageOneRequest(BaseModel):
+    note: str = ""
+
+
+@router.post("/characters/{char_id}/panel_library/{slot_id}/reset_usage")
+async def reset_panel_library_usage(char_id: str, slot_id: str,
+                                    req: PanelLibraryResetUsageOneRequest = PanelLibraryResetUsageOneRequest()):
+    """1枚だけ times_used を0に戻す。used_by/review_status/facing等は触らない。"""
+    entry = panel_library_manager.reset_usage(char_id, slot_id, note=req.note)
+    if entry is None:
+        raise HTTPException(status_code=404, detail=f"panel library entry not found: {slot_id}")
+    return entry
+
+
 @router.post("/characters/{char_id}/panel_library/{slot_id}/approve")
 async def approve_panel_library_entry(char_id: str, slot_id: str):
     """pending状態のentryを承認する（以後Aロール生成から引かれるようになる）。"""

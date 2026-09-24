@@ -368,6 +368,86 @@ def release_usage(char_id: str, slot_id: str, *, project_id: str | None = None,
             return
 
 
+def reset_usage(char_id: str, slot_id: str, *, note: str = "") -> dict | None:
+    """times_used（生涯累計）だけを0に戻す。1枚だけの軽い操作（Docs/USAGE_RESET_PLAN.md）。
+
+    ⚠️ `used_by`・`review_status`・`facing`等の他フィールドは触らない。times_usedは
+    「生涯何回選ばれたか」、used_byは「今どの行が指しているか」で別物（[[aroll-library-reset-times-used-idea]]）。
+    一括版(reset_usage_all)と違い索引バックアップは取らない（1件だけの変更で、
+    旧値をnoteに残せば十分）。
+    """
+    data = load_index(char_id)
+    for e in data.get("entries", []):
+        if e.get("slot_id") != slot_id:
+            continue
+        prev = e.get("times_used", 0)
+        if prev == 0:
+            return {**e, "reset": False}
+        e["times_used"] = 0
+        e["usage_reset_at"] = _now()
+        e["note"] = (e.get("note") or "") + \
+            f"[{_now()}] 使用回数リセット: {prev}回→0回" + (f"（{note}）" if note else "")
+        save_index(char_id, data)
+        return {**e, "reset": True}
+    return None
+
+
+def reset_usage_all(char_id: str, *, scope: str = "exhausted",
+                    dry_run: bool = True, note: str = "") -> dict:
+    """times_usedを一括で0に戻す。scope="exhausted"=生涯上限に達した分だけ／"all"=全件。
+
+    `rebless()`と同じ型（Docs/USAGE_RESET_PLAN.md）: dry_run既定true→件数のみ返す。
+    false時は索引をバックアップし、`usage_reset_log`に記録してから適用する。
+    `used_by`等の他フィールドは触らない。
+
+    「上限到達」の定義は`cutout_selector.effective_max_uses`と共有する
+    （2箇所に書いて食い違わせない）。
+    """
+    from app.core import cutout_selector  # 循環import回避:
+    # cutout_selectorはモジュール読み込み時にpanel_library_managerをimportするため、
+    # こちらは関数内でだけ読む（トップレベルimportにすると循環importになる）。
+    if scope not in ("exhausted", "all"):
+        raise ValueError(f"scope に無い値です: {scope}（exhausted/all）")
+
+    idx = load_index(char_id)
+    entries = idx.get("entries", [])
+    if scope == "all":
+        targets = [e for e in entries if e.get("times_used", 0) > 0]
+    else:
+        ov = cutout_selector.load_overrides()["overrides"]
+        th = cutout_selector.thresholds()
+        targets = []
+        for e in entries:
+            if not usable_as(e)["cutout"]:
+                continue  # 上限は✂️切り抜き消費にのみ意味を持つ（🖼️パネル単体には無い）
+            o = ov.get(f"{char_id}/{e['slot_id']}") or {}
+            cap = cutout_selector.effective_max_uses(o, th)
+            if cap is not None and e.get("times_used", 0) >= cap:
+                targets.append(e)
+
+    result = {"char_id": char_id, "scope": scope, "count": len(targets),
+              "dry_run": dry_run, "backup": None}
+    if dry_run or not targets:
+        return result
+
+    src = index_file(char_id)
+    if src.exists():
+        stamp = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
+        backup = src.with_name(f"{src.name}.bak_{stamp}_reset前")
+        backup.write_text(src.read_text(encoding="utf-8"), encoding="utf-8")
+        result["backup"] = backup.name
+    slot_ids = [e["slot_id"] for e in targets]
+    for e in targets:
+        e["times_used"] = 0
+        e["usage_reset_at"] = _now()
+    idx.setdefault("usage_reset_log", []).append({
+        "at": _now(), "scope": scope, "count": len(targets), "note": note,
+        "slot_ids": slot_ids,
+    })
+    save_index(char_id, idx)
+    return result
+
+
 def approve_all(char_id: str, kind: str = "cutout") -> int:
     """指定 kind の pending をまとめて承認し、件数を返す。
 

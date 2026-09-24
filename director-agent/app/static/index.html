@@ -3748,6 +3748,11 @@
                         :disabled="charLib.busy" @click="reblessCharLib()"
                         title="「見た目は変わっていない」と宣言して、世代違いの在庫を現行世代へ付け替える（確認あり・バックアップあり）"
                         x-text="`🔁 世代違い ${charLibCounts.stale} 件を付け替える`"></button>
+                <button class="btn btn-sm" x-show="charLibCounts.exhausted"
+                        style="background:#7f1d1d;color:#fecaca"
+                        :disabled="charLib.busy" @click="resetExhaustedCharLibUsage()"
+                        title="生涯上限に達した在庫の使用回数を0に戻す（確認あり・バックアップあり。used_by・許可状態は変わりません）"
+                        x-text="`↺ 上限到達 ${charLibCounts.exhausted} 件をリセット`"></button>
               </div>
 
               <!-- 用途（背景付きのコマとして使えるか／合成素材として使えるか。両方満たす絵もある） -->
@@ -4450,8 +4455,14 @@
         </div>
 
         <div style="font-size:11px;color:#94a3b8;line-height:1.9">
-          <div><span style="color:#64748b">使用回数</span>:
-            <span x-text="`${charLib.detail.times_used || 0}${charLib.detail.usable?.cutout ? ' / ' + (cutoutThresholds.max_uses ?? 3) + '（切り抜きの生涯上限）' : ''}`"></span></div>
+          <div style="display:flex;align-items:center;gap:8px">
+            <span><span style="color:#64748b">使用回数</span>:
+              <span x-text="`${charLib.detail.times_used || 0}${charLib.detail.usable?.cutout ? ' / ' + (cutoutThresholds.max_uses ?? 3) + '（切り抜きの生涯上限）' : ''}`"></span></span>
+            <button class="btn btn-sm" x-show="charLib.detail.usable?.cutout && charLib.detail.times_used"
+                    style="font-size:9px;padding:1px 6px" :disabled="charLib.busy"
+                    @click="resetCharLibUsage(charLib.detail)"
+                    title="times_usedだけを0に戻します（used_by・許可状態・ラベルは変わりません）">↺ 回数リセット</button>
+          </div>
           <!-- T2 §4-3: 今どの行が直接指しているか（逆引き）。使用中は削除ボタンを無効化する -->
           <div x-show="(charLib.detail.used_by || []).length" style="color:#fbbf24">
             <span style="color:#64748b">使用中</span>:
@@ -9345,6 +9356,56 @@ function app() {
         await this.loadCharLib();
       } catch (e) {
         this.charLib.msg = `付け替えに失敗: ${e}`;
+      } finally { this.charLib.busy = false; }
+    },
+    // 使用回数(times_used)のリセット。Docs/USAGE_RESET_PLAN.md。
+    // 個別＝1枚だけ即時0に戻す（used_by・許可状態・ラベルは不変）。
+    async resetCharLibUsage(e) {
+      if (!confirm(`「${e.slot_id}」の使用回数(${e.times_used || 0}回)を0に戻します。よろしいですか？`)) return;
+      this.charLib.busy = true;
+      try {
+        const r = await fetch(
+          `${FAPI}/characters/${e.char_id || this.charLib.charId}/panel_library/${e.slot_id}/reset_usage`,
+          { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({}) });
+        if (!r.ok) { this.charLib.msg = 'リセットに失敗しました'; return; }
+        if (this.charLib.detail && this.charLib.detail.slot_id === e.slot_id) this.charLib.detail.times_used = 0;
+        await this.loadCharLib();
+        this.charLib.msg = `「${e.slot_id}」の使用回数をリセットしました`;
+      } catch (err) {
+        this.charLib.msg = `リセットに失敗: ${err}`;
+      } finally { this.charLib.busy = false; }
+    },
+    // 一括＝生涯上限に達した分だけ（reblessCharLib()と同じ型: dry-run→件数を見せて確認→適用）。
+    // scope="all"（全件）はAPIにはあるがUI導線は今回入れない（Docs/USAGE_RESET_PLAN.md §4 Q2）。
+    async resetExhaustedCharLibUsage() {
+      const ids = this.charLib.charId === '*'
+        ? this.charas.map(c => c.char_id) : [this.charLib.charId];
+      if (!ids.length) return;
+      const call = (id, body) => fetch(`${FAPI}/characters/${id}/panel_library/reset_usage`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body),
+      }).then(r => r.json());
+      this.charLib.busy = true;
+      this.charLib.msg = '';
+      try {
+        const dry = await Promise.all(ids.map(async id =>
+          ({ id, ...(await call(id, { dry_run: true, scope: 'exhausted' })) })));
+        const targets = dry.filter(d => (d.count || 0) > 0);
+        const total = targets.reduce((a, d) => a + d.count, 0);
+        if (!total) { this.charLib.msg = '生涯上限に達している在庫はありませんでした'; return; }
+        const detail = targets.map(d => `　・${this.charaName(d.id) || d.id}: ${d.count}件`).join('\n');
+        if (!confirm(
+          `生涯上限に達した在庫 ${total} 件の使用回数を0に戻します。\n${detail}\n\n`
+          + 'used_by（今どの行が使っているか）や許可状態・ラベルは変わりません。\n\n'
+          + '実行しますか？　索引はバックアップされます。')) return;
+        const rs = await Promise.all(targets.map(d => call(d.id, { dry_run: false, scope: 'exhausted' })));
+        const n = rs.reduce((a, r) => a + (r.count || 0), 0);
+        const baks = rs.map(r => r.backup).filter(Boolean);
+        this.charLib.msg = `${n} 件の使用回数をリセットしました`
+          + (baks.length ? `（バックアップ: ${baks.join(' / ')}）` : '');
+        await this.loadCharLib();
+      } catch (e) {
+        this.charLib.msg = `リセットに失敗: ${e}`;
       } finally { this.charLib.busy = false; }
     },
     async approveCharLibEntry(e) {
