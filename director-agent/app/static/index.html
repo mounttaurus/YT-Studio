@@ -5143,14 +5143,24 @@
             <div x-show="arollBgPickerFor === qaDetail.line_id"
                  style="background:#0f172a;border:1px solid #374151;border-radius:8px;padding:8px;max-height:240px;overflow-y:auto">
               <div style="font-size:10px;color:#94a3b8;margin-bottom:6px">背景アーカイブから選ぶ（クリックで即差替・無料）</div>
+              <div x-show="!arollBgPickerBusy && arollBgPickerItems.length"
+                   style="display:flex;gap:4px;flex-wrap:wrap;margin-bottom:6px">
+                <button class="btn btn-sm"
+                        :style="`font-size:9px;padding:2px 6px${arollBgPickerCat === 'all' ? ';background:#164e63;color:#a5f3fc' : ''}`"
+                        @click="arollSetBgPickerCat('all')" x-text="`すべて ${arollBgPickerItems.length}`"></button>
+                <template x-for="[id, n] in arollBgPickerCatFacet" :key="id">
+                  <button class="btn btn-sm"
+                          :style="`font-size:9px;padding:2px 6px${arollBgPickerCat === id ? ';background:#164e63;color:#a5f3fc' : ''}`"
+                          @click="arollSetBgPickerCat(id)" x-text="`${id} ${n}`"></button>
+                </template>
+              </div>
               <div x-show="arollBgPickerBusy" style="font-size:11px;color:#64748b">読み込み中…</div>
-              <div x-show="!arollBgPickerBusy && !arollBgPickerItems.length" style="font-size:11px;color:#64748b">該当する背景がありません</div>
+              <div x-show="!arollBgPickerBusy && !arollBgPickerFiltered.length" style="font-size:11px;color:#64748b">該当する背景がありません</div>
               <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:6px">
-                <template x-for="item in arollBgPickerItems" :key="item.bg_id">
+                <template x-for="item in arollBgPickerFiltered" :key="item.bg_id">
                   <div style="cursor:pointer" @click="arollSetBackground(arollPanelOf(qaDetail.line_id), item.bg_id)">
                     <img :src="arollBgImageUrl(item.bg_id)"
-                         style="width:100%;aspect-ratio:16/9;object-fit:cover;border-radius:4px"
-                         :style="item.bg_id === arollPanelOf(qaDetail.line_id).background_id ? 'outline:2px solid #7c3aed' : ''">
+                         :style="`width:100%;aspect-ratio:16/9;object-fit:cover;border-radius:4px${item.bg_id === arollPanelOf(qaDetail.line_id).background_id ? ';outline:2px solid #7c3aed' : ''}`">
                     <div style="font-size:9px;color:#64748b;text-align:center;overflow:hidden;text-overflow:ellipsis;white-space:nowrap"
                          x-text="item.bg_id"></div>
                   </div>
@@ -5853,6 +5863,7 @@ function app() {
     arollBgPickerFor: null,        // 背景ピッカーを開いている line_id
     arollBgPickerItems: [],
     arollBgPickerBusy: false,
+    arollBgPickerCat: 'all',       // 系統チップの選択状態（location/psych/comic等・データから作る）
     arollBgAssignBusy: false,
     arollMsg: '',
     arollWarnings: [],
@@ -10330,6 +10341,7 @@ function app() {
     async arollToggleBgPicker(p) {
       if (this.arollBgPickerFor === p.line_id) { this.arollBgPickerFor = null; return; }
       this.arollBgPickerFor = p.line_id;
+      this.arollBgPickerCat = 'all';
       this.arollBgPickerItems = [];
       this.arollBgPickerBusy = true;
       try {
@@ -10339,6 +10351,16 @@ function app() {
         this.arollBgPickerItems = d.backgrounds || [];
       } catch { this.arollBgPickerItems = []; }
       this.arollBgPickerBusy = false;
+    },
+    // 系統チップ。location/psych/comic以外も実在しうるためデータから作る（🏞️背景タブと同じ方針）
+    get arollBgPickerCatFacet() { return this.bgTally(this.arollBgPickerItems, b => b.category); },
+    get arollBgPickerFiltered() {
+      return this.arollBgPickerCat === 'all'
+        ? this.arollBgPickerItems
+        : this.arollBgPickerItems.filter(b => b.category === this.arollBgPickerCat);
+    },
+    arollSetBgPickerCat(cat) {
+      this.arollBgPickerCat = (this.arollBgPickerCat === cat && cat !== 'all') ? 'all' : cat;
     },
     async arollSetBackground(p, bgId) {
       this.arollLineBusy = p.line_id;
