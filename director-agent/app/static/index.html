@@ -3782,19 +3782,12 @@
                 <span style="font-size:12px;color:#86efac" x-text="`● 許可済み ${charLibCounts.approved}`"></span>
                 <span style="font-size:12px;color:#fde68a" x-show="charLibCounts.unapproved"
                       x-text="`● 未許可 ${charLibCounts.unapproved}`"></span>
-                <span style="font-size:12px;color:#fecaca" x-show="charLibCounts.stale"
-                      x-text="`● 世代違い ${charLibCounts.stale}`"></span>
                 <span style="font-size:11px;color:#4b5563;margin-left:auto"
                       x-text="`✂️生涯上限 ${cutoutThresholds.max_uses ?? 3}回 / 使い回し判定 距離 ${cutoutThresholds.repetitive_below ?? 0.073} 未満`"></span>
                 <button class="btn btn-primary btn-sm" x-show="charLibCounts.unapproved"
                         :disabled="charLib.busy" @click="approveAllCharLib()"
                         title="他の行にも使い回してよいと許可する（在庫登録自体は生成時に済んでいる）"
                         x-text="`✔ 未許可 ${charLibCounts.unapproved} 件に再利用を許可`"></button>
-                <button class="btn btn-sm" x-show="charLibCounts.stale"
-                        style="background:#7f1d1d;color:#fecaca"
-                        :disabled="charLib.busy" @click="reblessCharLib()"
-                        title="「見た目は変わっていない」と宣言して、世代違いの在庫を現行世代へ付け替える（確認あり・バックアップあり）"
-                        x-text="`🔁 世代違い ${charLibCounts.stale} 件を付け替える`"></button>
                 <button class="btn btn-sm" x-show="charLibCounts.exhausted"
                         style="background:#7f1d1d;color:#fecaca"
                         :disabled="charLib.busy" @click="resetExhaustedCharLibUsage()"
@@ -3829,9 +3822,6 @@
                 <button class="btn btn-sm" x-show="charLibCounts.exhausted"
                         :style="charLib.status === 'exhausted' ? 'background:#7f1d1d;color:#fecaca' : ''"
                         @click="charLibSetFilter('status', 'exhausted')" x-text="`✂️上限到達 ${charLibCounts.exhausted}`"></button>
-                <button class="btn btn-sm" x-show="charLibCounts.stale"
-                        :style="charLib.status === 'stale' ? 'background:#7f1d1d;color:#fecaca' : ''"
-                        @click="charLibSetFilter('status', 'stale')" x-text="`世代違い ${charLibCounts.stale}`"></button>
                 <button class="btn btn-sm" x-show="charLibCounts.needsReview"
                         :style="charLib.status === 'needs_review' ? 'background:#7f1d1d;color:#fecaca' : ''"
                         @click="charLibSetFilter('status', 'needs_review')" x-text="`⚠️向き要目視 ${charLibCounts.needsReview}`"></button>
@@ -3865,13 +3855,6 @@
                 サムネの地色に注意 ── <b>実背景色＝🖼️パネル</b>／<b>灰色地＝✂️切り抜きのみ</b>
                 （切り抜きは背景を持たないので、そのままでは合成できません）。
               </div>
-              <div x-show="charLibCounts.stale" style="font-size:11px;color:#fca5a5;margin-top:8px;line-height:1.7">
-                <b>世代違い</b>＝キャラの外見（appearance_prompt か reference画像）が、その在庫を作った時から
-                変わっている、という意味です。<b>参照画像を1枚足しただけでも全件が世代違いになります。</b>
-                外見を実際には変えていないなら「🔁 付け替える」で戻せます
-                ── これは<b>機械の判定ではなく人の宣言</b>なので、確認を挟みます。
-              </div>
-
               <!-- サムネイル一覧 -->
               <div x-show="charLib.busy" style="font-size:12px;color:#94a3b8;margin-top:10px">読み込み中…</div>
               <div x-show="!charLib.busy && !charLibFiltered.length" class="empty" style="padding:24px">該当する在庫がありません</div>
@@ -4496,8 +4479,6 @@
           <span class="status-badge"
                 :style="charLib.detail.review_status === 'pending' ? 'background:#78350f;color:#fde68a' : 'background:#166534;color:#bbf7d0'"
                 x-text="charLib.detail.review_status === 'pending' ? '未許可' : '許可済み'"></span>
-          <span class="status-badge" x-show="charLib.detail.is_stale"
-                style="background:#7f1d1d;color:#fecaca">世代違い</span>
           <button class="btn btn-sm" style="margin-left:auto" @click="charLib.detail = null">✕</button>
         </div>
 
@@ -9162,7 +9143,10 @@ function app() {
     },
     // ─── 📚 キャラ在庫タブ: 閲覧・整理（旧✂️切り抜き＋📚キャラ画像を統合。2026-08-28） ────
     // 選択のロジックは持たない（find_current・cutout_selectorが本籍・1事実1ホーム）。
-    // ここは在庫を見て再利用許可/削除/ラベル編集/世代付け替えをするだけ。
+    // ここは在庫を見て再利用許可/削除/ラベル編集/使用回数リセットをするだけ。
+    // ⚠️ 世代付け替え（rebless）のUIは2026-09-25に撤去した（appearance_versionを凍結方式へ
+    // 変更したため通常運用では出番が無い。バックエンドは安全弁として現役
+    // ＝Docs/CHARACTER_CONSISTENCY_PLAN.md §4 P6・POST /characters/{id}/panel_library/rebless）。
     //
     // 絞り込みは軸ごとに独立（🏞️背景タブと同じ方式）: 用途(usable) / 状態(status) / 感情 / ショット。
     // チップの件数は「他の軸を適用した集合」で数える＝押すと0件になるチップが出ない。
@@ -9176,7 +9160,6 @@ function app() {
           if (st === 'unused' && (e.times_used || 0)) return false;
           // 上限は✂️切り抜きとしての消費にのみ意味を持つ（find_current(🖼️パネル)に上限は無い）
           if (st === 'exhausted' && !(e.usable?.cutout && (e.times_used || 0) >= cap)) return false;
-          if (st === 'stale' && !e.is_stale) return false;
           if (st === 'needs_review' && !e.facing_needs_review) return false;
         }
         if (exclude !== 'emotion' && this.charLib.emotion !== 'all'
@@ -9234,7 +9217,6 @@ function app() {
         unapproved: it.filter(e => e.review_status === 'pending').length,
         unused: it.filter(e => !(e.times_used || 0)).length,
         exhausted: it.filter(e => e.usable?.cutout && (e.times_used || 0) >= cap).length,
-        stale: it.filter(e => e.is_stale).length,
         needsReview: it.filter(e => e.facing_needs_review).length,
         panelUsable: it.filter(e => e.usable?.panel).length,
         cutoutUsable: it.filter(e => e.usable?.cutout).length,
@@ -9347,7 +9329,6 @@ function app() {
       return (this.charas.find(c => c.char_id === charId) || {}).name || charId || '';
     },
     charLibBorder(e) {
-      if (e.is_stale) return '#7f1d1d';
       if (e.review_status === 'pending') return '#78350f';
       if (e.usable?.cutout && (e.times_used || 0) >= (this.cutoutThresholds.max_uses ?? 3)) return '#334155';
       return '#166534';
@@ -9443,53 +9424,6 @@ function app() {
         this.charLib.msg = `保存に失敗: ${err.message}`;
       } finally { this.charLib.busy = false; }
     },
-    // ⚠️ 世代の付け替え（rebless）＝「見た目は変わっていない」という**人の宣言**。
-    // appearance_version は appearance_prompt と reference/ の全バイトのハッシュなので、
-    // 参照画像を1枚足しただけでそのキャラの在庫が一斉に世代違いになる。機械には「参照を
-    // 足しただけ」と「デザインを変えた」の区別がつかないので、試算を見せてから人に宣言させる。
-    // 本籍 Docs/AROLL_ASSET_PLAN.md §12-1
-    async reblessCharLib() {
-      const ids = this.charLib.charId === '*'
-        ? this.charas.map(c => c.char_id) : [this.charLib.charId];
-      if (!ids.length) return;
-      const call = (id, body) => fetch(`${FAPI}/characters/${id}/panel_library/rebless`, {
-        method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(body),
-      }).then(r => r.json());
-      this.charLib.busy = true;
-      this.charLib.msg = '';
-      try {
-        // ① 試算（バックエンドの既定も dry_run=true）
-        const dry = await Promise.all(ids.map(async id => ({ id, ...(await call(id, { dry_run: true })) })));
-        const targets = dry.filter(d => (d.count || 0) > 0);
-        const total = targets.reduce((a, d) => a + d.count, 0);
-        if (!total) { this.charLib.msg = '世代違いの在庫はありませんでした'; return; }
-        const detail = targets.map(d => {
-          const kinds = Object.entries(d.by_kind || {}).map(([k, n]) => `${k} ${n}`).join(' / ');
-          return `　・${this.charaName(d.id) || d.id}: ${d.count}件（${kinds}）`;
-        }).join('\n');
-        // ② 人の宣言を取る（機械には区別できない判断なので、ここは必ず止める）
-        if (!confirm(
-          `世代違いの在庫 ${total} 件を「現在の外見」として付け替えます。\n${detail}\n\n`
-          + '⚠️ これは「見た目は変わっていない」という宣言です。\n'
-          + '　 参照画像を足しただけ・プロンプトの言い回しを直しただけ → OK\n'
-          + '　 実際にデザイン（髪型・服・色）を変えた → 実行しないでください\n'
-          + '　 （古い外見の絵が現行の在庫として配られてしまいます）\n\n'
-          + '実行しますか？　索引はバックアップされ、履歴(rebless_log)に残ります。')) return;
-        const note = prompt('付け替えの理由を残してください（後から追えるように）',
-                            '参照画像を追加しただけで外見は変えていない');
-        if (note === null) return;
-        // ③ 適用
-        const rs = await Promise.all(targets.map(d => call(d.id, { dry_run: false, note })));
-        const n = rs.reduce((a, r) => a + (r.count || 0), 0);
-        const baks = rs.map(r => r.backup).filter(Boolean);
-        this.charLib.msg = `${n} 件を現在の外見へ付け替えました`
-          + (baks.length ? `（バックアップ: ${baks.join(' / ')}）` : '');
-        await this.loadCharLib();
-      } catch (e) {
-        this.charLib.msg = `付け替えに失敗: ${e}`;
-      } finally { this.charLib.busy = false; }
-    },
     // 使用回数(times_used)のリセット。Docs/USAGE_RESET_PLAN.md。
     // 個別＝1枚だけ即時0に戻す（used_by・許可状態・ラベルは不変）。
     async resetCharLibUsage(e) {
@@ -9526,7 +9460,7 @@ function app() {
         this.charLib.msg = `再計測に失敗: ${err}`;
       } finally { this.charLib.busy = false; }
     },
-    // 一括＝生涯上限に達した分だけ（reblessCharLib()と同じ型: dry-run→件数を見せて確認→適用）。
+    // 一括＝生涯上限に達した分だけ（dry-run→件数を見せて確認→適用、という型はrebless APIと同じ）。
     // scope="all"（全件）はAPIにはあるがUI導線は今回入れない（Docs/USAGE_RESET_PLAN.md §4 Q2）。
     async resetExhaustedCharLibUsage() {
       const ids = this.charLib.charId === '*'
