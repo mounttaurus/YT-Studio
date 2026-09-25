@@ -646,8 +646,9 @@ async def delete_background(bg_id: str) -> dict:
 async def list_panel_library(char_id: str, emotion: str = "", shot: str = "", angle: str = "") -> dict:
     """キャラのライブラリ索引を検索する(AND条件)。各entryに is_stale(外見更新後の世代違いか)が付く。
 
-    is_stale=trueのentryは自動では使われない(aroll側のfind_currentが除外する)。生成し直すには
-    generate_panel_library_entry を replace_stale=true(既定)で呼ぶ。
+    2026-09-25〜: 世代は凍結済み(Docs/CHARACTER_CONSISTENCY_PLAN.md)。プロンプトや参照画像を
+    直しても appearance_version は変わらないため、is_stale=true は通常出ない
+    (出る場合は本物の世代違い=デザインを変えたキャラで、対処は rebless)。
     """
     params = {"emotion": emotion, "shot": shot, "angle": angle}
     return await dc.get(f"api/scrapping/characters/{char_id}/panel_library", params=params)
@@ -656,7 +657,7 @@ async def list_panel_library(char_id: str, emotion: str = "", shot: str = "", an
 async def generate_panel_library_entry(char_id: str, emotion: str, shot: str, angle: str,
                                         pose: str = "", facing: str = "",
                                         style: str = "kamishibai",
-                                        model: str = "", replace_stale: bool = True) -> dict:
+                                        model: str = "", replace_stale: bool = False) -> dict:
     """キャラのライブラリに1スロット生成・登録する(NanoBanana・外部API課金)。
 
     emotion/shot/angle/facing は list_panel_presets の id から選ぶ。facing省略時は"front"
@@ -664,7 +665,9 @@ async def generate_panel_library_entry(char_id: str, emotion: str, shot: str, an
     向きを混ぜない。旧 pose="facing_left"/"profile_left" 等はこのバージョンでは語彙に無い)。
     model省略時は既定(NANOBANANA_MODEL)。廉価版で量産したい時は
     "gemini-3.1-flash-lite-image" を明示指定する。
-    replace_stale=true(既定)は同じスロットの旧世代(外見更新前)entryを実体ごと置き換える。
+    replace_stale=false(★2026-09-25既定変更): 世代を凍結したため、同スロットの旧世代entryを
+    実体ごと削除するこの経路は通常不要(使用中の在庫まで消しうる不具合もあった)。
+    trueは世代混在を意図的に掃除したい特殊な時だけ使う。
     COST分類＝確認ゲート対象。
     """
     body = {"emotion": emotion, "shot": shot, "angle": angle, "pose": pose, "facing": facing,

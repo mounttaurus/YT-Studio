@@ -415,7 +415,7 @@ class PanelLibraryGenerateRequest(BaseModel):
     facing: str = ""            # 空なら"front"扱い（2026-09-23新設。panel_presets参照）
     style: str = "kamishibai"
     model: str = ""             # 空ならNANOBANANA_MODEL既定
-    replace_stale: bool = True  # 同スロットの旧世代entryを置き換える
+    replace_stale: bool = False  # 同スロットの旧世代entryを置き換える（2026-09-25既定変更・世代凍結）
 
 
 @router.post("/characters/{char_id}/panel_library/generate")
@@ -1691,14 +1691,15 @@ def _resolve_ref_file(char_id: str, name: str) -> Path:
 
 
 def _resolve_ref_files(char_id: str, reference: Optional[str] = None, limit: int = 3) -> list[Path]:
-    """参照画像を解決する。明示指定があればそれのみ、無ければreference/全画像（新しい順に最大limit枚）。"""
+    """参照画像を解決する。明示指定があればそれのみ、無ければreference/全画像（ファイル名順に最大limit枚）。
+
+    ★2026-09-25変更: 「更新日時が新しい順」→ファイル名順（panel_library_manager._resolve_refs と
+    同じ理由・Docs/CHARACTER_CONSISTENCY_PLAN.md §4 P2）。
+    """
     if reference:
         return [_resolve_ref_file(char_id, reference)]
     ref_dir = (character_manager.char_dir(char_id) / "reference").resolve()
-    return sorted(
-        (p for p in ref_dir.glob("*") if p.is_file()),
-        key=lambda p: p.stat().st_mtime, reverse=True,
-    )[:limit]
+    return [ref_dir / fn for fn in character_manager.reference_files(char_id)][:limit]
 
 
 def _resolve_labeled_refs(

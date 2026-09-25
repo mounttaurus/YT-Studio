@@ -16,10 +16,13 @@ slot_key照合ロジックと同じ枠組み）ごとに作り置きした画像
 （Docs/AROLL_ASSET_PLAN.md §6）。世代違いは黙って使わず「古い」ものとして除外する
 （find_currentはappearance_versionが一致する最新世代のみを返す）。
 
-★ハッシュ方式はブリーフ（AROLL_SLOT_REUSE_BRIEF.md §5）が示唆した「mtime」ではなく
-「appearance_prompt + reference/内ファイルのバイト内容」を使う。mtimeはファイルコピーや
-git checkoutで中身が同じでも変わってしまい、実質無変更なのにライブラリ全体が誤って
-「古い」判定されるおそれがあるため、内容ハッシュの方が安定する。
+★2026-09-25: 世代は「凍結」方式に変更した（Docs/CHARACTER_CONSISTENCY_PLAN.md §2・§4 P1）。
+appearance_prompt・reference/の内容ハッシュを**毎回計算するのをやめ**、library.json の
+トップレベルに一度だけ固定値として書き込む。以後どれだけプロンプトや参照画像を直しても
+在庫は世代違いにならない（実測: 精度を上げる調整のたびに在庫が全滅する誤検知が繰り返し
+起きていた。memory/outfit-reference-experiment.md）。衣装替えのような本当のデザイン変更は
+**キャラを分けて行う**（Voice版と同じ運用）ため、世代を機械が自動で上げる必要が無くなった。
+ハッシュ計算自体（_compute_appearance_hash）は初回固定時と互換フォールバックのために残す。
 """
 import hashlib
 import io
@@ -60,10 +63,11 @@ def index_file(char_id: str) -> Path:
     return library_dir(char_id) / "library.json"
 
 
-def appearance_version(char_id: str) -> str:
+def _compute_appearance_hash(char_id: str) -> str:
     """appearance_prompt + reference/内ファイルの内容ハッシュ（先頭12桁）。
 
-    キャラの外見が変わった瞬間にこの値も変わる＝ライブラリの世代判定キー。
+    ⚠️ **これ単体はもう世代判定に使わない**（下の appearance_version 参照）。
+    固定値が無いキャラの初回固定・後方互換フォールバックのためだけに残す。
     """
     c = character_manager.read_character(char_id) or {}
     h = hashlib.sha256()
@@ -75,6 +79,22 @@ def appearance_version(char_id: str) -> str:
                 h.update(p.name.encode("utf-8"))
                 h.update(p.read_bytes())
     return h.hexdigest()[:12]
+
+
+def appearance_version(char_id: str) -> str:
+    """キャラ外見の版（ライブラリの世代判定キー）。
+
+    2026-09-25〜: library.json のトップレベル `appearance_version` に**固定した値**を返す
+    （無ければ従来どおりハッシュを計算する＝未固定の新規キャラ・索引が無いキャラの後方互換）。
+    固定値はプロンプトや参照画像をいくら直しても変わらない ── `save_index()` が初回保存時に
+    1度だけ setdefault で書き込み、以後はそのまま。上げるのは「デザインを変えた」という
+    人の宣言（未実装・Docs/CHARACTER_CONSISTENCY_PLAN.md §4 P6で検討）だけ。
+    """
+    idx = load_index(char_id)
+    pinned = idx.get("appearance_version")
+    if pinned:
+        return pinned
+    return _compute_appearance_hash(char_id)
 
 
 def load_index(char_id: str) -> dict:
@@ -92,6 +112,9 @@ def load_index(char_id: str) -> dict:
 def save_index(char_id: str, data: dict) -> None:
     library_dir(char_id).mkdir(parents=True, exist_ok=True)
     images_dir(char_id).mkdir(parents=True, exist_ok=True)
+    # ★世代の固定（P1）: まだ固定値を持たない索引に、初回保存時だけ現在のハッシュを刻む。
+    # 以後このキャラの appearance_version はこの値のまま変わらない（上の docstring参照）。
+    data.setdefault("appearance_version", _compute_appearance_hash(char_id))
     data["updated_at"] = _now()
     index_file(char_id).write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
 
@@ -781,18 +804,23 @@ def adopt_ps_cutouts(char_id: str) -> dict:
 
 
 def _resolve_refs(char_id: str) -> list[tuple[bytes, str, str]]:
-    """aroll_manager._resolve_refsと同じ方式（単独キャラなので最大2枚）。"""
+    """参照画像を解決する（aroll_manager._resolve_refsと同じ方式・単独キャラなので最大3枚）。
+
+    ★2026-09-25変更（Docs/CHARACTER_CONSISTENCY_PLAN.md §4 P2）: 「更新日時が新しい順」を
+    やめ **`reference/` 内をファイル名順**にした。理由は2つ:
+    (1) 新しい2枚しか使わない旧方式だと、キャラシートを足しただけで一番古い顔アップが
+        押し出されて生成から消える（気づきにくい）。
+    (2) ファイル名順なら、命名（例 01_face.png / 02_sheet.png）で参照の並びを
+        意図的に制御できる。upload API は連番 upload_NNN を振るので、
+        先にアップロードした画像ほど先頭に来る。
+    上限は2→3枚（実測でキャラシート追加が有効だったため。§1参照）。
+    """
     c = character_manager.read_character(char_id)
     name = (c or {}).get("name") or char_id
     ref_dir = character_manager.char_dir(char_id) / "reference"
     refs: list[tuple[bytes, str, str]] = []
-    if not ref_dir.exists():
-        return refs
-    files = sorted(
-        (p for p in ref_dir.glob("*") if p.is_file()),
-        key=lambda p: p.stat().st_mtime, reverse=True,
-    )[:2]
-    for p in files:
+    for fn in character_manager.reference_files(char_id)[:3]:
+        p = ref_dir / fn
         label = f"{name}: keep this character consistent (same face, hairstyle, outfit)"
         refs.append((p.read_bytes(), nanobanana_client.mime_for(p.name), label))
     return refs
@@ -864,7 +892,7 @@ async def _generate_and_measure(
 
 async def generate_and_register(
     char_id: str, *, emotion: str, shot: str, angle: str, pose: str = "", facing: str = "",
-    style_name: str = "kamishibai", model: str = "", replace_stale: bool = True,
+    style_name: str = "kamishibai", model: str = "", replace_stale: bool = False,
     review_status: str = "approved",
 ) -> dict:
     """1スロット生成し、panel_library/images/へ保存・索引登録して返す。
@@ -879,8 +907,11 @@ async def generate_and_register(
     ``_generate_and_measure`` の docstring（実測で本番在庫の15%を捨てていた）。
     生成した絵は**必ず登録する**。近すぎる絵は人が見て削除する運用に変えた。
 
-    replace_stale=True（既定）: 同じ(emotion,shot,angle)を持つ旧世代（appearance_version不一致）
-    のentryがあれば実体ごと削除してから追加する（世代混在を索引に残さない）。
+    replace_stale=False（★2026-09-25既定変更。世代凍結＝Docs/CHARACTER_CONSISTENCY_PLAN.md §4 P1）:
+    世代を凍結した後は appearance_version はほぼ変化しないため、旧世代を実体ごと削除する
+    この経路はもう積極目的では使わない。⚠️ 旧実装は `used_by`（使用中）ガードを通さずに
+    削除しており、話数で使用中の在庫まで消えうる不具合があった。True指定は残すが、
+    呼ぶ側が「本当に世代混在を掃除したい」場面（rebless前の手動整理等）に限定すること。
 
     review_status="approved"（既定）: 1件だけ明示的に生成する通常の呼び出しは、呼び出した人が
     その場で結果を見て判断できるためそのまま承認済み扱いにする。generate_variants()経由の

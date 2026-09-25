@@ -1185,7 +1185,7 @@ def _compose_prompt(panel: dict, style_name: str) -> str:
 
 
 def _resolve_refs(characters: list[str], log: list[str] | None = None) -> list[tuple[bytes, str, str]]:
-    """キャラごとの参照画像を解決する（1人=最大2枚、2人=各1枚、合計3枚以内）。
+    """キャラごとの参照画像を解決する（1人=最大3枚、2人=各1枚、合計3枚以内）。
 
     ラベルにはキャラ名を入れてNanoBananaに役割を伝える。参照が無いキャラはスキップ
     （appearance_promptのみで生成）。
@@ -1196,18 +1196,20 @@ def _resolve_refs(characters: list[str], log: list[str] | None = None) -> list[t
     生成のたびに別人が出る ── 気づかずに進めるのが一番まずい。
     二重在庫の入口は「承認による在庫への取り込み」の側なので、そちらは
     ``approve_images`` が硬く拒否する（ユーザー判断 2026-08-29）。
+
+    ★2026-09-25変更（Docs/CHARACTER_CONSISTENCY_PLAN.md §4 P2）: 「更新日時が新しい順」を
+    やめ**ファイル名順**にした（`character_manager.reference_files()` が既に名前順を返すので、
+    ここでmtime再ソートしていたのを削除しただけ）。理由・上限2→3の経緯は
+    `panel_library_manager._resolve_refs` の docstring 参照。
     """
     chars = [c for c in characters if c][:2]
-    per_char = 2 if len(chars) <= 1 else 1
+    per_char = 3 if len(chars) <= 1 else 1
     refs: list[tuple[bytes, str, str]] = []
     for cid in chars:
         c = character_manager.read_character(cid)
         name = (c or {}).get("name") or cid
-        files = sorted(
-            (character_manager.char_dir(cid) / "reference" / fn
-             for fn in character_manager.reference_files(cid)),
-            key=lambda p: p.stat().st_mtime, reverse=True,
-        )[:per_char]
+        files = [character_manager.char_dir(cid) / "reference" / fn
+                 for fn in character_manager.reference_files(cid)][:per_char]
         if not files:
             if log is not None:
                 log.append(f"⚠️ {name}（{cid}）は参照画像が無いため一貫性が担保されません"
