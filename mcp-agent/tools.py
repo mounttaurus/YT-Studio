@@ -975,12 +975,11 @@ async def aroll_cuts(project_id: str, episode_number: int) -> dict:
     穴9: 1行=1コマだとTTSの都合で分割した台詞が画像まで割ってしまうので、
     連続する同じ話者の行を「カット」にまとめる。カットは保存せず毎回計算する。
 
-    規則: 話者/セクション交代で必ず切る。2行以上のランは**最終行が単独の「決め」**で、
-    その前の前振りだけを12秒以下でまとめる。
-    ⚠️ 尺だけで束ねると決め台詞が潰れる(実測で結合7組中5組が決め台詞)ので、
-    「N行まとめる」「N秒でまとめる」と単純化して説明しないこと。
+    規則(Docs/SUBLINE_PLAN.md §6-3・2026-09-26改訂): 話者/セクション交代で必ず切る。
+    1行(サブ行を含む)に1枚が基本。短すぎる行(推定3秒未満)は直前の行へ束ねる。
+    廃止: 決め台詞(最終行を単独にする規則)・前振りを12秒まで束ねる規則。
 
-    返り値の cuts[] は {cut_id, line_ids, role(solo/setup/kime), duration_sec, speaker_id}。
+    返り値の cuts[] は {cut_id, line_ids, role(solo/bundled), duration_sec, speaker_id}。
     duration_source が "estimated" ならTTS前の推定尺(文字数×係数)で境界を決めている。
     """
     return await dc.get(
@@ -989,22 +988,18 @@ async def aroll_cuts(project_id: str, episode_number: int) -> dict:
 
 async def aroll_set_cut(project_id: str, episode_number: int, line_id: str,
                         boundary: Optional[str] = None,
-                        role: Optional[str] = None,
                         reset: bool = False) -> dict:
-    """カットの境界・役を手で直す(可逆WRITE)。
+    """カットの境界を手で直す(可逆WRITE)。
 
     boundary: "start"=この行から新しいカット / "join"=前のカットへつなげる。
-    role: "kime"(決め) 等。
     reset: True でこの行の手直しを全部消して自動へ戻す。
-    ⚠️ **送らなかった項目は触らない**(決めにした行の境界を直しても決めは外れない)。
     ⚠️ **話者をまたぐ join は無視される**(1カットに2人の絵は入らない)。
+    ⚠️ role(決め台詞の付け替え)は廃止(Docs/SUBLINE_PLAN.md §6-3。決め台詞の規則自体が無い)。
     手直しは `aroll.json` の cut_overrides に保存され、**再計算しても壊れない**。
     """
     body: dict = {"reset": reset} if reset else {}
     if boundary is not None:
         body["boundary"] = boundary
-    if role is not None:
-        body["role"] = role
     return await dc.request(
         "PUT",
         f"api/scrapping/projects/{project_id}/episodes/{episode_number}/aroll/cuts/{line_id}",

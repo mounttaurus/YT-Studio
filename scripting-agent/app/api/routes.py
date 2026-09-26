@@ -4,7 +4,6 @@ REST API エンドポイント — WebUI および外部クライアント向け
 import io
 import json
 import os
-import re
 import shutil
 import tempfile
 import zipfile
@@ -18,7 +17,10 @@ from fastapi.responses import FileResponse, JSONResponse
 from pydantic import BaseModel
 from starlette.background import BackgroundTask
 
-from app.core import character_reader, llm_client, project_manager, script_generator, style_registry, translator
+from app.core import (
+    character_reader, llm_client, project_manager, script_generator, style_registry,
+    subline_manager, translator,
+)
 
 TTS_AGENT_URL = os.getenv("TTS_AGENT_URL", "http://tts-agent:8004")
 RESEARCH_AGENT_URL = os.getenv("RESEARCH_AGENT_URL", "http://research-agent:8001")
@@ -78,6 +80,15 @@ class LineInsertRequest(BaseModel):
 
 class LineMoveRequest(BaseModel):
     direction: str  # "up" | "down"
+
+
+class LineSplitRequest(BaseModel):
+    position: int  # 行の text をこの文字位置で前後に分ける（0 < position < len(text)）
+
+
+class SublineAddRequest(BaseModel):
+    text: str = ""
+    emotion: Optional[str] = None  # 省略時はグループ（アンカー行）の値を継承
 
 
 class NewProjectRequest(BaseModel):
@@ -1122,63 +1133,12 @@ def _save_script_docs(project_id: str, episode: int, draft, script) -> None:
         project_manager.save_script(project_id, script, episode)
 
 
-def _renumber_lines(doc: dict) -> None:
-    for i, l in enumerate(doc.get("lines", []), 1):
-        l["order"] = i
-    doc.setdefault("metadata", {})["line_count"] = len(doc.get("lines", []))
-
-
-def _remove_line_from_doc(doc: dict, line_id: str) -> bool:
-    """doc['lines'] からline_idを除去し、order振り直し＋sections同期する。除去できたかを返す。"""
-    before = len(doc.get("lines", []))
-    doc["lines"] = [l for l in doc.get("lines", []) if l.get("id") != line_id]
-    removed = len(doc["lines"]) < before
-    if removed:
-        _renumber_lines(doc)
-        for s in doc.get("sections") or []:
-            if s.get("line_ids"):
-                s["line_ids"] = [i for i in s["line_ids"] if i != line_id]
-    return removed
-
-
-def _move_line_in_doc(doc: dict, line_id: str, direction: str) -> Optional[str]:
-    """doc内でline_idを隣接行と入れ替える（同一section内のみ）。order・sections.line_idsも同期する。
-
-    成功時 None、失敗理由があればその文字列を返す（呼び出し側でHTTPExceptionに変換）。
-    """
-    lines = doc.get("lines", [])
-    idx = next((i for i, l in enumerate(lines) if l.get("id") == line_id), None)
-    if idx is None:
-        return None  # このdocにその行が無いだけ＝正常（draft/script間の差分は許容）
-    swap_idx = idx - 1 if direction == "up" else idx + 1
-    if swap_idx < 0 or swap_idx >= len(lines):
-        return "これ以上移動できません（先頭/末尾です）"
-    if lines[idx].get("section") != lines[swap_idx].get("section"):
-        return "セクションをまたぐ移動はできません"
-
-    lines[idx], lines[swap_idx] = lines[swap_idx], lines[idx]
-    _renumber_lines(doc)
-    for s in doc.get("sections") or []:
-        ids = s.get("line_ids") or []
-        if line_id in ids:
-            other_id = lines[idx]["id"] if lines[swap_idx]["id"] == line_id else lines[swap_idx]["id"]
-            i1, i2 = ids.index(line_id), ids.index(other_id) if other_id in ids else None
-            if i2 is not None:
-                ids[i1], ids[i2] = ids[i2], ids[i1]
-            break
-    return None
-
-
-def _next_line_id(*docs) -> str:
-    mx = 0
-    for doc in docs:
-        if not doc:
-            continue
-        for l in doc.get("lines", []):
-            m = re.match(r"line_(\d+)$", str(l.get("id", "")))
-            if m:
-                mx = max(mx, int(m.group(1)))
-    return f"line_{mx + 1:03d}"
+# 行配列の実体操作（renumber・削除・入れ替え・ID発番・サブ行のグループ規則）は
+# app.core.subline_manager に集約されている（S1・グループ規則(I2)をここで壊さないため）。
+_renumber_lines = subline_manager.renumber_lines
+_remove_line_from_doc = subline_manager.remove_line_from_doc
+_move_line_in_doc = subline_manager.move_line_in_doc
+_next_line_id = subline_manager.next_line_id
 
 
 @router.patch("/projects/{project_id}/script/line/{order}")
@@ -1210,10 +1170,8 @@ async def edit_line(
                 req.speaker_id,
             )
 
-    def apply(l: dict) -> None:
-        if req.speaker_id is not None:
-            l["speaker_id"] = req.speaker_id
-            l["speaker_name"] = new_speaker_name
+    def apply_own_fields(l: dict) -> None:
+        # emotion等はサブ行ごとに変えられる（§10）＝グループへは伝えず、この行だけに適用する
         if req.text is not None:
             l["text"] = req.text
         if req.emotion is not None:
@@ -1225,13 +1183,16 @@ async def edit_line(
         if req.notes is not None:
             l["notes"] = req.notes
 
-    apply(line)
-    # もう片方のファイルにも同じ id の行があれば同じ変更を適用
-    other = script if primary is draft else draft
-    if other is not None:
-        oline = next((l for l in other["lines"] if l.get("id") == line.get("id")), None)
-        if oline is not None:
-            apply(oline)
+    # 話者の変更はグループ全体に伝わる（サブ行だけ話者を変える操作は受け付けない・§5）
+    for doc in (draft, script):
+        if doc is None:
+            continue
+        dline = next((l for l in doc["lines"] if l.get("id") == line.get("id")), None)
+        if dline is None:
+            continue
+        if req.speaker_id is not None:
+            subline_manager.propagate_speaker_change(doc, dline["id"], req.speaker_id, new_speaker_name)
+        apply_own_fields(dline)
 
     _save_script_docs(project_id, episode, draft, script)
     return {"project_id": project_id, "episode_number": episode, "updated_line": line}
@@ -1313,36 +1274,16 @@ async def insert_line(
         "pause_after_sec": req.pause_after_sec,
         "section": ref.get("section", "main"),
         "notes": "",
+        "parent_line_id": None,  # 普通の行として挿入する（グループへの合流は行わない・I2）
     }
 
-    def insert_into(doc: dict) -> None:
-        dl = doc.setdefault("lines", [])
-        if anchor is None:
-            pos = 0
-        else:
-            idx = next((i for i, l in enumerate(dl) if l.get("id") == anchor.get("id")), None)
-            pos = (idx + 1) if idx is not None else len(dl)
-        dl.insert(pos, dict(new_line))
-        _renumber_lines(doc)
-        # sections の line_ids にも追加（anchorと同じセクションの直後）
-        placed = False
-        for s in doc.get("sections") or []:
-            ids = s.get("line_ids") or []
-            if anchor is not None and anchor.get("id") in ids:
-                ids.insert(ids.index(anchor["id"]) + 1, new_id)
-                placed = True
-                break
-        secs = doc.get("sections") or []
-        if not placed and secs:
-            if anchor is None:
-                secs[0].setdefault("line_ids", []).insert(0, new_id)
-            else:
-                secs[-1].setdefault("line_ids", []).append(new_id)
-
+    anchor_id = anchor.get("id") if anchor is not None else None
+    # 挿入位置が既存のサブ行グループの内部だった場合、そこでグループを2つに割る
+    # （I2・subline_manager.insert_line_after が renumber・sections同期と一括して行う）
     if draft is not None:
-        insert_into(draft)
+        subline_manager.insert_line_after(draft, anchor_id, new_line)
     if script is not None:
-        insert_into(script)
+        subline_manager.insert_line_after(script, anchor_id, new_line)
     _save_script_docs(project_id, episode, draft, script)
 
     saved = next((l for l in primary["lines"] if l.get("id") == new_id), new_line)
@@ -1389,6 +1330,179 @@ async def delete_line(
                 project_manager.save_locale_script(project_id, episode, lang, loc_script)
 
     return {"project_id": project_id, "episode_number": episode, "deleted_line_id": line_id}
+
+
+# ─── サブ行（Docs/SUBLINE_PLAN.md §5・§9・S1） ─────────────────────────
+#
+# 分ける・結合・追加・自動区切りは、既存の行CRUDと同じくドラフト・確定版script.json
+# 両方へ即時反映する。グループの規則（I2）は app.core.subline_manager に集約されている。
+# 絵・音声・在庫の後始末（tts-agent/scrapping-agent側）はS2の範囲外＝呼び出し側の責務。
+
+def _resolve_line_id(primary: dict, order: int) -> str:
+    line = next((l for l in primary["lines"] if l["order"] == order), None)
+    if line is None:
+        raise HTTPException(status_code=404, detail=f"order={order} の行が見つかりません")
+    return line["id"]
+
+
+@router.post("/projects/{project_id}/script/line/{order}/split")
+async def split_line(
+    project_id: str,
+    order: int,
+    req: LineSplitRequest,
+    episode: int = Query(1),
+):
+    """行を文字位置で前後に分ける（§5「分ける」）。前半は元のID、後半は新しいサブ行。"""
+    primary, draft, script = _load_script_docs(project_id, episode)
+    if primary is None:
+        raise HTTPException(status_code=404, detail=f"第{episode}話の台本が見つかりません")
+    line_id = _resolve_line_id(primary, order)
+    docs = [d for d in (draft, script) if d is not None]
+
+    try:
+        result = subline_manager.split_line(docs, line_id, req.position)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+    _save_script_docs(project_id, episode, draft, script)
+    primary2, _, _ = _load_script_docs(project_id, episode)
+    lines_by_id = {l["id"]: l for l in primary2["lines"]}
+    return {
+        "project_id": project_id, "episode_number": episode,
+        "front_line": lines_by_id.get(result["front_line_id"]),
+        "back_line": lines_by_id.get(result["back_line_id"]),
+        "parent_line_id": result["parent_line_id"],
+    }
+
+
+@router.post("/projects/{project_id}/script/line/{order}/merge-next")
+async def merge_line_with_next(
+    project_id: str,
+    order: int,
+    episode: int = Query(1),
+):
+    """行Xと次の行の本文をつなぐ（§5「結合」）。残るのはXのID・次の行は削除扱い。"""
+    primary, draft, script = _load_script_docs(project_id, episode)
+    if primary is None:
+        raise HTTPException(status_code=404, detail=f"第{episode}話の台本が見つかりません")
+    first_id = _resolve_line_id(primary, order)
+    lines = primary["lines"]
+    idx = next(i for i, l in enumerate(lines) if l["id"] == first_id)
+    if idx + 1 >= len(lines):
+        raise HTTPException(status_code=400, detail="次の行がありません（末尾です）")
+    second_id = lines[idx + 1]["id"]
+    docs = [d for d in (draft, script) if d is not None]
+
+    try:
+        result = subline_manager.merge_lines(docs, first_id, second_id)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+    _save_script_docs(project_id, episode, draft, script)
+    primary2, _, _ = _load_script_docs(project_id, episode)
+    merged = next((l for l in primary2["lines"] if l["id"] == result["merged_line_id"]), None)
+    return {"project_id": project_id, "episode_number": episode,
+            "merged_line": merged, "removed_line_id": result["removed_line_id"]}
+
+
+@router.post("/projects/{project_id}/script/line/{order}/add-subline")
+async def add_subline_after(
+    project_id: str,
+    order: int,
+    req: SublineAddRequest,
+    episode: int = Query(1),
+):
+    """行の直後に、同じグループの新しいサブ行を追加する（§5「追加」）。話者・セクションは引き継ぐ。"""
+    primary, draft, script = _load_script_docs(project_id, episode)
+    if primary is None:
+        raise HTTPException(status_code=404, detail=f"第{episode}話の台本が見つかりません")
+    anchor_id = _resolve_line_id(primary, order)
+    docs = [d for d in (draft, script) if d is not None]
+
+    try:
+        result = subline_manager.add_subline(docs, anchor_id, req.text, req.emotion)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+    _save_script_docs(project_id, episode, draft, script)
+    primary2, _, _ = _load_script_docs(project_id, episode)
+    new_line = next((l for l in primary2["lines"] if l["id"] == result["new_line_id"]), None)
+    return {"project_id": project_id, "episode_number": episode,
+            "new_line": new_line, "parent_line_id": result["parent_line_id"]}
+
+
+@router.get("/projects/{project_id}/script/line/{order}/split-proposal")
+async def get_split_proposal(
+    project_id: str,
+    order: int,
+    episode: int = Query(1),
+    limit: int = Query(subline_manager.DEFAULT_SPLIT_LIMIT),
+):
+    """自動区切りの提案（§9）。適用はしない・純粋な検査。"""
+    primary, _, _ = _load_script_docs(project_id, episode)
+    if primary is None:
+        raise HTTPException(status_code=404, detail=f"第{episode}話の台本が見つかりません")
+    line_id = _resolve_line_id(primary, order)
+    line = next(l for l in primary["lines"] if l["id"] == line_id)
+    pieces = subline_manager.propose_splits(line.get("text", ""), limit)
+    return {"project_id": project_id, "episode_number": episode, "line_id": line_id,
+            "limit": limit, "pieces": pieces}
+
+
+@router.post("/projects/{project_id}/script/line/{order}/split-apply")
+async def apply_split_proposal(
+    project_id: str,
+    order: int,
+    episode: int = Query(1),
+    limit: int = Query(subline_manager.DEFAULT_SPLIT_LIMIT),
+):
+    """自動区切りの提案を適用する（§9-3「ボタンで適用する」・行ごと）。"""
+    primary, draft, script = _load_script_docs(project_id, episode)
+    if primary is None:
+        raise HTTPException(status_code=404, detail=f"第{episode}話の台本が見つかりません")
+    line_id = _resolve_line_id(primary, order)
+    docs = [d for d in (draft, script) if d is not None]
+
+    try:
+        result = subline_manager.apply_auto_split(docs, line_id, limit)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+    _save_script_docs(project_id, episode, draft, script)
+    primary2, _, _ = _load_script_docs(project_id, episode)
+    lines_by_id = {l["id"]: l for l in primary2["lines"]}
+    return {
+        "project_id": project_id, "episode_number": episode,
+        "line_id": line_id, "parent_line_id": result["parent_line_id"],
+        "new_lines": [lines_by_id.get(lid) for lid in result["new_line_ids"]],
+    }
+
+
+@router.post("/projects/{project_id}/episodes/{episode_number}/split-apply-all")
+async def apply_split_proposal_all(
+    project_id: str,
+    episode_number: int,
+    limit: int = Query(subline_manager.DEFAULT_SPLIT_LIMIT),
+):
+    """話数全体で、上限を超える行すべてに自動区切りを適用する（§9-3「話数全体」）。"""
+    primary, draft, script = _load_script_docs(project_id, episode_number)
+    if primary is None:
+        raise HTTPException(status_code=404, detail=f"第{episode_number}話の台本が見つかりません")
+    docs = [d for d in (draft, script) if d is not None]
+    # 対象は最初に読んだ時点の行一覧で固定する（適用のたびに行が増えるため、その場のlen()判定に頼らない）
+    target_ids = [l["id"] for l in primary["lines"] if len(l.get("text", "")) > limit]
+
+    applied, skipped = [], []
+    for line_id in target_ids:
+        try:
+            result = subline_manager.apply_auto_split(docs, line_id, limit)
+            applied.append(result)
+        except ValueError as e:
+            skipped.append({"line_id": line_id, "reason": str(e)})
+
+    _save_script_docs(project_id, episode_number, draft, script)
+    return {"project_id": project_id, "episode_number": episode_number,
+            "applied": applied, "skipped": skipped}
 
 
 # ─── 名前付きドラフト ────────────────────────────────────────────────

@@ -920,14 +920,34 @@
 
         <!-- 台本プレビュー -->
         <div class="card" x-show="draft">
-          <h2>台本プレビュー <span style="font-weight:400;text-transform:none;color:#4b5563;font-size:11px">（行をクリックで編集）</span></h2>
+          <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;flex-wrap:wrap;gap:8px">
+            <h2 style="margin-bottom:0">台本プレビュー <span style="font-weight:400;text-transform:none;color:#4b5563;font-size:11px">（行をクリックで編集）</span></h2>
+            <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">
+              <label style="display:flex;align-items:center;gap:4px;font-size:11px;color:#94a3b8;cursor:pointer">
+                <input type="checkbox" x-model="onlyLongLines"> 長い行だけ表示
+              </label>
+              <button class="btn btn-ghost btn-sm" :disabled="autoSplittingAll || !overLimitLineCount()"
+                      @click="autoSplitWholeEpisode()"
+                      :title="`上限(${autoSplitLimit}字)を超える行をまとめて自動区切りします（読点の無い行はスキップされます）`">
+                <span x-text="autoSplittingAll ? '区切り中...' : `✂ 話数全体を自動区切り (${overLimitLineCount()})`"></span>
+              </button>
+              <button class="btn btn-ghost btn-sm" x-show="undoSnapshot" :disabled="undoing" @click="undoLastChange()"
+                      title="直前の1回の行操作（編集・分割・結合・サブ行追加・自動区切り）を取り消します">
+                <span x-text="undoing ? '元に戻しています...' : '↺ 元に戻す'"></span>
+              </button>
+            </div>
+          </div>
           <div class="script-lines">
-            <template x-if="!draft?.lines?.length">
-              <div class="empty">台本がありません</div>
+            <template x-if="!visibleLines().length">
+              <div class="empty" x-text="onlyLongLines ? '上限を超えている行はありません' : '台本がありません'"></div>
             </template>
-            <template x-for="line in draft?.lines || []" :key="line.id">
-              <div class="script-line" :class="{ editing: editingLineOrder === line.order }" @click="toggleEdit(line)">
-                <div class="line-num" x-text="line.order"></div>
+            <template x-for="line in visibleLines()" :key="line.id">
+              <div class="script-line" :class="{ editing: editingLineOrder === line.order }"
+                   :style="isSublineOf(line) ? 'margin-left:22px;border-left:2px solid #4c1d95' : ''"
+                   @click="toggleEdit(line)">
+                <div class="line-num">
+                  <span x-show="isSublineOf(line)" style="color:#a78bfa" title="サブ行">↳</span><span x-text="line.order"></span>
+                </div>
                 <div>
                   <span class="line-speaker" :class="speakerClass(line.speaker_id)" x-text="line.speaker_name"></span>
                   <div class="section-badge" x-text="line.section" style="margin-top:4px"></div>
@@ -937,6 +957,34 @@
                   <template x-if="editingLineOrder !== line.order">
                     <div>
                       <div class="line-text" x-text="line.text"></div>
+                      <div style="display:flex;gap:8px;align-items:center;margin-top:2px;flex-wrap:wrap">
+                        <span style="font-size:9px" :style="lineDurationSec(line) > 12 ? 'color:#f59e0b' : 'color:#4b5563'"
+                              :title="lineDurationSec(line) > 12 ? '推定12秒超（サブ行に分けると1枚あたりの尺が短くなります）' : '推定尺（文字数からの概算）'"
+                              x-text="`〜${lineDurationSec(line)}秒`"></span>
+                        <span x-show="sublineCountFor(line) > 0" style="font-size:9px;color:#a78bfa"
+                              x-text="`サブ行 ${sublineCountFor(line)}件`"></span>
+                        <span x-show="line.split_review" style="font-size:9px;color:#f59e0b"
+                              title="読点の位置で自動区切りされました。内容を確認してください">⚠ 要確認（自動区切り）</span>
+                        <button x-show="isOverSplitLimit(line)" class="btn btn-ghost btn-sm"
+                                style="padding:1px 8px;font-size:9px;color:#f59e0b"
+                                @click.stop="previewAutoSplit(line.order)"
+                                :title="`上限(${autoSplitLimit}字)を超えています。自動区切りの候補を見る`">✂ 自動区切りの候補</button>
+                      </div>
+                      <div x-show="splitProposalFor && splitProposalFor.order === line.order"
+                           style="margin-top:6px;padding:8px;background:#160d2e;border:1px solid #6d28d9;border-radius:6px" @click.stop>
+                        <div style="font-size:10px;color:#c4b5fd;margin-bottom:4px"
+                             x-text="`自動区切りの候補（${splitProposalFor?.pieces?.length || 0}片）`"></div>
+                        <template x-for="(piece, pieceIdx) in splitProposalFor?.pieces || []" :key="pieceIdx">
+                          <div style="font-size:12px;color:#e2e8f0;padding:3px 0;border-top:1px solid #2d3748">
+                            <span x-text="piece.text"></span>
+                            <span x-show="piece.split_review" style="color:#f59e0b;font-size:9px;margin-left:4px">⚠読点で区切り・要確認</span>
+                          </div>
+                        </template>
+                        <div style="display:flex;gap:6px;margin-top:6px">
+                          <button class="btn btn-primary btn-sm" @click="applyAutoSplit(line.order)">この提案で区切る</button>
+                          <button class="btn btn-ghost btn-sm" @click="closeSplitProposal()">閉じる</button>
+                        </div>
+                      </div>
                       <div x-show="missingLocalesForLine(line).length" style="display:flex;gap:4px;flex-wrap:wrap;margin-top:4px" @click.stop>
                         <template x-for="lang in missingLocalesForLine(line)" :key="lang">
                           <button class="btn btn-ghost btn-sm" style="padding:1px 8px;font-size:10px;color:#a78bfa"
@@ -950,7 +998,9 @@
                   </template>
                   <template x-if="editingLineOrder === line.order">
                     <div style="display:flex;flex-direction:column;gap:6px" @click.stop>
-                      <textarea class="line-text-edit" x-model="editBuffer.text"></textarea>
+                      <textarea class="line-text-edit" x-ref="editTextarea" x-model="editBuffer.text"
+                                title="Ctrl+Enterでカーソル位置から分ける"
+                                @keydown.ctrl.enter="$event.preventDefault(); splitLineAtCursor(line.order)"></textarea>
                       <div style="display:flex;gap:6px;flex-wrap:wrap">
                         <div class="form-group" style="flex:1">
                           <label>感情</label>
@@ -969,9 +1019,18 @@
                           <input type="text" x-model="editBuffer.pause_after_sec" style="padding:4px 8px;font-size:12px">
                         </div>
                       </div>
-                      <div style="display:flex;gap:6px">
+                      <div style="display:flex;gap:6px;flex-wrap:wrap">
                         <button class="btn btn-primary btn-sm" @click.stop="saveLine(line.order)">保存</button>
                         <button class="btn btn-ghost btn-sm" @click.stop="cancelEdit()">キャンセル</button>
+                        <button class="btn btn-ghost btn-sm" style="color:#a78bfa"
+                                title="テキストエリア内でカーソルを置いた位置から後ろをサブ行として分けます（近くの句読点へ吸着／Ctrl+Enterでも同じ操作）"
+                                @click.stop="splitLineAtCursor(line.order)">✂ この位置で分ける</button>
+                        <button class="btn btn-ghost btn-sm" style="color:#a78bfa"
+                                title="次の行のセリフをこの行へつなげます（次の行は削除扱い・音声は要作り直し）"
+                                @click.stop="mergeLineWithNext(line.order)">🔗 次の行と結合</button>
+                        <button class="btn btn-ghost btn-sm" style="color:#a78bfa"
+                                title="同じグループの新しいサブ行をこの行の直後に追加します"
+                                @click.stop="addSubline(line.order)">＋ サブ行追加</button>
                       </div>
                     </div>
                   </template>
@@ -1420,6 +1479,14 @@ function app() {
     feedbackText: '',
     editingLineOrder: null,
     editBuffer: {},
+    // 行操作のUndo（直前の1回のみ・import機構を再利用して復元する。director-agentと同じ仕組み）
+    undoSnapshot: null,
+    undoing: false,
+    // 自動区切り（SUBLINE_PLAN §9・S5）。上限はsubline_manager.DEFAULT_SPLIT_LIMITと一致させる
+    autoSplitLimit: 55,
+    splitProposalFor: null,
+    autoSplittingAll: false,
+    onlyLongLines: false,
     modelFilter: '',
     showPendingProviders: false,
     refreshingModels: false,
@@ -2699,6 +2766,7 @@ function app() {
     async saveLine(order) {
       if (!this.currentProject) return;
       const ep = this.activeEpisodeNumber || 1;
+      this.captureUndoSnapshot();
       const r = await fetch(`/projects/${this.currentProject.id}/script/line/${order}?episode=${ep}`, {
         method: 'PATCH',
         headers: { 'Content-Type': 'application/json' },
@@ -2710,11 +2778,219 @@ function app() {
         }),
       });
       const data = await r.json();
-      if (!r.ok) { alert('保存エラー: ' + (data.detail || JSON.stringify(data))); return; }
+      if (!r.ok) { alert('保存エラー: ' + (data.detail || JSON.stringify(data))); this.undoSnapshot = null; return; }
       // ローカルのドラフトも更新
       const line = this.draft.lines.find(l => l.order === order);
       if (line) Object.assign(line, data.updated_line);
       this.cancelEdit();
+    },
+
+    // ─── Undo（直前の1回のみ・director-agentと同じ仕組み）───────────────
+    // 台本を変更する操作の直前に、その時点のdraft全体をスナップショットしておく。
+    // 元に戻す時はimport（既存の外部台本取込み機構）へそのまま投げ直すだけで良い
+    // ＝Undo専用のバックエンドを新設していない。
+    captureUndoSnapshot() {
+      this.undoSnapshot = this.draft ? JSON.parse(JSON.stringify(this.draft)) : null;
+    },
+
+    async undoLastChange() {
+      if (!this.undoSnapshot || !this.currentProject) return;
+      this.undoing = true;
+      const ep = this.activeEpisodeNumber || 1;
+      try {
+        const wasConfirmed = !!this.episodes.find(e => e.number === ep)?.has_script;
+        const body = { script: this.undoSnapshot, confirm: wasConfirmed };
+        const url = `/projects/${this.currentProject.id}/episodes/${ep}/import`
+          + (wasConfirmed ? '?force=true' : '');
+        const r = await fetch(url, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(body),
+        });
+        const data = await r.json().catch(() => ({}));
+        if (!r.ok) { alert('元に戻せませんでした: ' + (data.detail || r.status)); return; }
+        this.undoSnapshot = null;
+        this.cancelEdit();
+        await this.loadEpisode(ep);
+        await this.loadEpisodes();
+      } finally {
+        this.undoing = false;
+      }
+    },
+
+    // ─── サブ行（Docs/SUBLINE_PLAN.md §5・§10・S5） ─────────────────
+    // サブ行は「親を示す parent_line_id を持つ普通の行」（I1）。グループの先頭行は
+    // parent_line_id === 自分のid（I4）。表示専用のヘルパーはここにまとめる。
+    isSublineOf(line) {
+      return !!(line.parent_line_id && line.parent_line_id !== line.id);
+    },
+
+    sublineCountFor(line) {
+      if (!line.parent_line_id || line.parent_line_id !== line.id) return 0;
+      return (this.draft?.lines || []).filter(l => l.parent_line_id === line.id && l.id !== line.id).length;
+    },
+
+    // 推定尺（秒≈0.8+0.2×字。SUBLINE_PLAN §0-2の実測式。TTS前の目安であって正本はtts.json）
+    lineDurationSec(line) {
+      return Math.round((0.8 + 0.2 * (line.text || '').length) * 10) / 10;
+    },
+
+    // カーソル位置を近くの句読点（。！？、）へ吸着する（§10「近くの句読点へ吸着」）。
+    // 見つからなければ元の位置のまま warn:true を返し、呼び出し側が確認を挟む
+    snapToPunctuation(text, pos) {
+      const PUNCT = '。！？、';
+      const isBoundary = (i) => i > 0 && i < text.length && PUNCT.includes(text[i - 1]);
+      if (isBoundary(pos)) return { pos, warn: false };
+      const WINDOW = 6;
+      for (let d = 1; d <= WINDOW; d++) {
+        if (isBoundary(pos + d)) return { pos: pos + d, warn: false };
+        if (isBoundary(pos - d)) return { pos: pos - d, warn: false };
+      }
+      return { pos, warn: true };
+    },
+
+    async splitLineAtCursor(order) {
+      if (!this.currentProject) return;
+      const line = this.draft?.lines?.find(l => l.order === order);
+      if (!line) return;
+      const ta = this.$refs.editTextarea;
+      let pos = ta ? ta.selectionStart : null;
+      const text = this.editBuffer.text || '';
+      if (pos == null || pos <= 0 || pos >= text.length) {
+        alert('分ける位置にテキストエリア内でカーソルを置いてから押してください（先頭・末尾では分けられません）');
+        return;
+      }
+      const snapped = this.snapToPunctuation(text, pos);
+      if (snapped.warn) {
+        const around = `…${text.slice(Math.max(0, pos - 6), pos)}｜${text.slice(pos, pos + 6)}…`;
+        if (!confirm(`近くに句読点がありません（${around}）。この位置で分けますか？`)) return;
+      }
+      pos = snapped.pos;
+      // 未保存の編集があれば先に確定する（分割位置はサーバー側の現在の文字数を基準にする）
+      if (text !== line.text) {
+        await this.saveLine(order);
+        if (this.editingLineOrder === order) return;   // saveLineが失敗（編集モードのまま）
+      }
+      const ep = this.activeEpisodeNumber || 1;
+      this.captureUndoSnapshot();
+      const r = await fetch(`/projects/${this.currentProject.id}/script/line/${order}/split?episode=${ep}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ position: pos }),
+      });
+      const data = await r.json().catch(() => ({}));
+      if (!r.ok) { alert('分割エラー: ' + (data.detail || r.status)); this.undoSnapshot = null; return; }
+      this.cancelEdit();
+      await this.loadEpisode(ep);
+      await this.loadEpisodes();
+    },
+
+    async mergeLineWithNext(order) {
+      if (!this.currentProject) return;
+      const lines = this.draft?.lines || [];
+      const idx = lines.findIndex(l => l.order === order);
+      const next = idx >= 0 ? lines[idx + 1] : null;
+      if (!next) { alert('次の行がありません（末尾です）'); return; }
+      const a = (lines[idx].text || '').slice(0, 16);
+      const b = (next.text || '').slice(0, 16);
+      if (!confirm(`この行と次の行のセリフをつなげます:\n「${a}…」+「${b}…」\n（音声が生成済みなら要作り直しです。元に戻せます）`)) return;
+      const ep = this.activeEpisodeNumber || 1;
+      this.captureUndoSnapshot();
+      const r = await fetch(`/projects/${this.currentProject.id}/script/line/${order}/merge-next?episode=${ep}`, {
+        method: 'POST',
+      });
+      const data = await r.json().catch(() => ({}));
+      if (!r.ok) { alert('結合エラー: ' + (data.detail || r.status)); this.undoSnapshot = null; return; }
+      this.cancelEdit();
+      await this.loadEpisode(ep);
+      await this.loadEpisodes();
+    },
+
+    async addSubline(order) {
+      if (!this.currentProject) return;
+      const ep = this.activeEpisodeNumber || 1;
+      this.captureUndoSnapshot();
+      const r = await fetch(`/projects/${this.currentProject.id}/script/line/${order}/add-subline?episode=${ep}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ text: '' }),
+      });
+      const data = await r.json().catch(() => ({}));
+      if (!r.ok) { alert('サブ行追加エラー: ' + (data.detail || r.status)); this.undoSnapshot = null; return; }
+      this.cancelEdit();
+      await this.loadEpisode(ep);
+      await this.loadEpisodes();
+      const nl = this.draft?.lines?.find(l => l.id === data.new_line?.id);
+      if (nl) this.toggleEdit(nl);
+    },
+
+    // ─── 自動区切り（SUBLINE_PLAN §9・S5）────────────────────────────
+    // 提案の計算（句点優先・最少分割）は本籍がscripting-agent自身（subline_manager.propose_splits）
+    // なのでここでは複製しない。「表示するか」の判定（文字数>上限）だけをJS側に持つ
+    isOverSplitLimit(line) {
+      return (line.text || '').length > this.autoSplitLimit;
+    },
+
+    overLimitLineCount() {
+      return (this.draft?.lines || []).filter(l => this.isOverSplitLimit(l)).length;
+    },
+
+    visibleLines() {
+      const lines = this.draft?.lines || [];
+      return this.onlyLongLines ? lines.filter(l => this.isOverSplitLimit(l)) : lines;
+    },
+
+    async previewAutoSplit(order) {
+      if (!this.currentProject) return;
+      const ep = this.activeEpisodeNumber || 1;
+      this.splitProposalFor = null;
+      const r = await fetch(`/projects/${this.currentProject.id}/script/line/${order}/split-proposal?episode=${ep}`);
+      const data = await r.json().catch(() => ({}));
+      if (!r.ok) { alert('提案の取得エラー: ' + (data.detail || r.status)); return; }
+      if (!data.pieces?.length) { alert('自動で区切れる候補がありません（読点が無い、または既に上限内です）'); return; }
+      this.splitProposalFor = { order, pieces: data.pieces };
+    },
+
+    closeSplitProposal() {
+      this.splitProposalFor = null;
+    },
+
+    async applyAutoSplit(order) {
+      if (!this.currentProject) return;
+      const ep = this.activeEpisodeNumber || 1;
+      this.captureUndoSnapshot();
+      const r = await fetch(`/projects/${this.currentProject.id}/script/line/${order}/split-apply?episode=${ep}`, {
+        method: 'POST',
+      });
+      const data = await r.json().catch(() => ({}));
+      if (!r.ok) { alert('自動区切りエラー: ' + (data.detail || r.status)); this.undoSnapshot = null; return; }
+      this.splitProposalFor = null;
+      this.cancelEdit();
+      await this.loadEpisode(ep);
+      await this.loadEpisodes();
+    },
+
+    async autoSplitWholeEpisode() {
+      if (!this.currentProject) return;
+      const n = this.overLimitLineCount();
+      if (!n) { alert('上限を超えている行はありません'); return; }
+      if (!confirm(`上限(${this.autoSplitLimit}字)を超えている${n}行をまとめて自動区切りします。よろしいですか？`)) return;
+      const ep = this.activeEpisodeNumber || 1;
+      this.captureUndoSnapshot();
+      this.autoSplittingAll = true;
+      try {
+        const r = await fetch(`/projects/${this.currentProject.id}/episodes/${ep}/split-apply-all`, { method: 'POST' });
+        const data = await r.json().catch(() => ({}));
+        if (!r.ok) { alert('自動区切りエラー: ' + (data.detail || r.status)); this.undoSnapshot = null; return; }
+        this.splitProposalFor = null;
+        this.cancelEdit();
+        await this.loadEpisode(ep);
+        await this.loadEpisodes();
+        const skipped = data.skipped?.length || 0;
+        alert(`${data.applied?.length || 0}行を区切りました${skipped ? `（${skipped}行はスキップ：読点が無い等）` : ''}`);
+      } finally {
+        this.autoSplittingAll = false;
+      }
     },
 
     speakerClass(speaker_id) {

@@ -674,14 +674,17 @@ def _load_tts_json(project_id: str, episode: int, lang: Optional[str] = None) ->
 def _rebuild_tts_metadata(tts: dict, lines: list) -> None:
     """audio_files から timeline と metadata を再計算する（行単位更新・削除後の同期用）。"""
     pause_by_id = {l.id: l.pause_after_sec for l in lines}
+    parent_by_id = {l.id: l.parent_line_id for l in lines}
     entries = sorted(tts.get("audio_files", []), key=lambda e: e.get("order", 0))
     timeline = []
     current = 0.0
     for e in entries:
         duration = float(e.get("duration_sec", 0.0))
-        pause = pause_by_id.get(e.get("line_id"), 0.3)
+        line_id = e.get("line_id")
+        pause = pause_by_id.get(line_id, 0.3)
         timeline.append({
-            "line_id": e.get("line_id"),
+            "line_id": line_id,
+            "parent_line_id": e.get("parent_line_id") or parent_by_id.get(line_id),
             "file_path": e.get("file_path"),
             "start_sec": round(current, 3),
             "end_sec": round(current + duration, 3),
@@ -711,7 +714,7 @@ def _upsert_tts_entry(project_id: str, episode: int, lines: list, line,
     tts, tts_path = _load_tts_json(project_id, episode, lang=lang)
     if tts is None:
         tts = {
-            "schema_version": "1.0.0",
+            "schema_version": "1.1.0",  # 1.1.0: audio_files[]/timeline[]にparent_line_idを追加
             "project_id": project_id,
             "generated_at": datetime.now(timezone.utc).isoformat(),
             "engine": engine_name,
@@ -723,7 +726,7 @@ def _upsert_tts_entry(project_id: str, episode: int, lines: list, line,
     entry = {
         "line_id": line.id, "order": line.order,
         "speaker_id": line.speaker_id, "speaker_name": line.speaker_name,
-        "text": line.text, "processed_text": processed_text,
+        "text": line.text, "parent_line_id": line.parent_line_id, "processed_text": processed_text,
         "emotion": line.emotion, "emotion_emoji": emotion_to_emoji(line.emotion),
         "speed": line.speed, "voice_id": voice,
         "caption": caption,
@@ -872,7 +875,8 @@ async def _run_project(project_id: str, episode_number: int = 1, lang: Optional[
             audio_files.append({
                 "line_id": line.id, "order": line.order,
                 "speaker_id": line.speaker_id, "speaker_name": line.speaker_name,
-                "text": line.text, "processed_text": processed_text,
+                "text": line.text, "parent_line_id": line.parent_line_id,
+                "processed_text": processed_text,
                 "emotion": line.emotion, "emotion_emoji": emotion_to_emoji(line.emotion),
                 "speed": line.speed, "voice_id": voice,
                 "caption": caption,
@@ -883,6 +887,7 @@ async def _run_project(project_id: str, episode_number: int = 1, lang: Optional[
             })
             timeline.append({
                 "line_id": line.id,
+                "parent_line_id": line.parent_line_id,
                 "file_path": file_path,
                 "start_sec": round(current_time, 3),
                 "end_sec": round(current_time + duration, 3),
@@ -895,7 +900,7 @@ async def _run_project(project_id: str, episode_number: int = 1, lang: Optional[
             )
 
         tts_json = {
-            "schema_version": "1.0.0", "project_id": project_id,
+            "schema_version": "1.1.0", "project_id": project_id,
             "generated_at": datetime.now(timezone.utc).isoformat(),
             "engine": engine_name, "audio_files": audio_files, "timeline": timeline,
             "metadata": {

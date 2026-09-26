@@ -30,6 +30,7 @@ import collections
 import datetime
 import io
 import json
+import math
 import os
 import sys
 import time
@@ -73,6 +74,29 @@ FRAMING_OF_SHOT = {
     "knee": "waist_up",
     "wide": "wide",
 }
+
+# 寄り→引きの順（scripts/measure_shot.py の SCALE_ORDER と同一にすること。§8-2）
+SCALE_ORDER = ["face_closeup", "bust", "waist_up", "knee", "wide"]
+BG_ZOOM_STEP = 1.3  # psassist-agent/app/core/spec.BG_ZOOM_STEP と同一にすること
+
+
+def _scale_index(shot: str | None) -> int | None:
+    return SCALE_ORDER.index(shot) if shot in SCALE_ORDER else None
+
+
+def effective_framing(framing: str | None, zoom: float | None) -> str | None:
+    """背景を拡大した分だけ、判定に使うframingを寄り側へ動かす（Docs/SUBLINE_PLAN.md §8-2）。
+
+    サブ行グループでは背景を1枚だけ選び、寄りのメンバーはその背景を拡大して使う
+    （plan_builder.build）。拡大後は実質もっと寄ったframingの背景として写っているので、
+    背景アーカイブに登録された生の framing のままFRAMING_MISMATCHを判定すると、
+    グループの寄りのメンバー全員が誤検知になる。
+    """
+    idx = _scale_index(framing)
+    if idx is None or not zoom or zoom <= 1.0:
+        return framing
+    steps = round(math.log(zoom, BG_ZOOM_STEP))
+    return SCALE_ORDER[max(0, idx - steps)]
 
 THUMB_W = 320
 VIEW_W = 1376
@@ -385,7 +409,10 @@ def check_panel(psd_path: str, meta: dict, bgs: dict, export_png: str | None,
         measured["shot"] = shot
         measured["head_rect"] = hb["rect"]
         bg = bgs.get(bg_id or "")
-        want = bg.get("framing") if bg else None
+        # サブ行グループの寄り(zoom)込みの実効framingで判定する（§8-2。しないと
+        # グループの寄りのメンバー全員が誤検知になる）
+        zoom = (meta.get("background") or {}).get("zoom")
+        want = effective_framing(bg.get("framing") if bg else None, zoom)
         if want and FRAMING_OF_SHOT.get(shot) != want:
             add("FRAMING_MISMATCH", "advisory",
                 "キャラは%s なのに背景は%s 用です" % (shot, want), None)

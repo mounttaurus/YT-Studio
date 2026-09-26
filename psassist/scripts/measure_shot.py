@@ -21,11 +21,11 @@ import json
 import os
 import sys
 
-sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding="utf-8")
 import numpy as np
 from PIL import Image
 
 # 頭身 → ショット。実測して調整すること（初期値は一般的なカメラワークの目安）。
+# ⚠️ scrapping-agent/app/core/shot_meter.py の SHOT_BY_HEADS と同一にすること（同じ物差し）。
 SHOT_BY_HEADS = [
     (1.6, "face_closeup"),
     (2.8, "bust"),
@@ -33,6 +33,17 @@ SHOT_BY_HEADS = [
     (5.6, "knee"),  # 語彙には無いが実在する。waist_up と wide の中間
     (99.0, "wide"),
 ]
+
+# 寄り→引きの順。plan_builder がグループの基準（一番引き）と倍率（§8-2）を計算するのに使う。
+# ⚠️ shot_meter.py の SCALE_ORDER と同一にすること。
+SCALE_ORDER = ["face_closeup", "bust", "waist_up", "knee", "wide"]
+
+
+def scale_index(shot: str | None) -> int | None:
+    """寄り(0)→引き(4) の段。未知は None（shot_meter.scale_index と同一）。"""
+    if shot in SCALE_ORDER:
+        return SCALE_ORDER.index(shot)
+    return None
 
 
 def head_height(mask: np.ndarray) -> dict | None:
@@ -84,6 +95,7 @@ def classify(heads: float) -> str:
 
 
 def main() -> None:
+    sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding="utf-8")
     ap = argparse.ArgumentParser()
     ap.add_argument("--cutout", required=True)
     ap.add_argument("--aroll", required=True)

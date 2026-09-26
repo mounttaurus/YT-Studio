@@ -35,10 +35,10 @@ import httpx
 from app.core import (
     aroll_prompt_generator, background_manager, camera_plan, character_manager, cut_planner,
     cutout_selector, nanobanana_client, panel_library_manager, panel_presets, project_manager,
-    style_manager,
+    shot_meter, style_manager,
 )
 
-SCHEMA_VERSION = "1.2.0"  # 1.2.0: panels[].background_id を追加（行単位の背景自動割当・§19）
+SCHEMA_VERSION = "1.3.0"  # 1.3.0: panels[].parent_line_id を追加（サブ行・SUBLINE_PLAN §4-2）
 # 行単位の背景自動割当で「直近使った背景を避ける」窓の大きさ（連続する行での反復感を抑える）
 AROLL_BG_RECENT_WINDOW = int(os.getenv("AROLL_BG_RECENT_WINDOW", "6"))
 MIN_INTERVAL_SEC = float(os.getenv("AROLL_MIN_INTERVAL_SEC", "3"))
@@ -356,6 +356,9 @@ def build_or_update_manifest(
             "speaker_id": ln.get("speaker_id", ""),
             "speaker_name": speaker.get("name") or ln.get("speaker_name", ""),
             "text": ln.get("text", ""),
+            # サブ行のグループ名（`Docs/SUBLINE_PLAN.md` I5）。prevからの引き継ぎではなく
+            # 常に台本から写す＝台本側でグループが変わったら（分割/結合/削除）追随する
+            "parent_line_id": ln.get("parent_line_id"),
             "characters": characters,
             "prompt": prompt,
             "prompt_source": source,
@@ -442,6 +445,55 @@ def update_line(
     return None
 
 
+def _background_units(panels: list[dict], cuts: list[dict]) -> list[list[dict]]:
+    """背景割当の単位を並び順に作る（グループがあればグループ、無ければカット。§8-1）。
+
+    ⚠️ **カットと背景の単位はもう別物。** カットは「絵を共有する区間」、グループ
+    （``parent_line_id``）は「背景を共有する区間」で、サブ行のグループは寄り引きが
+    変わるためカットが割れて当然（§8-2）だが背景は揃えたい。グループがカットを
+    跨ぐ（一部のサブ行だけ短くて束ねられる）場合もあるので、グループ優先で単位を作る。
+    """
+    cut_of = cut_planner.cut_of_line(cuts)
+    units: list[list[dict]] = []
+    seen: set[str] = set()
+    for p in panels:
+        lid = p.get("line_id")
+        if lid in seen:
+            continue
+        parent_id = p.get("parent_line_id")
+        if parent_id:
+            wanted_ids = {m.get("line_id") for m in panels if m.get("parent_line_id") == parent_id}
+        else:
+            cut = cut_of.get(lid)
+            wanted_ids = set(cut["line_ids"]) if cut else {lid}
+        members = [m for m in panels if m.get("line_id") in wanted_ids]
+        seen.update(wanted_ids)
+        units.append(members)
+    return units
+
+
+def _unit_reference_shot(members: list[dict]) -> tuple[str, bool]:
+    """グループの中で一番引きの絵のshotを返す（背景はその画角に合わせる・§8-2）。
+
+    2つ目の戻り値: メンバーのどれか1人でも実物のshotが希望(slot.shot)とズレていたか
+    （from_actual_shot の集計用）。
+    """
+    best_idx, best_shot, from_actual = -1, "", False
+    for m in members:
+        used = _used_slot_tags(m)  # 実物のタグ（cutout_slot_id未確定ならNone）
+        actual_shot = used.get("shot") if used else None
+        wished_shot = (m.get("slot") or {}).get("shot") or ""
+        shot = actual_shot or wished_shot
+        if actual_shot and actual_shot != wished_shot:
+            from_actual = True
+        idx = shot_meter.scale_index(shot)
+        if idx is None:
+            idx = -1
+        if idx >= best_idx:
+            best_idx, best_shot = idx, shot
+    return best_shot, from_actual
+
+
 def auto_assign_backgrounds(project_id: str, episode: int, only_missing: bool = True,
                             line_ids: list[str] | None = None) -> dict:
     """全行に背景を自動割当する（無料・画像は一切生成しない。既存backgroundsアーカイブから選ぶだけ）。
@@ -451,12 +503,17 @@ def auto_assign_backgrounds(project_id: str, episode: int, only_missing: bool = 
     外れだけ人が差し替える」方針（Docs/AROLL_ASSET_PLAN.md §19。
     [[aroll-background-per-line-manga-convention]]）。
 
+    ⚠️ **単位はグループ（無ければカット）** （`Docs/SUBLINE_PLAN.md` §8-1・2026-09-26）。
+    同じ親を持つサブ行は同じ背景を使う（組版側がそこへ寄り引きに応じて拡大する・§8-2）。
+    グループが無い行は従来どおりカット単位（穴9 §9-6・カットは絵の共有単位）。
+
     ⚠️ **shotの出どころは「実際に使われている絵」を優先する**（穴6・2026-09-14）。
     在庫選定は指紋距離で選ぶためLLMの希望slot.shotとは実測69%（41/59）ズレる
     （[[background-shot-decided-before-cutout]]）。`cutout_slot_id` が既に決まっている行は
     その実物のshotで背景を選び、まだ決まっていない行（承認直後の初回一括割当など）は
-    従来どおりslot.shotへフォールバックする。emotionは在庫選定の適格条件そのものなので
-    実物とほぼ一致し続ける（差し替えない）。
+    従来どおりslot.shotへフォールバックする。グループでは**一番引きのメンバー**のshotを
+    基準にする（組版側の倍率計算がその引きを基準に寄せるため・§8-2）。emotionは在庫選定の
+    適格条件そのものなので実物とほぼ一致し続ける（差し替えない・先頭行の値を使う）。
 
     only_missing=True（既定）: 既にbackground_idを持つ行はスキップ（手動で選んだ行を壊さない）。
     False: 全行を割当し直す（既存の手動選択も上書きする）。
@@ -466,7 +523,7 @@ def auto_assign_backgrounds(project_id: str, episode: int, only_missing: bool = 
     1行も選んでいないのに全行の背景を割り当て直すことになる
     （``CHARACTER_CUTOUT_PLAN.md`` §13-4 と同じ規則）。
 
-    直近 AROLL_BG_RECENT_WINDOW 行で使った背景は避ける（順序どおりに1行ずつ処理するため、
+    直近 AROLL_BG_RECENT_WINDOW 行で使った背景は避ける（順序どおりに1単位ずつ処理するため、
     同じ背景が連続して出るのを防げる）。times_usedによる最小消費優先ローテーションと合わせて
     「反復感を機械側が担保する」設計（キャラ画像ライブラリのfind_currentと同じ考え方）。
     """
@@ -476,20 +533,17 @@ def auto_assign_backgrounds(project_id: str, episode: int, only_missing: bool = 
 
     wanted = None if line_ids is None else set(line_ids)
 
-    # ⚠️ **背景もカット単位**（穴9 §9-6・2026-09-20）。行ごとに割り当てると、
-    # キャラの絵を共有しているカットの途中で背景だけ変わり、**カットが割れて見える**。
-    # 直近回避もカットの並びで効かせる（行で数えると窓が実質半分の秒数になる）。
-    panels_by_id = {p.get("line_id"): p for p in manifest.get("panels", [])}
+    panels = [p for p in manifest.get("panels", []) if not p.get("orphan")]
     cuts = cut_report(project_id, episode, manifest)["cuts"]
+    units = _background_units(panels, cuts)
 
     recent: list[str] = []
     assigned = unmatched = skipped = from_actual = 0
-    for c in cuts:
-        members = [panels_by_id[l] for l in c["line_ids"] if l in panels_by_id]
+    for members in units:
         if not members:
             continue
         head = members[0]
-        # 対象外のカットも recent には積む（連続を避ける判定は並び順で効くため）
+        # 対象外の単位も recent には積む（連続を避ける判定は並び順で効くため）
         if wanted is not None and not any(m.get("line_id") in wanted for m in members):
             if head.get("background_id"):
                 recent.append(head["background_id"])
@@ -500,22 +554,19 @@ def auto_assign_backgrounds(project_id: str, episode: int, only_missing: bool = 
             recent[:] = recent[-AROLL_BG_RECENT_WINDOW:]
             skipped += len(members)
             continue
-        slot = head.get("slot") or {}
-        used = _used_slot_tags(head)  # 実物のタグ（cutout_slot_id未確定ならNone）
-        shot = (used.get("shot") if used else None) or slot.get("shot") or ""
-        bg = background_manager.suggest_background(
-            shot, slot.get("emotion") or "", exclude_ids=set(recent),
-        )
+        shot, unit_from_actual = _unit_reference_shot(members)
+        emotion = (head.get("slot") or {}).get("emotion") or ""
+        bg = background_manager.suggest_background(shot, emotion, exclude_ids=set(recent))
         if bg is None:
             unmatched += len(members)
             continue
         for m in members:
             m["background_id"] = bg["bg_id"]
             assigned += 1
-        background_manager.record_usage(bg["bg_id"])   # 消費はカットに1回
+        background_manager.record_usage(bg["bg_id"])   # 消費は単位に1回
         recent.append(bg["bg_id"])
         recent[:] = recent[-AROLL_BG_RECENT_WINDOW:]
-        if used and used.get("shot") and used["shot"] != slot.get("shot"):
+        if unit_from_actual:
             from_actual += 1
 
     save_manifest(project_id, episode, manifest)
@@ -669,14 +720,21 @@ def _script_lines_by_id(project_id: str, episode: int, script: dict | None = Non
 
 
 def _panel_sync(panel: dict, line: dict | None, out_dir: Path | None) -> str:
-    """1パネルの同期状態を判定する（台本行 line が正・panel.orphan は参考にしない）。"""
+    """1パネルの同期状態を判定する（台本行 line が正・panel.orphan は参考にしない）。
+
+    絵の実体は2系統ある: 生成/ライブラリ画像（``status=="done"`` かつ ``image``）と、
+    在庫の切り抜き割当のみ（``cutout_slot_id``）。組版（Photoshop合成）は aroll.json の
+    外で起きて書き戻されないため、後者も ``_panel_decided`` と同じ基準で確定扱いする
+    （さもないと組版まで済んだ「在庫だけの行」が永久に missing になる。S0 §14）。
+    """
     if line is None:
         return SYNC_ORPHAN
     img = panel.get("image")
-    if panel.get("status") != "done" or not img:
-        return SYNC_MISSING
-    if out_dir is not None and not (out_dir / img).exists():
-        return SYNC_MISSING  # マニフェストはdoneだが実ファイルが無い（手動削除など）
+    if panel.get("status") == "done" and img:
+        if out_dir is not None and not (out_dir / img).exists():
+            return SYNC_MISSING  # マニフェストはdoneだが実ファイルが無い（手動削除など）
+    elif not panel.get("cutout_slot_id"):
+        return SYNC_MISSING  # 生成画像も在庫割当も無い
     prev_hash = panel.get("source_text_hash")
     if not prev_hash:
         return SYNC_UNKNOWN
@@ -793,7 +851,7 @@ def cut_report(project_id: str, episode: int, manifest: dict | None = None) -> d
         "total_cuts": len(cuts),
         # 尺の出どころを明示する（推定のまま本番に流れていないかを見るため）
         "duration_source": "tts" if durations else "estimated",
-        "max_sec": cut_planner.DEFAULT_MAX_SEC,
+        "short_line_sec": cut_planner.SHORT_LINE_SEC,
         "cuts": cuts,
     }
 
@@ -802,17 +860,15 @@ KEEP = object()   # 「このフィールドは触らない」を表す番兵（
 
 
 def set_cut_override(project_id: str, episode: int, line_id: str,
-                     boundary=KEEP, role=KEEP, reset: bool = False) -> dict:
-    """カットの手直しを保存する（境界を足す/消す・決めを付け替える）。
+                     boundary=KEEP, reset: bool = False) -> dict:
+    """カットの境界の手直しを保存する（分ける/前へつなげる）。
+
+    ⚠️ **role（決め台詞の付け替え）は廃止**（`Docs/SUBLINE_PLAN.md` §6-3・2026-09-26）。
+    決め台詞の規則自体を廃止したため、付け替える対象が無い。
 
     boundary: ``"start"``（この行から新しいカット）/ ``"join"``（前のカットへつなげる）/
       ``None``（この項目だけ自動に戻す）/ 省略（触らない）。
-    role: ``"kime"`` 等 / ``None`` でこの項目だけ自動に戻す / 省略で触らない。
     reset: True なら**この行の手直しを全部消す**。
-
-    ⚠️ **省略と None を区別する**（2026-09-20）。区別しないと、UIが
-    `{"boundary": "start"}` だけ送った時に **role の手直しが黙って消える**
-    （決めにした行の境界を直したら決めが外れる、という直しにくい事故になる）。
 
     ⚠️ **手直しは再計算で壊れない**のが要件（§11-2）。カット自体は保存せず、
     ここで保存した上書きだけを毎回の計算に当てる。
@@ -827,13 +883,11 @@ def set_cut_override(project_id: str, episode: int, line_id: str,
 
     ov = dict(manifest.get("cut_overrides") or {})
     entry = {} if reset else dict(ov.get(line_id) or {})
-    for key, val in (("boundary", boundary), ("role", role)):
-        if val is KEEP:
-            continue
-        if val is None:
-            entry.pop(key, None)
+    if boundary is not KEEP:
+        if boundary is None:
+            entry.pop("boundary", None)
         else:
-            entry[key] = val
+            entry["boundary"] = boundary
     if entry:
         ov[line_id] = entry
     else:
@@ -2141,6 +2195,12 @@ def set_cutout_selection(project_id: str, episode: int, line_id: str, slot_id: s
         # 合成済みPSDより後に差し替えたかを判定するための時刻。これが無いと
         # 「絵を替えたのに古い合成サムネが出たまま」に気付けない
         t["cutout_assigned_at"] = _now() if slot_id else None
+        if slot_id:
+            # 組版(Photoshop合成)はaroll.jsonの外で起きて書き戻されないため、
+            # 割当の時点で台本テキストを刻んでおく（_panel_sync が「在庫割当済み・
+            # 組版前」を判定する唯一の手がかりになる。S0 §14）
+            t["source_text"] = t.get("text", "")
+            t["source_text_hash"] = text_hash(t.get("text"))
         clear_image_approval(project_id, episode, t, demote=False)
     save_manifest(project_id, episode, manifest)
     return {"line_id": line_id, "cutout_slot_id": slot_id, "changed": True,
@@ -2170,6 +2230,68 @@ def reject_current_image(project_id: str, episode: int, line_id: str) -> dict:
     set_cutout_selection(project_id, episode, line_id, None)
     deleted = panel_library_manager.delete_entry(char_id, slot_id)
     return {"line_id": line_id, "char_id": char_id, "slot_id": slot_id, "deleted": deleted}
+
+
+def confirm_split_sync(project_id: str, episode: int, line_id: str) -> dict | None:
+    """行が分割された直後、前半(line_id)の同期記録を今のテキストへ焼き直す
+    （`Docs/SUBLINE_PLAN.md` §5「分ける」・S2 §14）。
+
+    分割は絵の内容を変える操作ではない（後半へ渡した分だけテキストが短くなるだけ）
+    ので、`source_text_hash` を古いまま放置すると `_panel_sync` が stale（絵が古い）
+    と誤判定する。ここは「絵を見て確定した」わけではないので `image_approved_*` は
+    触らない（``fill_missing_images`` と同じ区別）。
+
+    ⚠️ **呼び出し側が分割の直後に呼ぶこと。** scripting-agent 側の操作なので、
+    ここでは分割そのものは検知できない。絵も在庫割当も無い行（missing）には
+    追認する記録が無いので None を返す。
+    """
+    manifest = load_manifest(project_id, episode)
+    if manifest is None:
+        raise ValueError("aroll.json not found")
+    panel = next((p for p in manifest.get("panels", []) if p.get("line_id") == line_id), None)
+    if panel is None:
+        raise ValueError(f"line not found: {line_id}")
+    if panel.get("status") != "done" and not panel.get("cutout_slot_id"):
+        return None
+
+    line = _script_lines_by_id(project_id, episode).get(line_id)
+    cur_text = (line or {}).get("text", "")
+    panel["source_text"] = cur_text
+    panel["source_text_hash"] = text_hash(cur_text)
+    if (panel.get("prompt") or "").strip():
+        panel["prompt_text_hash"] = text_hash(cur_text)
+    save_manifest(project_id, episode, manifest)
+    return panel
+
+
+def orphan_line(project_id: str, episode: int, line_id: str) -> dict | None:
+    """台本から消えた行（削除・結合で吸収された行）の在庫の使用記録を戻す
+    （`Docs/SUBLINE_PLAN.md` §5「削除」「結合」・S2 §14）。パネル自体は証拠として
+    残す（``orphan=True``。``build_or_update_manifest`` と同じ方針）。
+
+    ⚠️ **呼び出し側が削除・結合の直後に呼ぶこと。** ``build_or_update_manifest`` は
+    次回のマニフェスト再構築で同じ行を自動で orphan 化するが、それまで
+    times_used が解放されないままになる（生涯上限に嘘の消費で早く到達する）。
+    既に orphan の行・パネルが無い行は何もせず None を返す。
+    """
+    manifest = load_manifest(project_id, episode)
+    if manifest is None:
+        raise ValueError("aroll.json not found")
+    panel = next((p for p in manifest.get("panels", []) if p.get("line_id") == line_id), None)
+    if panel is None or panel.get("orphan"):
+        return None
+
+    slot_id, char_id = panel.get("cutout_slot_id"), panel.get("cutout_char_id")
+    if slot_id and char_id:
+        panel_library_manager.release_usage(
+            char_id, slot_id, project_id=project_id, episode=episode, line_id=line_id)
+    panel["cutout_slot_id"] = None
+    panel["cutout_char_id"] = None
+    panel["cutout_source"] = None
+    panel["cutout_assigned_at"] = None
+    panel["orphan"] = True
+    save_manifest(project_id, episode, manifest)
+    return panel
 
 
 def apply_cutout_plan(project_id: str, episode: int, line_ids: list[str] | None = None) -> dict:

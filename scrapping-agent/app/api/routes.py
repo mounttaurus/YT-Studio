@@ -2244,25 +2244,21 @@ async def aroll_cuts(project_id: str, episode_number: int):
 
 class ArollCutOverrideRequest(BaseModel):
     boundary: str | None = None   # "start"（分ける）/ "join"（前へつなげる）/ null（この項目を自動へ）
-    role: str | None = None       # "kime" 等 / null でこの項目を自動へ
     reset: bool = False           # この行の手直しを全部消す
 
 
 @router.put("/projects/{project_id}/episodes/{episode_number}/aroll/cuts/{line_id}")
 async def aroll_set_cut_override(project_id: str, episode_number: int, line_id: str,
                                  req: ArollCutOverrideRequest):
-    """カットの境界・役を手で直す（再計算で壊れない・可逆）。
+    """カットの境界を手で直す（再計算で壊れない・可逆）。
 
-    ⚠️ **送らなかったフィールドは触らない。** `{"boundary": "start"}` だけ送っても
-    `role` の手直しは残る（区別しないと、決めにした行の境界を直したら決めが外れる）。
-    その項目を自動へ戻すには **null を明示**、全部戻すには `reset: true`。
+    ⚠️ **role（決め台詞の付け替え）は廃止**（`Docs/SUBLINE_PLAN.md` §6-3）。
+    boundary を自動へ戻すには **null を明示**、全部戻すには `reset: true`。
     """
     sent = req.model_fields_set
     kw = {}
     if "boundary" in sent:
         kw["boundary"] = req.boundary
-    if "role" in sent:
-        kw["role"] = req.role
     try:
         return aroll_manager.set_cut_override(
             project_id, episode_number, line_id, reset=req.reset, **kw)
@@ -2423,6 +2419,30 @@ async def aroll_reject_cutout(project_id: str, episode_number: int, line_id: str
         return aroll_manager.reject_current_image(project_id, episode_number, line_id)
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
+
+
+# ─── サブ行の後始末（Docs/SUBLINE_PLAN.md §5・S2。入口はまだ無い＝I7） ────
+
+@router.post("/projects/{project_id}/episodes/{episode_number}/aroll/lines/{line_id}/confirm-split-sync")
+async def aroll_confirm_split_sync(project_id: str, episode_number: int, line_id: str):
+    """行が分割された直後、前半(line_id)の同期記録を分割後のテキストへ焼き直す
+    （分割は絵の内容を変える操作ではないので stale と誤判定しない・呼び出し側が分割の直後に呼ぶ）。
+    """
+    try:
+        panel = aroll_manager.confirm_split_sync(project_id, episode_number, line_id)
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    return {"line_id": line_id, "confirmed": panel is not None, "panel": panel}
+
+
+@router.post("/projects/{project_id}/episodes/{episode_number}/aroll/lines/{line_id}/orphan")
+async def aroll_orphan_line(project_id: str, episode_number: int, line_id: str):
+    """削除・結合で台本から消えた行の在庫の使用記録を戻す（呼び出し側が削除・結合の直後に呼ぶ）。"""
+    try:
+        panel = aroll_manager.orphan_line(project_id, episode_number, line_id)
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    return {"line_id": line_id, "orphaned": panel is not None, "panel": panel}
 
 
 class CutoutApplyRequest(BaseModel):

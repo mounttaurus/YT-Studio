@@ -2,6 +2,7 @@ import json
 import re
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Optional
 
 
 @dataclass
@@ -16,6 +17,8 @@ class Line:
     pause_after_sec: float = 0.3
     section: str = "main"
     notes: str = ""
+    # サブ行のグループ名（Docs/SUBLINE_PLAN.md I5）。無ければ普通の行
+    parent_line_id: Optional[str] = None
 
 
 def parse_script_json(path: Path) -> list[Line]:
@@ -33,6 +36,7 @@ def parse_script_json(path: Path) -> list[Line]:
             pause_after_sec=item.get("pause_after_sec", 0.3),
             section=item.get("section", "main"),
             notes=item.get("notes", ""),
+            parent_line_id=item.get("parent_line_id"),
         ))
     return lines
 

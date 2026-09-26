@@ -342,6 +342,36 @@ def side_from_mask(mask: dict | None) -> str | None:
     return "left" if head > 0.5 else "right"
 
 
+# サブ行グループの背景拡大（Docs/SUBLINE_PLAN.md §8-2・付録C）。
+# 1段寄るごとの倍率。基準より2段（腰上→顔アップ）で 1.3**2=1.69（≈1.7）。
+BG_ZOOM_STEP = 1.3
+# 上限（3段以上の寄りは画質が気になるため、当面はここで止める。§8-2「大きな画像」）。
+MAX_BG_ZOOM = 1.8
+
+
+def bg_zoom_for(base_scale_idx: int | None, member_scale_idx: int | None) -> float:
+    """基準（グループで一番引き）に対する倍率。基準が一番引きなので縮小は起きない。"""
+    if base_scale_idx is None or member_scale_idx is None:
+        return 1.0
+    steps = max(0, base_scale_idx - member_scale_idx)
+    return round(min(MAX_BG_ZOOM, BG_ZOOM_STEP ** steps), 3)
+
+
+def bg_zoom_center(mask: dict | None) -> list[float] | None:
+    """拡大の中心（キャンバス座標）。付録Cの試作で検証した式:
+    外接矩形の中央（横）・上端から20%（縦）＝おおよそ頭の高さ。
+
+    測れなければ None（呼び出し側はキャンバス中心＝無補正にフォールバックすること）。
+    """
+    if not mask or mask.get("error") or mask.get("empty"):
+        return None
+    bbox = mask.get("bbox")
+    if not bbox:
+        return None
+    left, top, right, bottom = bbox
+    return [round((left + right) / 2, 1), round(top + 0.20 * (bottom - top), 1)]
+
+
 # ---------------------------------------------------------------- レイアウト
 # バブルの寸法。文字数との相関は r=0.28 とほぼ無相関で、実質固定サイズ。
 # 四角は30字で幅520、100字でも幅606（+17%）にしかならない。

@@ -199,7 +199,7 @@ def build_script_json(
     )
 
     return {
-        "schema_version": "1.0.0",
+        "schema_version": "1.1.0",  # 1.1.0: parent_line_id・metadata.subline_seq を追加（サブ行・後方互換MINOR）
         "project_id": project_id,
         "generated_at": datetime.now(timezone.utc).isoformat(),
         "total_duration_sec": round(estimated_duration),

@@ -17,7 +17,11 @@ from typing import Any
 
 from . import kinsoku, spec
 
-SCHEMA_VERSION = "1.2.0"  # 1.2.0: bubble.key_source を追加（記号ベースの行ごと形状上書き・S3）
+# psassist/scripts/measure_shot.py（SCALE_ORDER）。build_plan.py・host_worker.py が
+# import前に psassist/scripts を sys.path へ入れる（このモジュール単体では入れない）。
+import measure_shot  # noqa: E402
+
+SCHEMA_VERSION = "1.3.0"  # 1.3.0: background.zoom/center を追加（サブ行グループの背景拡大・SUBLINE_PLAN §8-2）
 
 # そのまま組めるが知らせておきたいもの（needs_attention にはしない）。
 # ここを増やさないと、本当に見るべき件が助言に埋もれる。
@@ -549,6 +553,10 @@ def build(paths: Paths | None = None) -> dict[str, Any]:
     allowed_lights = spec.lights_for(cfg.get("time_of_day", []))
 
     panels: list[dict[str, Any]] = []
+    # サブ行グループ（parent_line_id）の背景解決を後段でまとめて行うための保留分
+    # （§8-2）。グループはカットを跨ぐことがあるため、ここではメインループの中で
+    # pick_location を呼ばず、グループ全員の shot が分かってから基準を決める。
+    group_rows: dict[str, list[dict[str, Any]]] = {}
     for p in aroll.get("panels", []):
         text = (current_script.get(p.get("line_id")) or p.get("text") or "").strip()
         if not text:
@@ -630,18 +638,39 @@ def build(paths: Paths | None = None) -> dict[str, Any]:
         char_dx = (mask or {}).get("light_dx")
         slot = p.get("slot") or {}
         emotion = slot.get("emotion")
-        # 実測を優先。測れなかった行だけ LLM のラベルを使う
-        shot = measured_shots.get(p["line_id"]) or slot.get("shot")
-        shot_source = "measured" if p["line_id"] in measured_shots else "slot_label"
-        bg_id, bg_reason = pick_location(
-            bg_id, backgrounds, allowed_lights, char_dx, shot, overrides
-        )
-        bg = backgrounds.get(bg_id) if bg_id else None
-        if bg_reason == "light_direction":
-            warnings.append("LIGHT_MISMATCH_FIXED")
+        # 実測を優先。①在庫エントリの実測（`library.json` の `measured.shot`。在庫行はここに
+        # 実測済みの画角が既にあるのに、以前はここを見ず②③へ素通ししていた＝穴9・カット導入後、
+        # 同じ絵を共有する兄弟行が違う画角ラベルを引き、`pick_location` の判定が分かれて背景が
+        # 割れる恐れがあった。同じ絵なら同じ実測値を引くので、これで兄弟行の判定が一致する。
+        # ②この話数で生成した絵の実測（shot_measured.json） ③それも無ければ LLM のラベル
+        lib_measured = (lib_entry.get("measured") or {}).get("shot") if lib_entry is not None else None
+        if lib_measured:
+            shot, shot_source = lib_measured, "library_measured"
+        elif p["line_id"] in measured_shots:
+            shot, shot_source = measured_shots[p["line_id"]], "measured"
+        else:
+            shot, shot_source = slot.get("shot"), "slot_label"
 
-        panels.append(
-            {
+        # サブ行グループ（parent_line_id）は pick_location をグループで1回だけ呼ぶ
+        # （§8-2）。ここで解決してしまうと、寄りのメンバーの shot に押されて
+        # グループの他のメンバーだけ別の背景へ差し替わり得る（旧C案に戻ってしまう）。
+        # グループ無しの行は従来どおりこの場で解決する（カット共有は元々同じ絵＝同じshot
+        # なので、行ごとに呼んでも結果は揃う）。
+        parent_id = p.get("parent_line_id")
+        if parent_id:
+            bg_id_resolved, bg_reason = bg_id, None  # 後段で group_rows から埋める
+            zoom, center = 1.0, None
+        else:
+            bg_id_resolved, bg_reason = pick_location(
+                bg_id, backgrounds, allowed_lights, char_dx, shot, overrides
+            )
+            zoom, center = 1.0, None
+            if bg_reason == "light_direction":
+                warnings.append("LIGHT_MISMATCH_FIXED")
+        bg_id = bg_id_resolved
+        bg = backgrounds.get(bg_id) if bg_id else None
+
+        panel = {
                 "line_id": p["line_id"],
                 "order": p.get("order"),
                 "speaker": speaker,
@@ -669,6 +698,10 @@ def build(paths: Paths | None = None) -> dict[str, Any]:
                 "background": {
                     "bg_id": bg_id,
                     "bg_source": bg_reason,
+                    # サブ行グループの寄り引きに合わせた拡大（§8-2）。基準(一番引き)は1.0。
+                    # グループの行は後段で解決するまでの仮値（group_rowsが上書きする）。
+                    "zoom": zoom,
+                    "center": center,
                     "image": (
                         os.path.join(paths.backgrounds_dir, bg["image"].replace("/", os.sep))
                         if bg
@@ -725,7 +758,66 @@ def build(paths: Paths | None = None) -> dict[str, Any]:
                 ),
                 "warnings": warnings,
             }
+        panels.append(panel)
+        if parent_id:
+            group_rows.setdefault(parent_id, []).append({
+                "panel": panel, "shot": shot, "mask": mask, "char_dx": char_dx,
+                "raw_bg_id": bg_id, "emotion": emotion, "order": p.get("order") or 0,
+                "force_accent": p["line_id"] in force_accent,
+            })
+
+    # --- サブ行グループの背景をまとめて解決する（Docs/SUBLINE_PLAN.md §8-2） ---
+    # 基準（グループで一番引き）だけを見て pick_location を1回呼び、全メンバーへ同じ
+    # 背景を当てる。各メンバーの拡大率(zoom)・中心(center)は基準との段差から決める。
+    for rows in group_rows.values():
+        base_row, base_idx = None, None
+        for r in rows:
+            idx = measure_shot.scale_index(r["shot"])
+            if idx is not None and (base_idx is None or idx >= base_idx):
+                base_idx, base_row = idx, r
+        if base_row is None:
+            base_row = rows[0]  # 全員 shot 不明＝先頭行を基準にする（zoomは全員1.0のまま）
+
+        resolved_bg_id, bg_reason = pick_location(
+            base_row["raw_bg_id"], backgrounds, allowed_lights,
+            base_row["char_dx"], base_row["shot"], overrides,
         )
+        bg = backgrounds.get(resolved_bg_id) if resolved_bg_id else None
+
+        for r in rows:
+            panel = r["panel"]
+            zoom = spec.bg_zoom_for(base_idx, measure_shot.scale_index(r["shot"]))
+            center = spec.bg_zoom_center(r["mask"]) if zoom > 1.0 else None
+
+            panel["background"]["bg_id"] = resolved_bg_id
+            panel["background"]["bg_source"] = bg_reason
+            panel["background"]["zoom"] = zoom
+            panel["background"]["center"] = center
+            panel["background"]["image"] = (
+                os.path.join(paths.backgrounds_dir, bg["image"].replace("/", os.sep))
+                if bg else None
+            )
+            panel["background"]["light_agreement"] = spec.light_agreement(
+                r["char_dx"], (bg or {}).get("light_dx")
+            )
+            # 第2候補以降は各メンバー自身の shot/emotion で選ぶ（代替案は個別のままでよい）
+            panel["background"]["candidates"] = background_candidates(
+                resolved_bg_id, backgrounds, paths.backgrounds_dir,
+                fx_ids=pick_fx(
+                    r["emotion"], r["order"], backgrounds, emo2mood, force=r["force_accent"],
+                ),
+                overlay_ids=pick_eff(r["emotion"], r["order"], backgrounds, emo2mood),
+                spare_ids=spare_locations(
+                    resolved_bg_id, backgrounds, allowed_lights, r["char_dx"], r["shot"], overrides,
+                ),
+            )
+            if bg_reason == "light_direction" and "LIGHT_MISMATCH_FIXED" not in panel["warnings"]:
+                panel["warnings"].append("LIGHT_MISMATCH_FIXED")
+            panel["status"] = (
+                "needs_attention"
+                if [w for w in panel["warnings"] if w not in ADVISORY_WARNINGS]
+                else "ok"
+            )
 
     return {
         "schema_version": SCHEMA_VERSION,

@@ -494,7 +494,7 @@ shared/voices/irodori/
 
 ```json
 {
-  "schema_version": "1.0.0",
+  "schema_version": "1.1.0",
   "project_id": "20250603_001",
   "generated_at": "2025-06-03T11:00:00Z",
   "total_duration_sec": 298,
@@ -542,6 +542,36 @@ shared/voices/irodori/
   }
 }
 ```
+
+### サブ行（1行に複数の絵を当てる。2026-09-26新規・schema_version 1.1.0）
+
+**正本: `Docs/SUBLINE_PLAN.md`**（S1で実装。UIはまだ無い＝I7・入口はS5で開く）。
+
+- **サブ行は普通の行**。違いは `parent_line_id` を持つことだけ（下流は行として扱う＝I1）。
+- **グループ** ＝ 同じ `parent_line_id` を持つ連続した行（先頭の行にも付ける・I4）。判定は
+  「連続・同じ話者・同じセクション」（I2）。1行だけになったら `parent_line_id` を外す。
+- サブ行のIDは `{親のID}_s{n}`。`n` は `metadata.subline_seq[親のID]` の連番で、
+  消しても再利用しない（I3）。
+
+```json
+{
+  "lines": [
+    { "id": "line_016",    "text": "この写本には所有者の記録まで残っています。",
+      "parent_line_id": "line_016", "emotion": "neutral" },
+    { "id": "line_016_s2", "text": "神聖ローマ皇帝ルドルフ2世の宮廷に…分かっています。",
+      "parent_line_id": "line_016", "emotion": "neutral" },
+    { "id": "line_016_s3", "text": "それだけ価値あるものとして…解読できなかった。",
+      "parent_line_id": "line_016", "emotion": "serious", "split_review": true }
+  ],
+  "metadata": { "subline_seq": { "line_016": 3 } }
+}
+```
+
+- `parent_line_id` が無い行 ＝ 普通の行（既存の全行。**移行は不要**）。既存コンテナはこの新キーを
+  無視して動作できるためMINOR変更（schema_versionは1.1.0）
+- `split_review`: 読点で切った・自動区切りで要確認の印。人が見たら外す
+- 操作（分ける・結合・追加・自動区切り）は `scripting-agent/app/core/subline_manager.py` に集約。
+  下流（`aroll.json`・`tts.json`）への伝播はS2の範囲（§6d）
 
 ### speaker_id / speaker_name の解決（2026-07-01・表示ドリフト根治）
 - `speaker_id` は台本上の役（`config.tts.speakers[].id` と対応）。**名前・声の唯一の本籍はキャラ**（§2b）。
@@ -598,7 +628,7 @@ tts-agentがIrodori-TTS-Server生成のモノラル音声を自動でステレ�
 
 ```json
 {
-  "schema_version": "1.0.0",
+  "schema_version": "1.1.0",
   "project_id": "20250603_001",
   "generated_at": "2025-06-03T12:00:00Z",
   "engine": "aivis",
@@ -610,6 +640,7 @@ tts-agentがIrodori-TTS-Server生成のモノラル音声を自動でステレ�
       "speaker_id": "speaker_a",
       "speaker_name": "ずんだもん",
       "text": "こんにちは！今週もAIニュースを一緒に見ていくのだ！",
+      "parent_line_id": null,
       "file_path": "audio/line_001.wav",
       "duration_sec": 3.2,
       "sample_rate": 44100,
@@ -621,6 +652,7 @@ tts-agentがIrodori-TTS-Server生成のモノラル音声を自動でステレ�
   "timeline": [
     {
       "line_id": "line_001",
+      "parent_line_id": null,
       "file_path": "audio/line_001.wav",
       "start_sec": 0.0,
       "end_sec": 3.2,
@@ -636,6 +668,10 @@ tts-agentがIrodori-TTS-Server生成のモノラル音声を自動でステレ�
   }
 }
 ```
+
+- `parent_line_id`（2026-09-26新規・schema_version 1.1.0・後方互換MINOR）: script.json の同名
+  フィールドをそのまま写す（サブ行のグループ。TTSタブでサブ行を親の下にまとめて表示するための
+  情報。**本籍は`Docs/SUBLINE_PLAN.md` §4-2**）。無い行はnull（普通の行）
 
 ---
 
@@ -850,7 +886,7 @@ NanoBanana（参照画像同梱）でパネルを生成する。吹き出しは�
 
 ```json
 {
-  "schema_version": "1.2.0",
+  "schema_version": "1.3.0",
   "project_id": "20250603_001",
   "episode": 1,
   "aspect": "16:9",
@@ -864,6 +900,7 @@ NanoBanana（参照画像同梱）でパネルを生成する。吹き出しは�
       "speaker_id": "speaker_a",
       "speaker_name": "Luka",
       "text": "セリフ本文（UI表示用スナップショット）",
+      "parent_line_id": null,
       "characters": ["002"],
       "prompt": "演出のみの英語プロンプト（表情/ポーズ/ショット/構図）",
       "prompt_source": "llm | user",
@@ -894,6 +931,22 @@ NanoBanana（参照画像同梱）でパネルを生成する。吹き出しは�
 - 空テキスト行はパネル対象外（マニフェストに含まれない）
 - バッチ生成は1行ごとにこのファイルへ書き出す＝中断・再開（only_missing）が常に安全
 - OpenRouterへの課金退避は `allow_paid_fallback=true` の時だけ（既定OFF。Free表示でも実課金のため）
+
+### サブ行の通り道と後始末（2026-09-26新規・schema_version 1.3.0・S2）
+
+**正本: `Docs/SUBLINE_PLAN.md`**（§4-2・§13 S2）。
+
+- `parent_line_id`: 台本（script.json）から**毎回上書きで写す**（`prev`からの引き継ぎではない＝
+  台本側でグループが変わったら（分割/結合/削除）次のマニフェスト再構築で必ず追随する）
+- `confirm_split_sync(project_id, episode, line_id)`: 行が分割された直後、前半の
+  `source_text`/`source_text_hash`（＋`prompt_text_hash`）を分割後のテキストへ焼き直す。
+  分割は絵の内容を変える操作ではないので、これを呼ばないと `_panel_sync` が誤って
+  stale（絵が古い）と判定する。呼び出し側（将来のUI/MCP）が分割の直後に呼ぶ
+- `orphan_line(project_id, episode, line_id)`: 削除・結合で台本から消えた行の
+  `cutout_slot_id` の使用記録（times_used）を解放し、パネルを証拠として `orphan=true`
+  にする。呼ばないと次のマニフェスト再構築まで消費が解放されないままになる
+- どちらも **入口（UI/MCP）はまだ無い**（`Docs/SUBLINE_PLAN.md` I7）。今は関数として
+  存在するだけで、既存の挙動には影響しない
 
 ### 演技スロット（2026-08-19 新規 — 画像再利用の下地）
 

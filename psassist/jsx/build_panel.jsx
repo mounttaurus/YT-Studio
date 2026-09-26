@@ -80,6 +80,12 @@ function placeBackground(doc, result, wantOverlay) {
         if (!f.exists) { continue; }
         var layer = importImage(doc, f, c.bg_id ? c.bg_id : "background");
         fitToCanvas(doc, layer);
+        // サブ行グループの寄り引きに合わせた拡大（Docs/SUBLINE_PLAN.md §8-2）。
+        // location以外（心理/コミック等のアクセント背景）は対象外＝別の場所の絵なので
+        // このグループの寄り引きに合わせる意味が無い。
+        if (bg.zoom && bg.zoom !== 1 && c.category === "location") {
+            applyBgZoom(doc, layer, bg.zoom, bg.center);
+        }
         // スマートオブジェクト化してからブラー＝スマートフィルターになる。
         // ユーザーは強度バーを動かすだけで済む（これが本機能の主目的）。
         doc.activeLayer = layer;
@@ -247,6 +253,27 @@ function fitToCanvas(doc, layer) {
         doc.width.as("px") / 2 - (b[0].as("px") + (b[2].as("px") - b[0].as("px")) / 2),
         doc.height.as("px") / 2 - (b[1].as("px") + (b[3].as("px") - b[1].as("px")) / 2)
     );
+}
+
+// fitToCanvas の後に呼ぶ（キャンバス中心=レイヤー中心が前提）。中心Cを基準にz倍した時、
+// 切り出し窓の中心QがCに来る平行移動量は t = z × (C − Q)（Docs/SUBLINE_PLAN.md §8-2）。
+// center が無ければキャンバス中心のまま拡大するだけ（中心補正なし）。
+function applyBgZoom(doc, layer, zoom, center) {
+    layer.resize(zoom * 100, zoom * 100, AnchorPosition.MIDDLECENTER);
+    var cw = doc.width.as("px");
+    var ch = doc.height.as("px");
+    var tx = 0, ty = 0;
+    if (center) {
+        tx = zoom * (cw / 2 - center[0]);
+        ty = zoom * (ch / 2 - center[1]);
+    }
+    // 背景画像の外がキャンバスからはみ出さないよう、切り出し窓を内側へ寄せる
+    var b = layer.bounds;
+    var left = b[0].as("px"), top = b[1].as("px");
+    var right = b[2].as("px"), bottom = b[3].as("px");
+    tx = Math.max(cw - right, Math.min(-left, tx));
+    ty = Math.max(ch - bottom, Math.min(-top, ty));
+    layer.translate(tx, ty);
 }
 
 function savePsd(doc, path) {
