@@ -278,10 +278,117 @@ async def import_script(project_id: str, episode_number: int, script: dict,
 
 
 async def get_script(project_id: str, episode_number: int = 1, draft: bool = True) -> dict:
-    """指定話のドラフトまたは確定済み台本を返す（import_script後の取り込み確認等に使う）。"""
+    """指定話のドラフトまたは確定済み台本を返す（import_script後の取り込み確認等に使う）。
+
+    サブ行（1行に複数の絵を当てる・Docs/SUBLINE_PLAN.md）を持つ行は lines[].parent_line_id で
+    判別できる（グループの先頭行は parent_line_id === 自分の id。無ければ普通の行）。
+    """
     return await dc.get(
         f"api/scripting/projects/{project_id}/script",
         params={"draft": draft, "episode": episode_number},
+    )
+
+
+# ─── サブ行（分ける・結合・追加・自動区切り。Docs/SUBLINE_PLAN.md §5・§9・§12・S6） ─────
+#
+# サブ行は「親を示す parent_line_id を持つ普通の行」（I1）。ドラフト・確定版の両方へ
+# 即時反映する（scripting-agent/app/core/subline_manager.py が本籍）。line_id ではなく
+# get_script が返す order（行番号）で指定する＝director/scripting-agent UIの操作と同じ単位。
+
+async def split_line(project_id: str, episode_number: int, order: int, position: int) -> dict:
+    """行を文字位置で前後に分ける（§5「分ける」・可逆WRITE）。
+
+    position は行の text をこの文字位置で前後に分ける（0 < position < 文字数）。
+    前半は元の行のIDのまま、後半は新しいサブ行として直後に挿入される
+    （戻り値の parent_line_id が2行に共通のグループID）。position は get_script で
+    確認したセリフ本文の文字数を基準に数える。句読点（。！？、）の位置に合わせると
+    自然な区切りになる。
+    """
+    return await dc.request(
+        "POST", f"api/scripting/projects/{project_id}/script/line/{order}/split",
+        params={"episode": episode_number}, json={"position": position},
+    )
+
+
+async def merge_line_with_next(project_id: str, episode_number: int, order: int) -> dict:
+    """行と次の行のセリフ本文をつなげる（§5「結合」・可逆WRITE）。
+
+    話者・セクション・グループが一致しない隣接行は結合できない（400エラー）。残るのは
+    前の行のID、次の行は削除される。生成済み音声がある場合は呼び出し側で
+    tts-agent の DELETE /projects/{id}/audio/line/{removed_line_id} による削除も検討すること
+    （このツール自体は音声を消さない）。
+    """
+    return await dc.request(
+        "POST", f"api/scripting/projects/{project_id}/script/line/{order}/merge-next",
+        params={"episode": episode_number},
+    )
+
+
+async def add_subline(project_id: str, episode_number: int, order: int,
+                      text: str = "", emotion: Optional[str] = None) -> dict:
+    """同じグループの新しいサブ行を、指定行の直後に追加する（§5「追加」・可逆WRITE）。
+
+    話者・セクションはanchor行（order で指定した行）から引き継ぐ（サブ行だけ話者を
+    変えることはできない）。emotion省略時もanchor行の値を引き継ぐ。
+    """
+    body: dict = {"text": text}
+    if emotion is not None:
+        body["emotion"] = emotion
+    return await dc.request(
+        "POST", f"api/scripting/projects/{project_id}/script/line/{order}/add-subline",
+        params={"episode": episode_number}, json=body,
+    )
+
+
+async def get_split_proposal(project_id: str, episode_number: int, order: int,
+                             limit: Optional[int] = None) -> dict:
+    """自動区切りの候補を計算する（§9-1・純粋な検査でdraftは変更しない）。
+
+    上限字数（既定55字≈12秒。§0-2の実測式）を超える行に対し、句点優先・最少分割で
+    区切り位置を提案する。戻り値 pieces[] は各片の {start,end,text,split_review}
+    （split_review=true は読点で切った箇所＝人の目で確認した方がよい）。候補が無い
+    （既に上限内、または読点も句点も無い1文）場合は pieces が空リストになる＝
+    その場合は split_line で手動の位置を指定すること。
+    """
+    params: dict = {"episode": episode_number}
+    if limit is not None:
+        params["limit"] = limit
+    return await dc.get(
+        f"api/scripting/projects/{project_id}/script/line/{order}/split-proposal",
+        params=params,
+    )
+
+
+async def apply_split_proposal(project_id: str, episode_number: int, order: int,
+                               limit: Optional[int] = None) -> dict:
+    """get_split_proposal の候補をその行1つに適用する（§9-3「行ごと」・可逆WRITE）。
+
+    最初の片は元の行のIDのまま、残りは新しいサブ行として連続追加される。候補が
+    2片未満（上限内、または区切れない）の場合は400エラーになる。
+    """
+    params: dict = {"episode": episode_number}
+    if limit is not None:
+        params["limit"] = limit
+    return await dc.request(
+        "POST", f"api/scripting/projects/{project_id}/script/line/{order}/split-apply",
+        params=params,
+    )
+
+
+async def apply_split_proposal_all(project_id: str, episode_number: int,
+                                   limit: Optional[int] = None) -> dict:
+    """話数全体で、上限字数を超える行すべてに自動区切りを適用する（§9-3「話数全体」・可逆WRITE）。
+
+    対象は呼び出し時点で上限を超えている行（適用のたびに行が増えるが、それらは対象に
+    含めない）。戻り値の applied[] が実際に区切れた行、skipped[] が区切れなかった行
+    （読点が無い等・reason に理由）。
+    """
+    params: dict = {}
+    if limit is not None:
+        params["limit"] = limit
+    return await dc.request(
+        "POST", f"api/scripting/projects/{project_id}/episodes/{episode_number}/split-apply-all",
+        params=params,
     )
 
 
@@ -1162,6 +1269,12 @@ TOOLS = [
     {"fn": regenerate_lines,     "side_effects": [S.WRITE]},
     {"fn": import_script,        "side_effects": [S.WRITE]},
     {"fn": get_script,           "side_effects": [S.READ]},
+    {"fn": split_line,           "side_effects": [S.WRITE]},
+    {"fn": merge_line_with_next, "side_effects": [S.WRITE]},
+    {"fn": add_subline,          "side_effects": [S.WRITE]},
+    {"fn": get_split_proposal,   "side_effects": [S.READ]},
+    {"fn": apply_split_proposal, "side_effects": [S.WRITE]},
+    {"fn": apply_split_proposal_all, "side_effects": [S.WRITE]},
     {"fn": generate_queries,     "side_effects": [S.WRITE]},
     {"fn": search_footage,       "side_effects": [S.WRITE, S.COST]},
     {"fn": auto_select_footage,  "side_effects": [S.WRITE]},
