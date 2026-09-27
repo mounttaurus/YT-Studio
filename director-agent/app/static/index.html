@@ -4213,9 +4213,10 @@
           <h3 style="margin-top:0">生成候補（保存するとdirect_outputに確定）</h3>
           <div style="display:flex;flex-wrap:wrap;gap:14px">
             <template x-for="c in free.candidates" :key="c.id">
-              <div :style="c.kind==='audio' ? 'width:260px' : 'width:200px'">
-                <img x-show="c.kind!=='audio'" :src="c.thumbnail_url" style="width:200px;height:auto;border-radius:6px;border:1px solid #334155">
+              <div :style="c.kind==='audio' ? 'width:260px' : (c.kind==='video' ? 'width:320px' : 'width:200px')">
+                <img x-show="c.kind!=='audio' && c.kind!=='video'" :src="c.kind!=='video' ? c.thumbnail_url : ''" style="width:200px;height:auto;border-radius:6px;border:1px solid #334155">
                 <audio x-show="c.kind==='audio'" :src="c.url" controls style="width:100%"></audio>
+                <template x-if="c.kind==='video'"><video :src="c.url" controls loop muted preload="metadata" style="width:320px;height:auto;border-radius:6px;border:1px solid #334155"></video></template>
                 <div style="font-size:10px;color:#64748b;margin:3px 0" x-text="c.provider"></div>
                 <div style="display:flex;gap:6px">
                   <button class="btn" style="flex:1;padding:4px" @click="saveFree(c)">💾保存</button>
@@ -4233,9 +4234,10 @@
           </div>
           <div style="display:flex;flex-wrap:wrap;gap:14px;margin-top:12px">
             <template x-for="o in free.outputs" :key="o.name">
-              <div :style="o.kind==='audio' ? 'width:260px' : 'width:180px'">
-                <img x-show="o.kind!=='audio'" :src="o.url" style="width:180px;height:auto;border-radius:6px;border:1px solid #334155">
+              <div :style="o.kind==='audio' ? 'width:260px' : (o.kind==='video' ? 'width:320px' : 'width:180px')">
+                <img x-show="o.kind!=='audio' && o.kind!=='video'" :src="o.kind!=='video' ? o.url : ''" style="width:180px;height:auto;border-radius:6px;border:1px solid #334155">
                 <audio x-show="o.kind==='audio'" :src="o.url" controls style="width:100%"></audio>
+                <template x-if="o.kind==='video'"><video :src="o.url" controls loop muted preload="metadata" style="width:320px;height:auto;border-radius:6px;border:1px solid #334155"></video></template>
                 <div style="font-size:10px;color:#94a3b8;margin:3px 0;word-break:break-all" x-text="o.name"></div>
                 <div style="display:flex;gap:6px">
                   <button class="btn-ghost" style="flex:1;padding:4px" @click="downloadFree(o)">⬇保存</button>

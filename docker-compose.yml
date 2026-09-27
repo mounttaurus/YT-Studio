@@ -116,6 +116,11 @@ services:
       # quality=高品質版（grok-imagine-image=安価版）。t2i/i2i 共通。
       - GROK_IMAGE_MODEL=grok-imagine-image-quality
       - GROK_EDIT_MODEL=grok-imagine-image-quality
+      # 動画（自由生成・MCP free_video）。grok-imagine-video=安価版（720pまで）。
+      # 1本あたりの費用上限は .env の VIDEO_MAX_COST_USD（未設定=3.0ドル）。
+      - GROK_VIDEO_MODEL=grok-imagine-video-1.5
+      # Veo（Gemini API・鍵はGEMINI_API_KEY共通）。lite=最安 / fast / veo-3.1-generate-preview=標準。
+      - VEO_VIDEO_MODEL=veo-3.1-lite-generate-preview
     volumes:
       - ./shared:/shared
       # SD/LoRA/VAE はホストの imagegen-agent/models をユーザーが直接管理（UIのURL投入でここに保存）

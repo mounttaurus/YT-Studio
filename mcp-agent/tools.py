@@ -11,7 +11,11 @@ ask で守るが、後継ではこの分類を根拠にツール層自身が確�
 パラメータ名は実コードのリクエストモデルに厳密に合わせている（推測でAPIを作らない）:
   generate→GenerateRequest / search→SearchRequest / select→SelectRequest / edit→EditRunRequest 等。
 """
+import asyncio
+import base64
+import time
 from enum import Enum
+from pathlib import Path
 from typing import Optional
 
 import director_client as dc
@@ -651,9 +655,63 @@ async def free_tts(text: str, voice: str, caption: str = "", emotion: str = "neu
 
 
 async def free_save(name: str, save_name: str = "") -> dict:
-    """staging の候補(name)を direct_output/ に確定保存する。save_name は任意の確定名。"""
+    """staging の候補(name・画像/音声/動画)を direct_output/ に確定保存する。save_name は任意の確定名。"""
     return await dc.request("POST", "api/scrapping/imagegen/free/save",
                             json={"name": name, "save_name": save_name})
+
+
+async def free_video(prompt: str, provider: str = "grok", image_path: str = "",
+                     image_name: str = "", last_frame_path: str = "", last_frame_name: str = "",
+                     duration: int = 0, resolution: str = "720p", aspect: str = "16:9",
+                     audio: bool = False, model: str = "",
+                     confirm_cost: bool = False) -> dict:
+    """動画を1本生成する（外部API課金）。静止画を渡せば i2v、無ければ t2v。
+
+    **2段階で使う**: まず confirm_cost=False で呼ぶと課金せず費用の目安(estimate.usd)だけ返る。
+    ユーザーに金額を伝えて了承を得てから、同じ引数＋confirm_cost=True で再度呼ぶと投入される。
+    投入後は job_id が返るので free_video_status(job_id) で完成を待つ（実測 約35秒）。
+    完成品は staging 候補(mp4)になり、確定保存は free_save（生成条件のJSONも一緒に運ばれる）。
+
+    provider:
+      - "grok"（Grok Imagine Video）: 1-15秒・480p/720p/1080p・縦横比7種・audio選択可。
+        カメラの動きの指示がよく効く。実費 1.5・720p で約$0.142/秒（5秒≈$0.71・表示価格の約1.8倍）。
+        model 空=grok-imagine-video-1.5 / 安価版 "grok-imagine-video"（720pまで）。
+      - "veo"（Google Veo 3.1・GEMINI_API_KEY）: 4/6/8秒・720p/1080p(8秒必須)・16:9/9:16のみ・
+        **常に音声付き**。表示価格 lite $0.05/秒・fast $0.10/秒・標準 $0.40/秒（720p）。安いが
+        カメラ指示が効きにくくポーズが動きやすい（実測）。応答に費用が無い＝実費はGoogleの請求画面で確認。
+        model 空=veo-3.1-lite-generate-preview / "veo-3.1-fast-generate-preview" / "veo-3.1-generate-preview"。
+        **last_frame（最後の絵）を渡すと 最初の絵→最後の絵 をつなぐ補間動画**になる（カット間のつなぎ向け）。
+    image_path / last_frame_path: ホスト上の画像パス（MCPサーバーが読んで送る）。
+    image_name / last_frame_name: direct_output/ か _staging/ にある既存画像名。各々どちらか一方。
+    duration: 0=プロバイダの既定（grok 5秒 / veo 4秒）。
+    1本の上限は VIDEO_MAX_COST_USD（既定$3）で、超える指定は confirm しても拒否される。COST分類。
+    """
+    body = {"prompt": prompt, "provider": provider, "model": model, "duration": duration or None,
+            "resolution": resolution, "aspect": aspect, "audio": audio,
+            "image_name": image_name, "last_frame_name": last_frame_name,
+            "confirm_cost": confirm_cost}
+    for key, path in (("image_b64", image_path), ("last_frame_b64", last_frame_path)):
+        if path:
+            p = Path(path)
+            if not p.is_file():
+                return {"error": f"file not found: {path}"}
+            body[key] = base64.b64encode(p.read_bytes()).decode()
+    return await dc.request("POST", "api/scrapping/imagegen/free/video/generate", json=body)
+
+
+async def free_video_status(job_id: str, wait_seconds: int = 180) -> dict:
+    """free_video のジョブ状態を返す。wait_seconds の間 5秒おきに確認し、完了/失敗で即返す。
+
+    status: pending/done/failed/expired/error。done なら candidate(staging の mp4 名・URL)と
+    cost_usd(実費)が入る。wait_seconds=0 なら1回だけ確認する。
+    """
+    deadline = time.monotonic() + max(0, wait_seconds)
+    while True:
+        # 完成時はこの呼び出し内で mp4(数MB)を取り込むので、読み取り用の短いタイムアウトは使わない
+        job = await dc.request("GET", f"api/scrapping/imagegen/free/video/jobs/{job_id}")
+        if not isinstance(job, dict) or job.get("status") != "pending" or time.monotonic() >= deadline:
+            return job
+        await asyncio.sleep(5)
 
 
 # ── 紙芝居パネル（character panel / 台本→キャラ画像の橋渡し） ──────────
@@ -1327,6 +1385,8 @@ TOOLS = [
     {"fn": free_audio,           "side_effects": [S.COST]},
     {"fn": free_tts,             "side_effects": [S.GPU]},
     {"fn": free_save,            "side_effects": [S.WRITE]},
+    {"fn": free_video,           "side_effects": [S.COST, S.ASYNC]},
+    {"fn": free_video_status,    "side_effects": [S.WRITE]},
     # リサーチ（探索→蒸留→ラフ台本）
     {"fn": research_list_sources, "side_effects": [S.READ]},
     {"fn": research_search,      "side_effects": [S.COST]},

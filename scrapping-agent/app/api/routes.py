@@ -1,4 +1,5 @@
 import asyncio
+import base64
 import io
 import json
 import os
@@ -28,6 +29,7 @@ from app.core import (
     comfy_client,
     cutout_selector,
     grok_image_client,
+    grok_video_client,
     lyria_client,
     model_downloader,
     nanobanana_client,
@@ -38,6 +40,7 @@ from app.core import (
     project_manager,
     query_generator,
     runware_client,
+    veo_video_client,
     style_manager,
     vecteezy_client,
 )
@@ -164,6 +167,7 @@ async def health():
         "ai_reachable": await comfy_client.is_reachable(),
         "nanobanana_configured": nanobanana_client.is_configured(),
         "grok_configured": grok_image_client.is_configured(),
+        "video_max_cost_usd": _video_max_cost(),
     }
 
 
@@ -746,15 +750,22 @@ DIRECT_OUTPUT = project_manager.SHARED_DIR / "direct_output"
 FREE_STAGING = DIRECT_OUTPUT / "_staging"  # 未保存の生成候補（ephemeral）
 FREE_IMAGE_EXTS = {".png", ".jpg", ".jpeg", ".webp"}
 FREE_AUDIO_EXTS = {".mp3", ".wav", ".ogg", ".m4a"}
-FREE_MEDIA_EXTS = FREE_IMAGE_EXTS | FREE_AUDIO_EXTS
+FREE_VIDEO_EXTS = {".mp4"}
+FREE_MEDIA_EXTS = FREE_IMAGE_EXTS | FREE_AUDIO_EXTS | FREE_VIDEO_EXTS
 _MEDIA_MIME = {
     ".png": "image/png", ".jpg": "image/jpeg", ".jpeg": "image/jpeg", ".webp": "image/webp",
     ".mp3": "audio/mpeg", ".wav": "audio/wav", ".ogg": "audio/ogg", ".m4a": "audio/mp4",
+    ".mp4": "video/mp4",
 }
 
 
 def _kind_of(name: str) -> str:
-    return "audio" if Path(name).suffix.lower() in FREE_AUDIO_EXTS else "image"
+    ext = Path(name).suffix.lower()
+    if ext in FREE_AUDIO_EXTS:
+        return "audio"
+    if ext in FREE_VIDEO_EXTS:
+        return "video"
+    return "image"
 
 
 def _free_candidate(name: str, provider: str, prompt: str) -> dict:
@@ -1017,6 +1028,174 @@ async def free_audio_generate(req: FreeAudioRequest):
     return {"provider": "lyria", "prompt": prompt, "candidates": [_free_candidate(name, "lyria", prompt)]}
 
 
+# ── 自由生成: 動画（Grok Imagine Video / Veo・非同期ジョブ） ─────────
+# 投入→request_id（Grokは request_id、Veoは operation 名）を _staging/_video_jobs/{job_id}.json に
+# 記録し、状態確認(GET)のたびにプロバイダへ1回だけ問い合わせる（バックグラウンドタスクを持たない＝
+# 再起動・--reload でジョブが消えない）。プロバイダの差は *_video_client の同じ形の関数に閉じ込める。
+# 課金ガード: confirm_cost=false なら費用の目安だけ返して投入しない。上限 VIDEO_MAX_COST_USD を超える
+# 指定は confirm しても拒否する。完成した mp4 は staging 候補になり、確定は既存の free_save。
+
+FREE_VIDEO_JOBS = FREE_STAGING / "_video_jobs"
+_video_job_lock = asyncio.Lock()
+_VIDEO_CLIENTS = {"grok": grok_video_client, "veo": veo_video_client}
+_VIDEO_KEY_NAME = {"grok": "GROK_API_KEY", "veo": "GEMINI_API_KEY"}
+
+
+class FreeVideoRequest(BaseModel):
+    prompt: str
+    provider: str = "grok"         # grok | veo
+    model: str = ""                # 空ならプロバイダの既定（GROK_VIDEO_MODEL / VEO_VIDEO_MODEL）
+    duration: Optional[int] = None # 秒。空ならプロバイダの既定（grok=5 / veo=4）
+    resolution: str = "720p"
+    aspect: str = "16:9"
+    audio: bool = False            # grok のみ有効（veo は常に音声付き）
+    image_b64: str = ""            # 最初の絵（base64 / data URI）。あれば i2v
+    image_name: str = ""           # 最初の絵を direct_output/ か _staging/ の既存画像名で
+    last_frame_b64: str = ""       # 最後の絵（veo のみ）。最初→最後をつなぐ補間動画
+    last_frame_name: str = ""
+    confirm_cost: bool = False     # true の時だけ実際に投入（課金）する
+
+
+def _video_max_cost() -> float:
+    try:
+        return float(os.getenv("VIDEO_MAX_COST_USD", "3.0"))
+    except ValueError:
+        return 3.0
+
+
+def _normalize_video_input_image(data: bytes) -> tuple[bytes, str]:
+    """動画APIが受ける jpg/png に揃える。それ以外（webp等）は PNG へ変換。"""
+    if data[:8] == b"\x89PNG\r\n\x1a\n":
+        return data, "image/png"
+    if data[:3] == b"\xff\xd8\xff":
+        return data, "image/jpeg"
+    from PIL import Image
+    buf = io.BytesIO()
+    Image.open(io.BytesIO(data)).convert("RGB").save(buf, format="PNG")
+    return buf.getvalue(), "image/png"
+
+
+def _load_video_input_image(b64: str, name: str, label: str) -> Optional[bytes]:
+    if b64:
+        raw = b64.split(",", 1)[1] if b64.startswith("data:") else b64
+        try:
+            return base64.b64decode(raw)
+        except Exception:
+            raise HTTPException(status_code=400, detail=f"{label}_b64 is not valid base64")
+    if name:
+        fname = Path(name).name
+        for base in (DIRECT_OUTPUT, FREE_STAGING):
+            f = (base / fname).resolve()
+            if f.is_relative_to(base.resolve()) and f.is_file() and f.suffix.lower() in FREE_IMAGE_EXTS:
+                return f.read_bytes()
+        raise HTTPException(status_code=404, detail=f"{label} not found in direct_output/_staging: {fname}")
+    return None
+
+
+def _video_job_path(job_id: str) -> Path:
+    if not job_id.isalnum():
+        raise HTTPException(status_code=400, detail="invalid job_id")
+    return FREE_VIDEO_JOBS / f"{job_id}.json"
+
+
+@router.post("/imagegen/free/video/generate")
+async def free_video_generate(req: FreeVideoRequest):
+    """動画を1本生成するジョブを投入する（confirm_cost=false なら費用の目安だけ返す）。"""
+    prompt = (req.prompt or "").strip()
+    if not prompt:
+        raise HTTPException(status_code=400, detail="prompt is empty")
+    client = _VIDEO_CLIENTS.get(req.provider)
+    if client is None:
+        raise HTTPException(status_code=400, detail=f"unknown video provider: {req.provider}（{', '.join(_VIDEO_CLIENTS)}）")
+    if not client.is_configured():
+        raise HTTPException(status_code=400, detail=f"{req.provider} ({_VIDEO_KEY_NAME[req.provider]}) is not configured")
+    model = req.model or client.VIDEO_MODEL
+    duration = req.duration or client.DEFAULT_SEC
+    err = client.validate(model, duration, req.resolution, req.aspect)
+    if err:
+        raise HTTPException(status_code=400, detail=err)
+    image = _load_video_input_image(req.image_b64, req.image_name, "image")
+    last_frame = _load_video_input_image(req.last_frame_b64, req.last_frame_name, "last_frame")
+    if last_frame and req.provider != "veo":
+        raise HTTPException(status_code=400, detail="last_frame は veo のみ対応")
+    if last_frame and not image:
+        raise HTTPException(status_code=400, detail="last_frame を使う時は最初の絵(image)も必要")
+    est = client.estimate_usd(model, duration, req.resolution)
+    cap = _video_max_cost()
+    mode = "interp" if last_frame else ("i2v" if image else "t2v")
+    params = {"provider": req.provider, "model": model, "duration": duration,
+              "resolution": req.resolution, "aspect": req.aspect,
+              "audio": True if req.provider == "veo" else req.audio,
+              "mode": mode, "image_name": req.image_name or None,
+              "last_frame_name": req.last_frame_name or None}
+    if est["usd"] > cap:
+        raise HTTPException(status_code=400, detail=(
+            f"estimated ${est['usd']} exceeds VIDEO_MAX_COST_USD=${cap}（秒数か解像度を下げる）"))
+    if not req.confirm_cost:
+        kind = "実測" if est["measured"] else "推定・表示価格"
+        return {"needs_confirmation": True, "estimate": est, "max_cost_usd": cap, "params": params,
+                "message": f"約 ${est['usd']}（{kind}）。実行するには confirm_cost=true で再送する。"}
+
+    mime = lf_mime = "image/png"
+    if image:
+        image, mime = _normalize_video_input_image(image)
+    kwargs = {}
+    if last_frame:
+        last_frame, lf_mime = _normalize_video_input_image(last_frame)
+        kwargs = {"last_frame": last_frame, "last_frame_mime": lf_mime}
+    try:
+        request_id = await client.submit(
+            prompt, image=image, image_mime=mime, model=model, duration=duration,
+            resolution=req.resolution, aspect=req.aspect, audio=req.audio, **kwargs)
+    except Exception as e:
+        raise HTTPException(status_code=502, detail=f"video submit failed: {e}")
+    job_id = uuid.uuid4().hex[:12]
+    job = {"job_id": job_id, "request_id": request_id, "status": "pending", "prompt": prompt,
+           "params": params, "estimate": est, "cost_usd": None, "candidate": None, "error": None,
+           "submitted_at": datetime.now(timezone.utc).isoformat()}
+    FREE_VIDEO_JOBS.mkdir(parents=True, exist_ok=True)
+    _video_job_path(job_id).write_text(json.dumps(job, ensure_ascii=False, indent=2), encoding="utf-8")
+    return job
+
+
+@router.get("/imagegen/free/video/jobs/{job_id}")
+async def free_video_job(job_id: str):
+    """ジョブの状態を返す。未完了ならプロバイダに1回問い合わせ、完成していれば mp4 を staging へ取り込む。"""
+    path = _video_job_path(job_id)
+    if not path.is_file():
+        raise HTTPException(status_code=404, detail=f"video job not found: {job_id}")
+    async with _video_job_lock:
+        job = json.loads(path.read_text(encoding="utf-8"))
+        client = _VIDEO_CLIENTS.get(job["params"].get("provider", "grok"), grok_video_client)
+        if job["status"] == "pending":
+            st = await client.poll(job["request_id"])
+            if st["status"] == "done" and st.get("url"):
+                try:
+                    data = await client.download(st["url"])
+                except Exception as e:
+                    job["error"] = f"download failed (retry by polling again): {e}"
+                else:
+                    name = f"free_{uuid.uuid4().hex[:12]}.mp4"
+                    FREE_STAGING.mkdir(parents=True, exist_ok=True)
+                    (FREE_STAGING / name).write_bytes(data)
+                    job.update(status="done", cost_usd=st.get("cost_usd"), error=None,
+                               candidate=name, duration=st.get("duration"),
+                               finished_at=datetime.now(timezone.utc).isoformat())
+                    # 生成条件は mp4 に埋め込めないので横に JSON を置く（free_save が一緒に運ぶ）
+                    (FREE_STAGING / f"{name}.json").write_text(json.dumps(
+                        {"prompt": job["prompt"], **job["params"], "cost_usd": job["cost_usd"],
+                         "estimate_usd": job["estimate"].get("usd"),
+                         "request_id": job["request_id"], "finished_at": job["finished_at"]},
+                        ensure_ascii=False, indent=2), encoding="utf-8")
+            elif st["status"] in ("failed", "expired", "error"):
+                job.update(status=st["status"], error=st.get("raw_error"))
+            path.write_text(json.dumps(job, ensure_ascii=False, indent=2), encoding="utf-8")
+    out = dict(job)
+    if job.get("candidate"):
+        out["candidate"] = _free_candidate(job["candidate"], job["params"]["provider"], job["prompt"])
+    return out
+
+
 class FreeSaveRequest(BaseModel):
     name: str                 # staging のファイル名
     save_name: str = ""       # 任意の確定名（拡張子・区切りは無視）
@@ -1037,6 +1216,9 @@ async def free_save(req: FreeSaveRequest):
         dest = DIRECT_OUTPUT / f"{base}_{idx}{ext}"
         idx += 1
     shutil.move(str(src), str(dest))
+    sidecar = src.with_name(f"{src.name}.json")  # 動画の生成条件（mp4には埋め込めない）
+    if sidecar.is_file():
+        shutil.move(str(sidecar), str(dest.with_name(f"{dest.name}.json")))
     return {"saved": dest.name, "url": f"{SCRAP_PUBLIC_URL}/imagegen/free/file/{dest.name}"}
 
 
@@ -1083,6 +1265,7 @@ async def free_discard_staging(filename: str):
     if not f.is_relative_to(FREE_STAGING.resolve()) or not f.is_file():
         raise HTTPException(status_code=404, detail=f"staging file not found: {filename}")
     f.unlink()
+    f.with_name(f"{f.name}.json").unlink(missing_ok=True)
     return {"discarded": filename}
 
 
@@ -1093,6 +1276,7 @@ async def free_delete_output(filename: str):
     if not f.is_relative_to(DIRECT_OUTPUT.resolve()) or f.parent != DIRECT_OUTPUT.resolve() or not f.is_file():
         raise HTTPException(status_code=404, detail=f"file not found: {filename}")
     f.unlink()
+    f.with_name(f"{f.name}.json").unlink(missing_ok=True)
     return {"deleted": filename}
 
 
