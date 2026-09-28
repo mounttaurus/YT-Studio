@@ -622,9 +622,23 @@ async def import_script(
                    "最終行1件に潰れて表示される）",
         )
 
+    dups = subline_manager.duplicate_line_ids(script)
+    if dups:
+        raise HTTPException(
+            status_code=400,
+            detail=f"script.lines[].id が重複しています: {', '.join(dups)}（行の主キーは一意であること）",
+        )
+
     script.setdefault("project_id", project_id)
     script.setdefault("schema_version", "1.0.0")
     script.setdefault("metadata", {})
+    # サブ行の連番カウンタは既存docから最大値で引き継ぐ（I3）。Undo・外部取込みが古い
+    # metadataで書き戻すと、カウンタが巻き戻って次の分割が既存IDと衝突するため
+    subline_manager.merge_subline_seq(
+        script,
+        [project_manager.read_draft(project_id, episode_number),
+         project_manager.read_script(project_id, episode_number)],
+    )
     script["metadata"]["style_name"] = req.style_name or "オリジナル"
     if req.estimated_duration_sec is not None:
         script["metadata"]["estimated_duration_sec"] = req.estimated_duration_sec

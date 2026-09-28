@@ -195,11 +195,51 @@ def subline_id(parent_id: str, n: int) -> str:
 
 
 def peek_subline_seq(docs: list[Optional[dict]], parent_id: str) -> int:
-    """draft/script等、複数docを通した現在のカウンタ最大値（未記録なら0）。"""
-    return max(
-        (int(((d.get("metadata") or {}).get("subline_seq") or {}).get(parent_id, 0)) for d in docs if d),
-        default=0,
-    )
+    """draft/script等、複数docを通した現在のカウンタ最大値（未記録なら0）。
+
+    カウンタだけでなく**実在する `{parent_id}_s{n}` のnも見る**。台本の全体書き戻し
+    （importやUndo）でカウンタが古い値に戻る/消えると、カウンタだけを信じた採番は
+    既存行と同じIDを発番してしまう（2026-09-28 本番で line_082_s1・line_103_s1 が重複し、
+    TTSタブの x-for :key が2行目を潰した）。
+    """
+    pat = re.compile(rf"^{re.escape(parent_id)}_s(\d+)$")
+    counters = [
+        int(((d.get("metadata") or {}).get("subline_seq") or {}).get(parent_id, 0)) for d in docs if d
+    ]
+    existing = [
+        int(m.group(1))
+        for d in docs if d
+        for l in d.get("lines", [])
+        if (m := pat.match(l.get("id") or ""))
+    ]
+    return max(counters + existing, default=0)
+
+
+def merge_subline_seq(target: dict, sources: list[Optional[dict]]) -> None:
+    """sourcesのカウンタをtargetへ最大値で合流させる（減らさない＝I3）。
+    台本の全体書き戻し（import・Undo）が古いmetadataでカウンタを巻き戻さないための口。
+    """
+    seq = target.setdefault("metadata", {}).setdefault("subline_seq", {})
+    for d in sources:
+        for pid, n in (((d or {}).get("metadata") or {}).get("subline_seq") or {}).items():
+            seq[pid] = max(int(seq.get(pid, 0)), int(n))
+    for l in target.get("lines", []):
+        pid = l.get("parent_line_id")
+        if pid:
+            seq[pid] = max(int(seq.get(pid, 0)), peek_subline_seq([target], pid))
+    if not seq:
+        target["metadata"].pop("subline_seq")
+
+
+def duplicate_line_ids(doc: dict) -> list[str]:
+    """同じidを持つ行があれば、そのidの一覧（行の主キーが壊れている＝UIのx-forが行を潰す）。"""
+    seen, dups = set(), []
+    for l in doc.get("lines", []):
+        lid = l.get("id")
+        if lid in seen and lid not in dups:
+            dups.append(lid)
+        seen.add(lid)
+    return dups
 
 
 def allocate_subline_seq(docs: list[Optional[dict]], parent_id: str, count: int) -> list[int]:
