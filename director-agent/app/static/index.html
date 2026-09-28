@@ -321,6 +321,16 @@
     }
     .back-to-top-btn:hover { background: #6d28d9; }
 
+    /* TTSタブ: 長尺でも先頭へ戻らず操作できる浮動再生バー（上に戻るボタン＝右下と被らないよう下中央） */
+    .tts-float-bar {
+      position: fixed; left: 50%; bottom: 24px; transform: translateX(-50%); z-index: 40;
+      display: flex; align-items: center; gap: 6px; padding: 8px 12px;
+      background: rgba(17,19,28,0.96); border: 1px solid #4c1d95; border-radius: 999px;
+      box-shadow: 0 6px 18px rgba(0,0,0,0.5); max-width: calc(100vw - 140px); white-space: nowrap;
+    }
+    .tts-float-bar .btn { padding: 4px 10px; }
+    .tts-float-bar .tts-float-label { font-size: 12px; color: #a5b4fc; overflow: hidden; text-overflow: ellipsis; }
+
     /* TTSタブ: 全行再生で現在再生中の行をハイライト */
     .tts-line-playing { border-color: #7c3aed !important; background: #1b1430 !important; box-shadow: 0 0 0 2px rgba(124,58,237,0.45); }
   </style>
@@ -1840,7 +1850,7 @@
                   </div>
 
                   <!-- 翻訳言語モード: 読み取り専用の簡易行リスト（テキスト編集は🌐多言語カードで） -->
-                  <div x-show="ttsLang" style="display:flex;flex-direction:column;gap:6px">
+                  <div x-show="ttsLang" style="display:flex;flex-direction:column;gap:6px;padding-bottom:72px">
                     <template x-for="line in ttsLangScript?.lines || []" :key="line.id">
                       <div class="audio-line-row" :id="'ttsline-' + line.id" style="align-items:flex-start"
                            :class="{ 'tts-line-playing': ttsPlayingLineId === line.id }">
@@ -1878,7 +1888,7 @@
                     </template>
                   </div>
 
-                  <div x-show="!ttsLang" style="display:flex;flex-direction:column;gap:6px">
+                  <div x-show="!ttsLang" style="display:flex;flex-direction:column;gap:6px;padding-bottom:72px">
                     <template x-for="line in draft?.lines || []" :key="line.id">
                       <div class="audio-line-row" :id="'ttsline-' + line.id" style="align-items:flex-start"
                            :class="{ 'tts-line-playing': ttsPlayingLineId === line.id }"
@@ -4504,6 +4514,27 @@
     </template>
 
   </div>
+</div>
+
+<!-- 🎧 TTSタブの浮動再生バー（上の再生制御欄と同じ関数を呼ぶ複製。長尺台本で先頭へ戻らずに操作するため） -->
+<div class="tts-float-bar" x-show="tab === 'tts' && ttsPlayAllHasAnyAudio()" x-cloak>
+  <button class="btn btn-primary btn-sm" x-show="!ttsPlayAllActive" @click="playAllLines()" :disabled="ttsRunning"
+          title="先頭から全行再生">▶ 全行</button>
+  <button class="btn btn-ghost btn-sm" x-show="!ttsPlayAllActive && ttsResumeTarget()" @click="resumePlayAll()" :disabled="ttsRunning"
+          title="前回止めた行から再生（Space）" x-text="`⏯ 続きから (#${ttsResumeTarget()?.order ?? ''})`"></button>
+  <button class="btn btn-ghost btn-sm" x-show="ttsPlayAllActive" @click="ttsPlayAllStep(-1)" :disabled="_ttsPlayAllIndex <= 0"
+          title="前の行（←）">⏮</button>
+  <button class="btn btn-ghost btn-sm" x-show="ttsPlayAllActive" @click="ttsPlayAllTogglePause()"
+          title="一時停止／再開（Space）" x-text="ttsPlayAllPaused ? '▶ 再開' : '⏸'"></button>
+  <button class="btn btn-ghost btn-sm" x-show="ttsPlayAllActive" @click="ttsPlayAllStep(1)" :disabled="_ttsPlayAllIndex >= _ttsPlayAllQueue.length - 1"
+          title="次の行（→）">⏭</button>
+  <button class="btn btn-ghost btn-sm" x-show="ttsPlayAllActive" @click="stopPlayAll()" title="再生停止">⏹</button>
+  <span class="tts-float-label" x-show="ttsPlayAllActive">
+    <span x-text="ttsPlayingLineLabel()"></span>
+    <span style="color:#6b7280" x-text="`(${_ttsPlayAllIndex + 1}/${_ttsPlayAllQueue.length})`"></span>
+  </span>
+  <button class="btn btn-ghost btn-sm" x-show="ttsPlayAllActive" @click="ttsScrollToPlayingLine()"
+          title="再生中の行までスクロール">🎯</button>
 </div>
 
 <!-- 📚 キャラ在庫 詳細ビュー（背景付き/切り抜き両方を並べて見せる。旧✂️切り抜き詳細を統合拡張） -->
@@ -11128,6 +11159,10 @@ function app() {
     },
     ttsPlayAllHasAnyAudio() {
       return this._ttsPlayAllLines().some(l => this.ttsEntryFor(l));
+    },
+    ttsScrollToPlayingLine() {
+      const el = this.ttsPlayingLineId && document.getElementById('ttsline-' + this.ttsPlayingLineId);
+      if (el) el.scrollIntoView({ behavior: 'smooth', block: 'center' });
     },
     ttsPlayingLineLabel() {
       if (!this.ttsPlayingLineId) return '';
