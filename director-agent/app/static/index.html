@@ -1794,15 +1794,27 @@
                     </button>
                     <button class="btn btn-danger" @click="cancelTtsRun()" :disabled="!ttsRunning">⏸ 中断</button>
                     <span style="width:1px;height:20px;background:#374151"></span>
-                    <button class="btn btn-primary" @click="playAllLines()"
+                    <button class="btn btn-primary" @click="playAllLines()" @keydown.window="ttsPlayAllKeydown($event)"
                             :disabled="ttsPlayAllActive || ttsRunning || !ttsPlayAllHasAnyAudio()"
                             title="生成済みの音声を先頭から順に自動再生します（各行の再生ボタンとは別機能）">
                       ▶ 全行再生
                     </button>
+                    <button class="btn btn-ghost" x-show="!ttsPlayAllActive && ttsResumeTarget()"
+                            @click="resumePlayAll()" :disabled="ttsRunning"
+                            title="前回止めた行から再生します（話数ごとに記録／Spaceキーでも可）"
+                            x-text="`⏯ 続きから (#${ttsResumeTarget()?.order ?? ''})`"></button>
+                    <button class="btn btn-ghost" @click="ttsPlayAllStep(-1)" :disabled="!ttsPlayAllActive || _ttsPlayAllIndex <= 0"
+                            title="前の行（←キー）">⏮</button>
+                    <button class="btn btn-ghost" @click="ttsPlayAllTogglePause()" :disabled="!ttsPlayAllActive"
+                            title="一時停止／再開（Spaceキー）" x-text="ttsPlayAllPaused ? '▶ 再開' : '⏸ 一時停止'"></button>
+                    <button class="btn btn-ghost" @click="ttsPlayAllStep(1)" :disabled="!ttsPlayAllActive || _ttsPlayAllIndex >= _ttsPlayAllQueue.length - 1"
+                            title="次の行（→キー）">⏭</button>
                     <button class="btn btn-ghost" @click="stopPlayAll()" :disabled="!ttsPlayAllActive">⏹ 再生停止</button>
                     <span x-show="ttsPlayAllActive" style="font-size:12px;color:#a5b4fc">
-                      ▶ 再生中: <span x-text="ttsPlayingLineLabel()"></span>
+                      <span x-text="ttsPlayAllPaused ? '⏸ 一時停止中' : '▶ 再生中'"></span>: <span x-text="ttsPlayingLineLabel()"></span>
+                      <span style="color:#6b7280" x-text="`(${_ttsPlayAllIndex + 1}/${_ttsPlayAllQueue.length})`"></span>
                     </span>
+                    <span x-show="!ttsPlayAllActive" style="font-size:11px;color:#6b7280">Space 再生/一時停止・←→ 前後の行</span>
                   </div>
 
                   <!-- 進捗・ログ -->
@@ -1854,6 +1866,9 @@
                           </template>
                         </div>
                         <div style="display:flex;flex-direction:column;gap:4px;flex-shrink:0">
+                          <button class="btn btn-ghost btn-sm" style="white-space:nowrap"
+                                  @click="playAllLines(line.id)" :disabled="!ttsEntryFor(line) || ttsRunning"
+                                  title="この行から最後まで順に再生します">▶ ここから再生</button>
                           <button class="btn btn-ghost btn-sm" style="white-space:nowrap"
                                   @click="regenSingleLine(line.id)"
                                   :disabled="regeneratingLineId === line.id || ttsRunning || !currentEpisodeHasScript"
@@ -1953,6 +1968,9 @@
 
                         <!-- 右: 行操作 -->
                         <div style="display:flex;flex-direction:column;gap:4px;flex-shrink:0" @click.stop>
+                          <button class="btn btn-ghost btn-sm" style="white-space:nowrap"
+                                  @click="playAllLines(line.id)" :disabled="!ttsEntryFor(line) || ttsRunning"
+                                  title="この行から最後まで順に再生します">▶ ここから再生</button>
                           <button class="btn btn-ghost btn-sm" style="white-space:nowrap"
                                   @click="regenSingleLine(line.id)"
                                   :disabled="regeneratingLineId === line.id || ttsRunning || !currentEpisodeHasScript"
@@ -5853,11 +5871,14 @@ function app() {
     ttsLogId: 0,
     audioVersion: 0,
     // 全行再生（既存の各行再生ボタンとは別の追加機能）
-    ttsPlayAllActive: false,
+    ttsPlayAllActive: false,     // キューを持っている間true（一時停止中もtrue）
+    ttsPlayAllPaused: false,
     ttsPlayingLineId: null,
+    ttsResumeVersion: 0,         // 「続きから」の記録（localStorage）を読み直させるための反応用カウンタ
     _ttsPlayAllQueue: [],
     _ttsPlayAllIndex: 0,
     _ttsPlayAllAudio: null,
+    _ttsPlayAllKey: '',          // 再生開始時の project/話/言語（途中で話を切り替えても記録先がずれない）
     regeneratingLineId: null,
     // 多言語（TTSタブの言語セレクタ・Docs/08_i18n.md §8b W3）
     ttsLang: '',
@@ -10990,14 +11011,24 @@ function app() {
 
     // ── 全行再生（既存の各行「🎙 この行を生成」隣の<audio>とは独立。順に自動再生し、
     //    再生中の行へ自動スクロール＋ハイライトする） ──
-    playAllLines() {
-      const lines = (this.ttsLang ? this.ttsLangScript?.lines : this.draft?.lines) || [];
+    //    ⏮/⏭で前後の行へ、⏸で一時停止、停止しても最後に鳴らした行を話数ごとに覚えて
+    //    「続きから」で再開できる。キーボード: Space=一時停止/再開（未再生なら続きから）、←/→=前後の行
+    _ttsPlayAllLines() {
+      return (this.ttsLang ? this.ttsLangScript?.lines : this.draft?.lines) || [];
+    },
+    _ttsResumeStorageKey() {
+      if (!this.currentProject) return '';
+      return `ttsResume:${this.currentProject.id}:${this.activeEpisodeNumber || 1}:${this.ttsLang || ''}`;
+    },
+    playAllLines(fromLineId = null) {
+      const lines = this._ttsPlayAllLines();
       const queue = lines.filter(l => this.ttsEntryFor(l)).map(l => l.id);
       if (!queue.length) return;
       this.stopPlayAll();
       this.ttsPlayAllActive = true;
+      this._ttsPlayAllKey = this._ttsResumeStorageKey();
       this._ttsPlayAllQueue = queue;
-      this._ttsPlayAllIndex = 0;
+      this._ttsPlayAllIndex = Math.max(0, fromLineId ? queue.indexOf(fromLineId) : 0);
       this._playNextInPlayAllQueue();
     },
     _playNextInPlayAllQueue() {
@@ -11007,39 +11038,100 @@ function app() {
       }
       const lineId = this._ttsPlayAllQueue[this._ttsPlayAllIndex];
       this.ttsPlayingLineId = lineId;
+      this.ttsPlayAllPaused = false;
+      this._saveTtsResume(lineId);
       this.$nextTick(() => {
         const el = document.getElementById('ttsline-' + lineId);
         if (el) el.scrollIntoView({ behavior: 'smooth', block: 'center' });
       });
+      const audio = new Audio(this.episodeAudioUrl({ line_id: lineId }));
+      // 前後移動・一時停止で差し替え/中断された古いaudioのイベント（play()のAbortError含む）では進めない
       const advance = () => {
-        if (!this.ttsPlayAllActive) return;
+        if (!this.ttsPlayAllActive || this.ttsPlayAllPaused || this._ttsPlayAllAudio !== audio) return;
         this._ttsPlayAllIndex++;
         this._playNextInPlayAllQueue();
       };
-      const audio = new Audio(this.episodeAudioUrl({ line_id: lineId }));
       this._ttsPlayAllAudio = audio;
       audio.onended = advance;
       audio.onerror = advance;
       audio.play().catch(advance);
     },
+    _detachPlayAllAudio() {
+      const a = this._ttsPlayAllAudio;
+      this._ttsPlayAllAudio = null;
+      if (a) { a.onended = null; a.onerror = null; a.pause(); }
+    },
     stopPlayAll() {
       this.ttsPlayAllActive = false;
+      this.ttsPlayAllPaused = false;
       this.ttsPlayingLineId = null;
-      if (this._ttsPlayAllAudio) {
-        this._ttsPlayAllAudio.pause();
-        this._ttsPlayAllAudio = null;
-      }
+      this._detachPlayAllAudio();
       this._ttsPlayAllQueue = [];
       this._ttsPlayAllIndex = 0;
     },
+    ttsPlayAllTogglePause() {
+      if (!this.ttsPlayAllActive) { this.resumePlayAll(); return; }
+      const a = this._ttsPlayAllAudio;
+      if (this.ttsPlayAllPaused) {
+        this.ttsPlayAllPaused = false;
+        if (a) a.play().catch(() => this._playNextInPlayAllQueue());
+        else this._playNextInPlayAllQueue();
+      } else {
+        this.ttsPlayAllPaused = true;
+        if (a) a.pause();
+      }
+    },
+    ttsPlayAllStep(delta) {
+      if (!this.ttsPlayAllActive) return;
+      const next = this._ttsPlayAllIndex + delta;
+      if (next < 0 || next >= this._ttsPlayAllQueue.length) return;
+      this._detachPlayAllAudio();
+      this._ttsPlayAllIndex = next;
+      this._playNextInPlayAllQueue();
+    },
+    _saveTtsResume(lineId) {
+      const key = this._ttsPlayAllKey || this._ttsResumeStorageKey();
+      const l = this._ttsPlayAllLines().find(x => x.id === lineId);
+      try { localStorage.setItem(key, JSON.stringify({ id: lineId, order: l?.order ?? null })); } catch {}
+      this.ttsResumeVersion++;
+    },
+    // 記録済みの再開位置（無ければnull）。行が削除・分割でIDごと消えていたら、記録した行番号以降の最初の生成済み行へ寄せる
+    ttsResumeTarget() {
+      void this.ttsResumeVersion;
+      let rec = null;
+      try { rec = JSON.parse(localStorage.getItem(this._ttsResumeStorageKey()) || 'null'); } catch {}
+      if (!rec) return null;
+      const playable = this._ttsPlayAllLines().filter(l => this.ttsEntryFor(l));
+      return playable.find(l => l.id === rec.id)
+        || (rec.order != null ? playable.find(l => l.order >= rec.order) : null)
+        || null;
+    },
+    resumePlayAll() {
+      const t = this.ttsResumeTarget();
+      this.playAllLines(t ? t.id : null);
+    },
+    ttsPlayAllKeydown(e) {
+      if (this.tab !== 'tts' || e.ctrlKey || e.altKey || e.metaKey) return;
+      const t = e.target;
+      const tag = (t?.tagName || '').toUpperCase();
+      if (['INPUT', 'TEXTAREA', 'SELECT', 'AUDIO'].includes(tag) || t?.isContentEditable) return;
+      if (document.querySelector('.modal-overlay:not([style*="display: none"])')) return;
+      if (e.key === ' ' || e.code === 'Space') {
+        if (this.ttsRunning || !this.ttsPlayAllHasAnyAudio()) return;
+        e.preventDefault();
+        if (tag === 'BUTTON') t.blur();   // フォーカス中のボタンがSpaceで二重に押されないように
+        this.ttsPlayAllTogglePause();
+      } else if (this.ttsPlayAllActive && (e.key === 'ArrowLeft' || e.key === 'ArrowRight')) {
+        e.preventDefault();
+        this.ttsPlayAllStep(e.key === 'ArrowLeft' ? -1 : 1);
+      }
+    },
     ttsPlayAllHasAnyAudio() {
-      const lines = (this.ttsLang ? this.ttsLangScript?.lines : this.draft?.lines) || [];
-      return lines.some(l => this.ttsEntryFor(l));
+      return this._ttsPlayAllLines().some(l => this.ttsEntryFor(l));
     },
     ttsPlayingLineLabel() {
       if (!this.ttsPlayingLineId) return '';
-      const lines = (this.ttsLang ? this.ttsLangScript?.lines : this.draft?.lines) || [];
-      const l = lines.find(l => l.id === this.ttsPlayingLineId);
+      const l = this._ttsPlayAllLines().find(l => l.id === this.ttsPlayingLineId);
       return l ? `#${l.order} ${l.speaker_name || ''}` : this.ttsPlayingLineId;
     },
 
