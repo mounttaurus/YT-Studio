@@ -443,8 +443,23 @@ def looks_precut(img: Image.Image, *, min_transparent_ratio: float = 0.05) -> bo
     return float((alpha < 250).mean()) >= min_transparent_ratio
 
 
+# plan_builder.character_offset がバブル回避の移動量を計算するのに使う粗い占有グリッド。
+# psassist/scripts/augment_masks.py（この話数で生成した絵の mask_stats.json 用）と
+# 同一の分割・同一のアルゴリズムでなければならない（在庫と生成物で移動量がずれるため）。
+GRID_COLS = 64
+GRID_ROWS = 16
+
+
 def analyze_alpha(rgba: Image.Image) -> dict[str, Any]:
-    """psassist の ``mask_stats.json`` と同じキーを返す（下流の互換のため）。"""
+    """psassist の ``mask_stats.json`` と同じキーを返す（下流の互換のため）。
+
+    ``grid``/``edges``/``light_dx`` は元々 ``psassist/scripts/augment_masks.py`` だけが
+    計算しており、こちら（在庫の切り抜き＝``panel_library_manager`` 経由の全登録・再計測・
+    PS取り込み）には無かった。その結果 ``plan_builder.character_offset`` は在庫を貼る行
+    （現行運用の大半）で ``grid`` が無いため即座に諦め、`offset=0, resolved=True` を返し
+    続けていた＝キャラ移動によるバブル回避が在庫行でだけ死んでいた
+    （2026-09-27 `20260927_002_mk_cia50` の QA で発覚）。
+    """
     a = np.asarray(rgba.convert("RGBA"))[:, :, 3]
     h, w = a.shape
     on = a > 128
@@ -458,6 +473,24 @@ def analyze_alpha(rgba: Image.Image) -> dict[str, Any]:
     top_h = max(1, int((ys.max() - ys.min()) * 0.30))
     head = on[ys.min() : ys.min() + top_h]
     hx = np.where(head.any(0))[0]
+
+    xe = np.linspace(0, w, GRID_COLS + 1).astype(int)
+    ye = np.linspace(0, h, GRID_ROWS + 1).astype(int)
+    grid = [
+        [round(float(on[ye[r] : ye[r + 1], xe[c] : xe[c + 1]].mean()), 3) for c in range(GRID_COLS)]
+        for r in range(GRID_ROWS)
+    ]
+
+    rgb = np.asarray(rgba.convert("RGB")).astype(float)
+    lum = 0.299 * rgb[:, :, 0] + 0.587 * rgb[:, :, 1] + 0.114 * rgb[:, :, 2]
+    third = max(1, (xs.max() - xs.min()) // 3)
+    lsl, rsl = slice(xs.min(), xs.min() + third), slice(xs.max() - third, xs.max())
+    lm, rm = on[:, lsl], on[:, rsl]
+    light_dx = None
+    if lm.sum() > 50 and rm.sum() > 50:
+        lmean, rmean = lum[:, lsl][lm].mean(), lum[:, rsl][rm].mean()
+        light_dx = round(float((rmean - lmean) / max(1.0, (lmean + rmean) / 2)), 3)
+
     return {
         "empty": False,
         "canvas": [w, h],
@@ -468,4 +501,13 @@ def analyze_alpha(rgba: Image.Image) -> dict[str, Any]:
         "center_x": round(float(xs.mean()) / w, 4),
         "head_center_x": round(float(hx.mean()) / w, 4) if len(hx) else None,
         "head_bbox_x": [int(hx.min()), int(hx.max())] if len(hx) else None,
+        "grid": grid,
+        "grid_shape": [GRID_ROWS, GRID_COLS],
+        "light_dx": light_dx,
+        "edges": {
+            "top": bool(on[0, :].sum() > w * 0.02),
+            "bottom": bool(on[-1, :].sum() > w * 0.02),
+            "left": bool(on[:, 0].sum() > h * 0.02),
+            "right": bool(on[:, -1].sum() > h * 0.02),
+        },
     }
