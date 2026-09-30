@@ -216,8 +216,10 @@ export function createArollUi(ctx) {
   function modalHtml(l) {
     const a = l.aroll || {};
     if (!a.has_manifest) return `<div class="box"><span class="note">この話数のAロールはまだ始まっていません。絵タブの「プロンプトを作る」から始めます。</span></div>`;
-    if (!a.panel) return `<div class="box">${chip('bad', 'コマが無い')}<span class="note">台本にあってAロールに無い行です。</span>
-      <div class="inline"><button class="btn primary" data-a="prep-line" data-id="${esc(l.id)}" ${S.working ? 'disabled' : ''}>🆕 この行を下ごしらえ</button><span class="hint">プロンプトを作り、背景を割り当てます（無料・画像は生成しません）</span></div></div>`;
+    const prepBtn = `<div class="inline"><button class="btn primary" data-a="prep-line" data-id="${esc(l.id)}" ${S.working ? 'disabled' : ''}>🆕 この行を下ごしらえ</button><span class="hint">プロンプトを作り、背景を割り当てます（無料・画像は生成しません）</span></div>`;
+    if (!a.panel) return `<div class="box">${chip('bad', 'コマが無い')}<span class="note">台本にあってAロールに無い行です。</span>${prepBtn}</div>`;
+    // コマはあるがプロンプトが無い行（分割の後半・挿入した行＝窓口が空のコマだけ作る）。一括の「プロンプトの無い行を下ごしらえ」と同じ条件（R.needsPrep）
+    const prepBox = R.needsPrep(l) ? `<div class="box">${chip('warn', 'プロンプトが無い')}<span class="note">この行はまだ演出プロンプトがありません（分けた後半・挿入した行など）。在庫から選ぶことはできますが、生成し直すには先に下ごしらえが要ります。</span>${prepBtn}</div>` : '';
     const t = thumb(l), off = S.working || A.running, slot = a.slot || {};
     const voiceMatch = R.voiceEmotionInPresets(l, A.presets);
     const cut = R.cutAction(l, lines());
@@ -231,6 +233,7 @@ export function createArollUi(ctx) {
           ${a.sync === 'stale' && a.source_text ? `<div class="note warn">セリフが変わっています。生成時: ${esc(a.source_text)}</div>` : ''}
           ${a.speaker_changed ? '<div class="note warn">話者を変えた行です。在庫から絵を選び直してください。</div>' : ''}
           ${a.restale ? '<div class="note warn">♻️ 選び直した絵がまだ合成（PSD）に反映されていません。再合成が要ります（「仕上がり」区画の「この行を再合成」から。確定済み・手直し無しの行は選び直した直後に自動で再合成されます）。</div>' : ''}</div></div></div>
+      ${prepBox}
       <div class="pair">
         <div class="box"><span class="flabel">声の感情（台本）</span><span>${esc(l.emotion || 'neutral')}</span></div>
         <div class="box"><span class="flabel">絵の表情（Aロール）</span><span>${esc(a.emotion || '—')}</span>
