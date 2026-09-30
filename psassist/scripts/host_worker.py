@@ -43,6 +43,7 @@ PSASSIST_ROOT = os.path.dirname(SCRIPTS_DIR)
 
 sys.path.insert(0, SCRIPTS_DIR)
 from _rootenv import load_root_env  # noqa: E402
+import build_records  # noqa: E402
 import ps_cutout_lib  # noqa: E402
 import qa_check  # noqa: E402
 
@@ -480,8 +481,31 @@ def run_build_panel_job(ep_dir: str, job: dict, log: list[str], on_line=None) ->
     psd_final_dir = os.path.join(ep_dir, "psassist", "psd_final")
 
     lines = job.get("lines") or [p["line_id"] for p in plan.get("panels", [])]
-    total = len(lines)
     job_args = job.get("args") or {}
+    # 手直しの保護（Docs/LINE_WORKBENCH_PLAN.md §6-2・D15）。psd_final/ はユーザーが Photoshop で手直しして
+    # 保存する PSD と同じ場所なので、手直し済みの行は既定で飛ばす。上書きするのは `include_edited` が
+    # 明示された時だけ（画面が「手直しが消えます」と確認した後）で、その場合も元の PSD を退避してから。
+    # ⚠️ 飛ばして空になっても lines を空のまま bridge に渡さない（空＝全件の意味になる）。
+    psa_dir = os.path.join(ep_dir, "psassist")
+    initialized = build_records.init_missing(psa_dir)   # 記録の無い既存PSD＝今の状態を「自動で作ったもの」として初期化
+    if initialized:
+        log.append("合成記録が無い既存PSD %d枚を、今の状態で記録しました" % len(initialized))
+    edited = build_records.edited_lines(psa_dir, lines)
+    skipped_edited: list[str] = []
+    backed_up: list[str] = []
+    if edited:
+        if job_args.get("include_edited"):
+            for lid in sorted(edited):
+                dst = build_records.backup(psa_dir, lid)
+                if dst:
+                    backed_up.append(dst)
+            log.append("手直し済み %d行を退避してから再合成します（%s）" % (len(edited), "psd_final/_backup/"))
+        else:
+            skipped_edited = [l for l in lines if l in edited]
+            lines = [l for l in lines if l not in edited]
+            log.append("手直し済み %d行は飛ばしました（上書きすると手直しが消えるため）: %s"
+                       % (len(skipped_edited), ", ".join(skipped_edited[:8]) + (" …" if len(skipped_edited) > 8 else "")))
+    total = len(lines)
     chunk_size = int(job_args.get("chunk_size") or DEFAULT_CHUNK_SIZE)
     resume = bool(job_args.get("resume"))
     job_id = job.get("job_id") or ""
@@ -495,6 +519,7 @@ def run_build_panel_job(ep_dir: str, job: dict, log: list[str], on_line=None) ->
         if resume:
             argv.append("--resume")
         _run_script(argv, {"PSA_EPISODE_DIR": ep_dir}, log, "bridge", on_line=on_line)
+        build_records.record_built(psa_dir, chunk)   # 自動で作った時点の指紋（以後これと違えば手直し済み）
         done_count += len(chunk)
         if job_id and is_cancel_requested(ep_dir, job_id):
             clear_cancel_marker(ep_dir, job_id)
@@ -505,6 +530,10 @@ def run_build_panel_job(ep_dir: str, job: dict, log: list[str], on_line=None) ->
 
     n = len([f for f in os.listdir(psd_final_dir) if f.endswith(".psd")]) if os.path.isdir(psd_final_dir) else 0
     result = {"psd": n, "lines": done_count, "total": total}
+    if skipped_edited:
+        result["skipped_edited"] = skipped_edited
+    if backed_up:
+        result["backed_up"] = backed_up
     if cancelled:
         result["cancelled"] = True
     return result

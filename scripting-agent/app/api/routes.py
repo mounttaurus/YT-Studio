@@ -18,7 +18,7 @@ from pydantic import BaseModel
 from starlette.background import BackgroundTask
 
 from app.core import (
-    character_reader, llm_client, project_manager, script_generator, style_registry,
+    adoption, character_reader, llm_client, project_manager, script_generator, style_registry,
     subline_manager, translator,
 )
 
@@ -687,6 +687,100 @@ async def import_script(
     }
 
 
+class RestoreScriptRequest(BaseModel):
+    draft: Optional[dict] = None    # 書き戻すドラフト（None＝触らない）
+    script: Optional[dict] = None   # 書き戻す確定版（None＝触らない）
+
+
+@router.post("/projects/{project_id}/episodes/{episode_number}/script/restore")
+async def restore_script(project_id: str, episode_number: int, req: RestoreScriptRequest):
+    """director の行操作の窓口の Undo 用。操作前のドラフト・確定版を**そのまま**書き戻す。
+
+    `import`（丸ごと書き戻し）との違い: 進捗ステータス（`scripting` の skipped/pending 等）や
+    エピソード登録に触れない・ドラフトと確定版を**別々に**戻せる（`import confirm=true` は
+    両方へ同じ内容を書くので、未承認のLLM案が入ったドラフトを潰してしまう）。
+
+    ⚠️ サブ行の連番カウンタは、書き戻す前後の**最大値**へ合流させる（I3・
+    `import` と同じ規則）。Undo で古いmetadataが戻ってもカウンタは巻き戻らず、
+    Undoした後の分割が、外れた行のID（例 line_103_s3）を再発番しない。
+    """
+    for label, doc in (("draft", req.draft), ("script", req.script)):
+        if doc is None:
+            continue
+        if not isinstance(doc.get("lines"), list):
+            raise HTTPException(status_code=400, detail=f"{label}.lines が必要です")
+        dups = subline_manager.duplicate_line_ids(doc)
+        if dups:
+            raise HTTPException(status_code=400,
+                                detail=f"{label}.lines[].id が重複しています: {', '.join(dups)}")
+
+    current = [project_manager.read_draft(project_id, episode_number),
+               project_manager.read_script(project_id, episode_number)]
+    restored = []
+    if req.draft is not None:
+        subline_manager.merge_subline_seq(req.draft, current + [req.script])
+        project_manager.save_draft(project_id, req.draft, episode_number)
+        restored.append("draft")
+    if req.script is not None:
+        subline_manager.merge_subline_seq(req.script, current + [req.draft])
+        project_manager.save_script(project_id, req.script, episode_number)
+        restored.append("script")
+    return {"project_id": project_id, "episode_number": episode_number, "restored": restored}
+
+
+# ─── LLMの案を採用（ドラフト → 正本・Docs/LINE_WORKBENCH_PLAN.md §4-1・W2） ────
+
+class AdoptRequest(BaseModel):
+    line_ids: Optional[list[str]] = None   # 採用する行（省略＝差のある行すべて）。全文の採用では選べない
+    replace_all: bool = False              # 全文の再生成（line_id の振り直し）の採用を許す
+
+
+@router.get("/projects/{project_id}/episodes/{episode_number}/script/proposal")
+async def get_script_proposal(project_id: str, episode_number: int):
+    """ドラフトと正本の行ごとの差分（採用する前に見せる）。何も変えない。"""
+    draft = project_manager.read_draft(project_id, episode_number)
+    if draft is None:
+        raise HTTPException(status_code=404, detail=f"第{episode_number}話のドラフトがありません")
+    return {"project_id": project_id, "episode_number": episode_number,
+            **adoption.proposal(draft, project_manager.read_script(project_id, episode_number))}
+
+
+@router.post("/projects/{project_id}/episodes/{episode_number}/script/adopt")
+async def adopt_script(project_id: str, episode_number: int, req: AdoptRequest,
+                       dry_run: bool = Query(False)):
+    """ドラフトを正本（script.json）へ採用する。行ごと・全文のどちらも。
+
+    旧 `approve`（ドラフトを丸ごと正本へ）と違い、`regenerate-lines` 等で変わった行だけを選んで
+    入れられる。全文の再生成の案は `replace_all=true` が要る（音声・絵の紐付けがすべて切れるため）。
+    dry_run は保存せず、採用後の正本の行を `preview` で返す（director の確認欄用）。
+    進捗ステータス（scripting=done）は従来の承認と同じく採用で立てる。
+    """
+    draft = project_manager.read_draft(project_id, episode_number)
+    if draft is None:
+        raise HTTPException(status_code=404, detail=f"第{episode_number}話のドラフトがありません")
+    script = project_manager.read_script(project_id, episode_number)
+    info = adoption.proposal(draft, script)
+    try:
+        # dry_run の全文再生成は「明示があったもの」として結果を見せる（requires_replace_all で知らせる）
+        new_script, result = adoption.adopt(
+            draft, script, req.line_ids, replace_all=req.replace_all or (dry_run and info["kind"] == adoption.REPLACE))
+    except ValueError as e:
+        code = 409 if info["kind"] == adoption.REPLACE and not req.replace_all else 400
+        raise HTTPException(status_code=code, detail=str(e))
+
+    resp = {"project_id": project_id, "episode_number": episode_number,
+            "adoption": {**result, "requires_replace_all": info["requires_replace_all"],
+                         "counts": info["counts"], "warnings": info["warnings"]}}
+    if dry_run:
+        return {**resp, "dry_run": True,
+                "preview": {"lines": new_script.get("lines", []), "metadata": new_script.get("metadata", {})}}
+
+    project_manager.save_script(project_id, new_script, episode_number)
+    project_manager.update_episode_status(project_id, episode_number, "scripting", "done")
+    project_manager.update_project_status(project_id, "scripting", "done")
+    return resp
+
+
 # ─── 台本生成 ────────────────────────────────────────────────────────
 
 @router.post("/projects/{project_id}/generate")
@@ -1140,11 +1234,26 @@ def _load_script_docs(project_id: str, episode: int):
     return primary, draft, script
 
 
-def _save_script_docs(project_id: str, episode: int, draft, script) -> None:
+def _save_script_docs(project_id: str, episode: int, draft, script, dry_run: bool = False) -> None:
+    """ドラフトと確定版を書く。dry_run=True は何も書かない（director の行操作の窓口が
+    「この操作で何が起きるか」だけを知るための口。検証は本番と同じコードを通る）。"""
+    if dry_run:
+        return
     if draft is not None:
         project_manager.save_draft(project_id, draft, episode)
     if script is not None:
         project_manager.save_script(project_id, script, episode)
+
+
+def _with_preview(resp: dict, draft, script, dry_run: bool) -> dict:
+    """dry_run の時だけ、操作後の行配列（メモリ上）を `preview` に載せて返す。
+    呼び出し側（director）は操作前の台本との差分から影響を導く。dry_run 以外は素通し。"""
+    if not dry_run:
+        return resp
+    primary = draft if draft is not None else script
+    return {**resp, "dry_run": True,
+            "preview": {"lines": (primary or {}).get("lines", []),
+                        "metadata": (primary or {}).get("metadata", {})}}
 
 
 # 行配列の実体操作（renumber・削除・入れ替え・ID発番・サブ行のグループ規則）は
@@ -1161,6 +1270,7 @@ async def edit_line(
     order: int,
     req: LineEditRequest,
     episode: int = Query(1),
+    dry_run: bool = Query(False),
 ):
     """特定行を直接編集する（ドラフトと確定版script.jsonの両方に反映）。"""
     primary, draft, script = _load_script_docs(project_id, episode)
@@ -1208,8 +1318,10 @@ async def edit_line(
             subline_manager.propagate_speaker_change(doc, dline["id"], req.speaker_id, new_speaker_name)
         apply_own_fields(dline)
 
-    _save_script_docs(project_id, episode, draft, script)
-    return {"project_id": project_id, "episode_number": episode, "updated_line": line}
+    _save_script_docs(project_id, episode, draft, script, dry_run)
+    return _with_preview(
+        {"project_id": project_id, "episode_number": episode, "updated_line": line},
+        draft, script, dry_run)
 
 
 @router.patch("/projects/{project_id}/script/line/{order}/move")
@@ -1218,6 +1330,7 @@ async def move_line(
     order: int,
     req: LineMoveRequest,
     episode: int = Query(1),
+    dry_run: bool = Query(False),
 ):
     """行を隣（同一セクション内）と入れ替える（ドラフト・確定版script.json両方に反映・可逆）。
 
@@ -1241,10 +1354,13 @@ async def move_line(
         if err is not None:
             raise HTTPException(status_code=400, detail=err)
 
-    _save_script_docs(project_id, episode, draft, script)
-    primary2, _, _ = _load_script_docs(project_id, episode)
+    _save_script_docs(project_id, episode, draft, script, dry_run)
+    # 保存後の再読込ではなくメモリ上のdocを見る（dry_runでも同じ答えになる・orderは操作側が振り直し済み）
+    primary2 = draft if draft is not None else script
     new_order = next(l["order"] for l in primary2["lines"] if l["id"] == line_id)
-    return {"project_id": project_id, "episode_number": episode, "line_id": line_id, "new_order": new_order}
+    return _with_preview(
+        {"project_id": project_id, "episode_number": episode, "line_id": line_id, "new_order": new_order},
+        draft, script, dry_run)
 
 
 @router.post("/projects/{project_id}/script/line")
@@ -1252,6 +1368,7 @@ async def insert_line(
     project_id: str,
     req: LineInsertRequest,
     episode: int = Query(1),
+    dry_run: bool = Query(False),
 ):
     """指定行の直後に新しい行を挿入する（after_order=0で先頭）。
     新しい行には未使用の id を発番し、order は全行で振り直す。
@@ -1298,10 +1415,12 @@ async def insert_line(
         subline_manager.insert_line_after(draft, anchor_id, new_line)
     if script is not None:
         subline_manager.insert_line_after(script, anchor_id, new_line)
-    _save_script_docs(project_id, episode, draft, script)
+    _save_script_docs(project_id, episode, draft, script, dry_run)
 
     saved = next((l for l in primary["lines"] if l.get("id") == new_id), new_line)
-    return {"project_id": project_id, "episode_number": episode, "new_line": saved}
+    return _with_preview(
+        {"project_id": project_id, "episode_number": episode, "new_line": saved},
+        draft, script, dry_run)
 
 
 @router.delete("/projects/{project_id}/script/line/{order}")
@@ -1309,6 +1428,7 @@ async def delete_line(
     project_id: str,
     order: int,
     episode: int = Query(1),
+    dry_run: bool = Query(False),
 ):
     """特定行を削除する（ドラフトと確定版script.jsonの両方から）。
     確定scriptに存在した行なら、既存の翻訳（locales/{lang}/script.json）からも同じ行を自動で取り除く
@@ -1329,9 +1449,9 @@ async def delete_line(
         _remove_line_from_doc(draft, line_id)
     if script is not None:
         _remove_line_from_doc(script, line_id)
-    _save_script_docs(project_id, episode, draft, script)
+    _save_script_docs(project_id, episode, draft, script, dry_run)
 
-    if was_confirmed:
+    if was_confirmed and not dry_run:
         pj = project_manager.read_project(project_id)
         ep_locales = {}
         for ep in pj.get("episodes", []):
@@ -1343,7 +1463,9 @@ async def delete_line(
             if loc_script is not None and _remove_line_from_doc(loc_script, line_id):
                 project_manager.save_locale_script(project_id, episode, lang, loc_script)
 
-    return {"project_id": project_id, "episode_number": episode, "deleted_line_id": line_id}
+    return _with_preview(
+        {"project_id": project_id, "episode_number": episode, "deleted_line_id": line_id},
+        draft, script, dry_run)
 
 
 # ─── サブ行（Docs/SUBLINE_PLAN.md §5・§9・S1） ─────────────────────────
@@ -1365,6 +1487,7 @@ async def split_line(
     order: int,
     req: LineSplitRequest,
     episode: int = Query(1),
+    dry_run: bool = Query(False),
 ):
     """行を文字位置で前後に分ける（§5「分ける」）。前半は元のID、後半は新しいサブ行。"""
     primary, draft, script = _load_script_docs(project_id, episode)
@@ -1378,15 +1501,15 @@ async def split_line(
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
 
-    _save_script_docs(project_id, episode, draft, script)
-    primary2, _, _ = _load_script_docs(project_id, episode)
+    _save_script_docs(project_id, episode, draft, script, dry_run)
+    primary2 = draft if draft is not None else script  # メモリ上のdocでよい（dry_runでも同じ答え）
     lines_by_id = {l["id"]: l for l in primary2["lines"]}
-    return {
+    return _with_preview({
         "project_id": project_id, "episode_number": episode,
         "front_line": lines_by_id.get(result["front_line_id"]),
         "back_line": lines_by_id.get(result["back_line_id"]),
         "parent_line_id": result["parent_line_id"],
-    }
+    }, draft, script, dry_run)
 
 
 @router.post("/projects/{project_id}/script/line/{order}/merge-next")
@@ -1394,6 +1517,7 @@ async def merge_line_with_next(
     project_id: str,
     order: int,
     episode: int = Query(1),
+    dry_run: bool = Query(False),
 ):
     """行Xと次の行の本文をつなぐ（§5「結合」）。残るのはXのID・次の行は削除扱い。"""
     primary, draft, script = _load_script_docs(project_id, episode)
@@ -1412,11 +1536,12 @@ async def merge_line_with_next(
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
 
-    _save_script_docs(project_id, episode, draft, script)
-    primary2, _, _ = _load_script_docs(project_id, episode)
+    _save_script_docs(project_id, episode, draft, script, dry_run)
+    primary2 = draft if draft is not None else script
     merged = next((l for l in primary2["lines"] if l["id"] == result["merged_line_id"]), None)
-    return {"project_id": project_id, "episode_number": episode,
-            "merged_line": merged, "removed_line_id": result["removed_line_id"]}
+    return _with_preview({"project_id": project_id, "episode_number": episode,
+                          "merged_line": merged, "removed_line_id": result["removed_line_id"]},
+                         draft, script, dry_run)
 
 
 @router.post("/projects/{project_id}/script/line/{order}/add-subline")
@@ -1425,6 +1550,7 @@ async def add_subline_after(
     order: int,
     req: SublineAddRequest,
     episode: int = Query(1),
+    dry_run: bool = Query(False),
 ):
     """行の直後に、同じグループの新しいサブ行を追加する（§5「追加」）。話者・セクションは引き継ぐ。"""
     primary, draft, script = _load_script_docs(project_id, episode)
@@ -1438,11 +1564,12 @@ async def add_subline_after(
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
 
-    _save_script_docs(project_id, episode, draft, script)
-    primary2, _, _ = _load_script_docs(project_id, episode)
+    _save_script_docs(project_id, episode, draft, script, dry_run)
+    primary2 = draft if draft is not None else script
     new_line = next((l for l in primary2["lines"] if l["id"] == result["new_line_id"]), None)
-    return {"project_id": project_id, "episode_number": episode,
-            "new_line": new_line, "parent_line_id": result["parent_line_id"]}
+    return _with_preview({"project_id": project_id, "episode_number": episode,
+                          "new_line": new_line, "parent_line_id": result["parent_line_id"]},
+                         draft, script, dry_run)
 
 
 @router.get("/projects/{project_id}/script/line/{order}/split-proposal")
@@ -1469,6 +1596,7 @@ async def apply_split_proposal(
     order: int,
     episode: int = Query(1),
     limit: int = Query(subline_manager.DEFAULT_SPLIT_LIMIT),
+    dry_run: bool = Query(False),
 ):
     """自動区切りの提案を適用する（§9-3「ボタンで適用する」・行ごと）。"""
     primary, draft, script = _load_script_docs(project_id, episode)
@@ -1482,14 +1610,14 @@ async def apply_split_proposal(
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
 
-    _save_script_docs(project_id, episode, draft, script)
-    primary2, _, _ = _load_script_docs(project_id, episode)
+    _save_script_docs(project_id, episode, draft, script, dry_run)
+    primary2 = draft if draft is not None else script
     lines_by_id = {l["id"]: l for l in primary2["lines"]}
-    return {
+    return _with_preview({
         "project_id": project_id, "episode_number": episode,
         "line_id": line_id, "parent_line_id": result["parent_line_id"],
         "new_lines": [lines_by_id.get(lid) for lid in result["new_line_ids"]],
-    }
+    }, draft, script, dry_run)
 
 
 @router.post("/projects/{project_id}/episodes/{episode_number}/split-apply-all")
@@ -1497,6 +1625,7 @@ async def apply_split_proposal_all(
     project_id: str,
     episode_number: int,
     limit: int = Query(subline_manager.DEFAULT_SPLIT_LIMIT),
+    dry_run: bool = Query(False),
 ):
     """話数全体で、上限を超える行すべてに自動区切りを適用する（§9-3「話数全体」）。"""
     primary, draft, script = _load_script_docs(project_id, episode_number)
@@ -1514,9 +1643,10 @@ async def apply_split_proposal_all(
         except ValueError as e:
             skipped.append({"line_id": line_id, "reason": str(e)})
 
-    _save_script_docs(project_id, episode_number, draft, script)
-    return {"project_id": project_id, "episode_number": episode_number,
-            "applied": applied, "skipped": skipped}
+    _save_script_docs(project_id, episode_number, draft, script, dry_run)
+    return _with_preview({"project_id": project_id, "episode_number": episode_number,
+                          "applied": applied, "skipped": skipped},
+                         draft, script, dry_run)
 
 
 # ─── 名前付きドラフト ────────────────────────────────────────────────

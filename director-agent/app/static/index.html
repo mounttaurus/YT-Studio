@@ -542,6 +542,11 @@
       <button class="tab-btn" :class="{ active: tab === 'charLib' }" @click="setTab('charLib')">📚 キャラ在庫</button>
       <button class="tab-btn" :class="{ active: tab === 'free' }" @click="setTab('free')">🎨 自由生成</button>
       <button class="tab-btn" :class="{ active: tab === 'editing' }" @click="setTab('editing')">🎞️ 編集情報</button>
+      <!-- 行ワークベンチ（別ページ・Docs/LINE_WORKBENCH_PLAN.md W3）。1話の制作（台本の行・TTS）をまとめて行う -->
+      <a class="tab-btn" x-show="currentProject && activeEpisodeNumber"
+         :href="`/workbench/?project=${encodeURIComponent(currentProject?.id || '')}&episode=${activeEpisodeNumber}`"
+         style="margin-left:auto;text-decoration:none;color:#c4b5fd"
+         title="この話数の台本の行・音声を、行ごとにまとめて直す画面（別ページ）">🧰 ワークベンチで開く</a>
     </div>
 
     <!-- ════════ 🔎 リサーチタブ ════════ -->
@@ -2774,12 +2779,11 @@
               <template x-if="arollPanelTableOpen">
               <div>
               <!-- カットの説明。⚠️「N行まとめる」と要約しないこと ──
-                   1行(サブ行を含む)に1枚が基本で、短すぎる行だけ直前へ束ねる（SUBLINE_PLAN §6-3）。 -->
+                   1行(サブ行を含む)に必ず1枚。2026-09-28 から短い行の自動束ねは既定で無効（cut_planner.SHORT_LINE_SEC=0）。 -->
               <div x-show="arollCuts" style="font-size:11px;color:#64748b;margin:-4px 0 8px;line-height:1.7">
                 <b style="color:#94a3b8" x-text="`${arollCuts?.total_cuts ?? 0} カット`"></b>
-                ── 基本は1行に1枚。同じ話者・セクションが続く中で
-                <span x-text="`${arollCuts?.short_line_sec ?? 3}秒`"></span>未満の短すぎる行だけ
-                直前の行と<b>同じ絵と背景を共有</b>します（吹き出しだけが変わる）。
+                ── 台本の1行に必ず1枚。「↑つなげる」を押した行だけ、直前の行と
+                <b>同じ絵と背景を共有</b>します（吹き出しだけが変わる）。
                 <span x-show="arollCuts?.duration_source === 'estimated'" style="color:#f59e0b">
                   ⚠️ TTS前なので尺は文字数からの推定です（TTS後に再計算されます）。
                 </span>

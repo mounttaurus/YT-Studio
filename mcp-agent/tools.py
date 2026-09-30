@@ -212,6 +212,12 @@ async def approve_script(project_id: str, episode_number: int) -> dict:
     """指定話のドラフトを承認し script.json として確定し、続けてAロールのプロンプトと
     背景の自動割当まで用意する（director:8005 🖼️Aロールタブの「承認」ボタンと同じ挙動）。
 
+    ⚠️ **従来の承認（一括）。行ワークベンチの運用では `adopt_llm_proposal`（LLMの案を正本へ採用）→
+    `confirm_lines`（行の確定・音声の自動作り直し・コマの下ごしらえ）に分かれた**（LINE_WORKBENCH_PLAN D8）。
+    確定の運用が始まっている話数（`get_line_states` の enabled=true）では、こちらの承認は下書きを丸ごと
+    正本へ上書きするので使わない（差分を見て選んで採用する `adopt_llm_proposal` を使う）。
+    運用外の話数・新規の話数では従来どおり使える。
+
     戻り値は台本確定の結果に加えて aroll（panel_count/warnings）・aroll_error・
     background（assigned等）・background_error を含む。**プロンプト生成/背景割当が
     失敗しても台本の承認自体は成功する**（各 *_error に理由が入るだけ）。
@@ -293,55 +299,195 @@ async def get_script(project_id: str, episode_number: int = 1, draft: bool = Tru
     )
 
 
-# ─── サブ行（分ける・結合・追加・自動区切り。Docs/SUBLINE_PLAN.md §5・§9・§12・S6） ─────
+# ─── 台本の行の操作（director の行の操作の窓口 `lines/{op}`・Docs/LINE_WORKBENCH_PLAN.md §3・§8・W5） ─────
 #
-# サブ行は「親を示す parent_line_id を持つ普通の行」（I1）。ドラフト・確定版の両方へ
-# 即時反映する（scripting-agent/app/core/subline_manager.py が本籍）。line_id ではなく
-# get_script が返す order（行番号）で指定する＝director/scripting-agent UIの操作と同じ単位。
+# 台本の行を変える操作は**すべて director の窓口 1 つを通る**（I1）。UI（ワークベンチ）も MCP も同じ窓口を呼ぶので、
+# どちらから直しても音声・コマ（Aロール）・確定の状態が同じように追随する。呼び出し側が後処理を書く必要は無い。
+#   - 操作の前に台本のスナップショットを履歴へ残す（`undo_line_op` で戻せる）
+#   - 台本の変更は確定点。後処理（音声の孤立扱い・コマの追加・絵が古い印）が失敗しても台本は戻らず、warnings に載る
+#   - 後処理はすべて無料（画像は生成しない）。外した音声・コマは消さず保管する（Undo で戻る）
+# 行は `line_id`（推奨・不変）か `order`（行番号・get_script で確認）で指す。`dry_run=True` は何も変えずに
+# 「この操作で起きること」（台本・音声・絵・仕上がりの4レーン）だけを返す。
+# ⚠️ 校正（誤字脱字・文法）は `import_script` で丸ごと書き戻さず、`update_script_line` で1行ずつ直す（D6）。
+#    丸ごと書き戻しは行IDの採番カウンタや音声・コマとの対応を壊す経路になる。
 
-async def split_line(project_id: str, episode_number: int, order: int, position: int) -> dict:
-    """行を文字位置で前後に分ける（§5「分ける」・可逆WRITE）。
+def _line_target(line_id: Optional[str], order: Optional[int]) -> dict:
+    if line_id is None and order is None:
+        raise ValueError("line_id（推奨）か order（行番号）のどちらかを指定してください")
+    return {"line_id": line_id} if line_id is not None else {"order": order}
 
-    position は行の text をこの文字位置で前後に分ける（0 < position < 文字数）。
-    前半は元の行のIDのまま、後半は新しいサブ行として直後に挿入される
-    （戻り値の parent_line_id が2行に共通のグループID）。position は get_script で
-    確認したセリフ本文の文字数を基準に数える。句読点（。！？、）の位置に合わせると
-    自然な区切りになる。
-    """
+
+async def _line_op(project_id: str, episode_number: int, op: str, body: dict, dry_run: bool = False) -> dict:
     return await dc.request(
-        "POST", f"api/scripting/projects/{project_id}/script/line/{order}/split",
-        params={"episode": episode_number}, json={"position": position},
-    )
+        "POST", f"projects/{project_id}/episodes/{episode_number}/lines/{op}",
+        params={"dry_run": True} if dry_run else None, json=body)
 
 
-async def merge_line_with_next(project_id: str, episode_number: int, order: int) -> dict:
-    """行と次の行のセリフ本文をつなげる（§5「結合」・可逆WRITE）。
+async def update_script_line(project_id: str, episode_number: int, line_id: Optional[str] = None,
+                             order: Optional[int] = None, text: Optional[str] = None,
+                             emotion: Optional[str] = None, speaker_id: Optional[str] = None,
+                             speaker_name: Optional[str] = None, speed: Optional[float] = None,
+                             pause_after_sec: Optional[float] = None, notes: Optional[str] = None,
+                             dry_run: bool = False) -> dict:
+    """台本の1行を直す（校正はこれで1行ずつ・窓口経由・可逆WRITE）。
 
-    話者・セクション・グループが一致しない隣接行は結合できない（400エラー）。残るのは
-    前の行のID、次の行は削除される。生成済み音声がある場合は呼び出し側で
-    tts-agent の DELETE /projects/{id}/audio/line/{removed_line_id} による削除も検討すること
-    （このツール自体は音声を消さない）。
+    直せる項目: text（本文）/ emotion（声の感情＝TTSの演技。絵の表情ではない）/ speaker_id（話者。
+    同じサブ行グループの全行に伝わる）/ speed / pause_after_sec / notes。指定した項目ごとに窓口の
+    操作（edit → emotion → speaker）を順に1回ずつ実行する（Undo も操作ごと）。
+    本文を直した行は音声が「要再生成」、絵が「古い」の印になる（確定の運用中の話数では「未確定」にもなる）。
+    確定（confirm_lines）すると音声が自動で作り直される。
+    戻り値: results[]（操作ごとの応答・impact／warnings／applied を含む）。dry_run=True は何も変えない。
+    ⚠️ 複数項目を指定して途中の操作が失敗した場合、それ以前の操作は適用済みのまま。
     """
-    return await dc.request(
-        "POST", f"api/scripting/projects/{project_id}/script/line/{order}/merge-next",
-        params={"episode": episode_number},
-    )
+    target = _line_target(line_id, order)
+    plan: list[tuple[str, dict]] = []
+    edit = {k: v for k, v in (("text", text), ("speed", speed), ("pause_after_sec", pause_after_sec), ("notes", notes)) if v is not None}
+    if edit:
+        plan.append(("edit", {**target, **edit}))
+    if emotion is not None:
+        plan.append(("emotion", {**target, "emotion": emotion}))
+    if speaker_id is not None:
+        plan.append(("speaker", {**target, "speaker_id": speaker_id, **({"speaker_name": speaker_name} if speaker_name else {})}))
+    if not plan:
+        raise ValueError("変える項目（text / emotion / speaker_id / speed / pause_after_sec / notes）を1つ以上指定してください")
+    results = [await _line_op(project_id, episode_number, op, body, dry_run) for op, body in plan]
+    return {"results": results, "warnings": [w for r in results for w in r.get("warnings", [])]}
 
 
-async def add_subline(project_id: str, episode_number: int, order: int,
-                      text: str = "", emotion: Optional[str] = None) -> dict:
-    """同じグループの新しいサブ行を、指定行の直後に追加する（§5「追加」・可逆WRITE）。
+async def insert_script_line(project_id: str, episode_number: int, after_line_id: Optional[str] = None,
+                             after_order: Optional[int] = None, text: str = "",
+                             speaker_id: Optional[str] = None, emotion: Optional[str] = None,
+                             dry_run: bool = False) -> dict:
+    """指定行の直後に新しい行を挿入する（窓口経由・可逆WRITE）。
 
-    話者・セクションはanchor行（order で指定した行）から引き継ぐ（サブ行だけ話者を
-    変えることはできない）。emotion省略時もanchor行の値を引き継ぐ。
+    after_line_id か after_order（0＝先頭に挿入）で位置を指す。speaker_id を省略した時の話者は台本側の既定。
+    新しい行は音声が未生成・コマが要る状態で追加される（コマは窓口が空のコマを作る＝プロンプトと在庫の絵は確定時に用意）。
     """
+    if after_line_id is None and after_order is None:
+        raise ValueError("after_line_id か after_order（0＝先頭）を指定してください")
     body: dict = {"text": text}
+    body.update({"after_line_id": after_line_id} if after_line_id is not None else {"after_order": after_order})
+    for k, v in (("speaker_id", speaker_id), ("emotion", emotion)):
+        if v is not None:
+            body[k] = v
+    return await _line_op(project_id, episode_number, "insert", body, dry_run)
+
+
+async def move_script_line(project_id: str, episode_number: int, direction: str,
+                           line_id: Optional[str] = None, order: Optional[int] = None,
+                           dry_run: bool = False) -> dict:
+    """行を1つ上（up）か下（down）へ動かす（窓口経由・可逆WRITE）。
+
+    セクションをまたぐ・サブ行のグループをまたぐ移動はできない（400）。音声・コマはIDで結ばれているので追随する。
+    """
+    return await _line_op(project_id, episode_number, "move", {**_line_target(line_id, order), "direction": direction}, dry_run)
+
+
+async def delete_script_line(project_id: str, episode_number: int, line_id: Optional[str] = None,
+                             order: Optional[int] = None, dry_run: bool = False) -> dict:
+    """行を台本から外す（窓口経由・可逆WRITE）。音声・コマ・在庫の使用回数は**消さずに保管**され、
+    undo_line_op で台本に戻せば元どおり戻る。"""
+    return await _line_op(project_id, episode_number, "delete", _line_target(line_id, order), dry_run)
+
+
+async def confirm_lines(project_id: str, episode_number: int, line_ids: Optional[list[str]] = None) -> dict:
+    """行を確定する（D8②・窓口経由）。line_ids 省略で「未確定のすべて」。
+
+    確定すると、**音声が自動で作り直される（ローカルGPU・無料・非同期）**ほか、新しい行のコマの下ごしらえ
+    （プロンプト・背景。画像は生成しない）が走り、再合成（組版）の対象に入る。
+    確定の運用が始まっていない話数（`get_line_states` の enabled=false）は、先に `start_confirmations` か
+    `adopt_llm_proposal` で運用を始める。戻り値の applied.tts.queued が音声を作り直し中の行。
+    エンジンが止まっていると音声は「作り直し待ち」のまま残る（起動後に run_tts か画面の「未生成・要再生成を生成」）。
+    """
+    body = {"line_ids": line_ids} if line_ids is not None else {}
+    return await dc.request("POST", f"projects/{project_id}/episodes/{episode_number}/lines/confirm", json=body)
+
+
+async def start_confirmations(project_id: str, episode_number: int, baseline: bool = True) -> dict:
+    """その話数の「確定の運用」を始める（D19）。baseline=True は今の台本の全行を確定済みとして記録し、
+    以後は直した行だけが未確定になる。本番の既存話数は、ユーザーが始めるまで何も変わらない
+    （運用外の話数は確定でゲートされず、従来どおり全行が組版などの対象）。"""
+    return await dc.request("POST", f"projects/{project_id}/episodes/{episode_number}/lines/confirmations/start",
+                            json={"baseline": baseline})
+
+
+async def get_line_states(project_id: str, episode_number: int) -> dict:
+    """各行の確定状態と音声の作り直し待ち（READ）。enabled=false は確定の運用が始まっていない話数。"""
+    return await dc.get(f"projects/{project_id}/episodes/{episode_number}/lines/state")
+
+
+async def undo_line_op(project_id: str, episode_number: int, force: bool = False) -> dict:
+    """窓口を通した直前の台本の変更を1つ戻す（可逆WRITE）。台本だけでなく、外した音声・コマも一緒に戻る
+    （消していないため）。**行の確定・作り直した音声は戻らない**（台本の変更だけを戻す）。
+    窓口を通さない変更（旧画面・import_script など）が間にあると 409（戻すとその変更も消えるため）。
+    強制するなら force=True。戻せる件数は get_line_history の undoable。"""
+    return await dc.request("POST", f"projects/{project_id}/episodes/{episode_number}/lines/undo",
+                            params={"force": True} if force else None)
+
+
+async def get_line_history(project_id: str, episode_number: int, limit: int = 20) -> dict:
+    """窓口を通した操作の履歴（新しい順・READ）。undoable は戻せる件数。"""
+    return await dc.get(f"projects/{project_id}/episodes/{episode_number}/lines/history", params={"limit": limit})
+
+
+async def get_llm_proposal(project_id: str, episode_number: int) -> dict:
+    """LLMの案（下書き）と正本の行ごとの差分（READ）。採用する前にこれで確認する。
+
+    kind: none（差なし）/ initial（正本がまだ無い＝下書きが最初の台本）/ lines（行ごとの差分）/
+    replace（全文の再生成＝行IDが振り直される）。replace は adopt_llm_proposal に replace_all=True が要る。
+    """
+    return await dc.get(f"projects/{project_id}/episodes/{episode_number}/lines/proposal")
+
+
+async def adopt_llm_proposal(project_id: str, episode_number: int, line_ids: Optional[list[str]] = None,
+                             replace_all: bool = False, dry_run: bool = False) -> dict:
+    """LLMの案（generate_script・regenerate_lines・import_script(confirm=false) が書いた下書き）を正本へ採用する
+    （D8①・窓口経由・Undo可）。採用した行は「未確定」になり、続けて confirm_lines で確定する。
+
+    line_ids で採用する行を選べる（省略で差のある行すべて）。全文の再生成（replace）は行IDが振り直されて
+    音声・絵との紐付けが全て切れるので replace_all=True の明示が要る（先に dry_run で確認）。
+    最初の採用（正本がまだ無い）は元に戻せない。この話数の確定の運用は採用で始まる。
+    従来の `approve_script`（承認＋Aロールのプロンプト・背景の下ごしらえ）とは別物で、下ごしらえは確定の時に走る。
+    """
+    body: dict = {"replace_all": replace_all}
+    if line_ids is not None:
+        body["line_ids"] = line_ids
+    return await _line_op(project_id, episode_number, "adopt", body, dry_run)
+
+
+async def split_line(project_id: str, episode_number: int, position: int, order: Optional[int] = None,
+                     line_id: Optional[str] = None, dry_run: bool = False) -> dict:
+    """行を文字位置で前後に分ける（§5「分ける」・窓口経由・可逆WRITE）。
+
+    position は行の text をこの文字位置で前後に分ける（0 < position < 文字数）。前半は元の行のIDのまま、
+    後半は新しいサブ行として直後に入る（戻り値の new_line_ids）。**窓口経由なので、音声とコマも追随する**
+    （前半は要再生成・後半は未生成／後半のコマができ、前半の絵は「古い」にならない）。
+    position は get_script で確認した本文の文字数を基準に数える。句読点（。！？、）の位置に合わせると自然。
+    行は line_id か order（行番号）で指す。
+    """
+    return await _line_op(project_id, episode_number, "split", {**_line_target(line_id, order), "position": position}, dry_run)
+
+
+async def merge_line_with_next(project_id: str, episode_number: int, order: Optional[int] = None,
+                               line_id: Optional[str] = None, dry_run: bool = False) -> dict:
+    """行と次の行のセリフ本文をつなげる（§5「結合」・窓口経由・可逆WRITE）。
+
+    話者・セクション・グループが一致しない隣接行は結合できない。残るのは前の行のID、次の行は台本から外れる
+    （**その行の音声・コマは消さず保管**＝undo_line_op で戻せる。以前は呼び出し側で音声削除が要ったが不要）。
+    """
+    return await _line_op(project_id, episode_number, "merge", _line_target(line_id, order), dry_run)
+
+
+async def add_subline(project_id: str, episode_number: int, order: Optional[int] = None, text: str = "",
+                      emotion: Optional[str] = None, line_id: Optional[str] = None, dry_run: bool = False) -> dict:
+    """同じグループの新しいサブ行を、指定行の直後に追加する（§5「追加」・窓口経由・可逆WRITE）。
+
+    話者・セクションは指定行から引き継ぐ（サブ行だけ話者を変えることはできない）。emotion 省略時も引き継ぐ。
+    """
+    body = {**_line_target(line_id, order), "text": text}
     if emotion is not None:
         body["emotion"] = emotion
-    return await dc.request(
-        "POST", f"api/scripting/projects/{project_id}/script/line/{order}/add-subline",
-        params={"episode": episode_number}, json=body,
-    )
+    return await _line_op(project_id, episode_number, "add-subline", body, dry_run)
 
 
 async def get_split_proposal(project_id: str, episode_number: int, order: int,
@@ -363,37 +509,29 @@ async def get_split_proposal(project_id: str, episode_number: int, order: int,
     )
 
 
-async def apply_split_proposal(project_id: str, episode_number: int, order: int,
-                               limit: Optional[int] = None) -> dict:
-    """get_split_proposal の候補をその行1つに適用する（§9-3「行ごと」・可逆WRITE）。
+async def apply_split_proposal(project_id: str, episode_number: int, order: Optional[int] = None,
+                               limit: Optional[int] = None, line_id: Optional[str] = None,
+                               dry_run: bool = False) -> dict:
+    """自動区切りの候補をその行1つに適用する（§9-3「行ごと」・窓口経由・可逆WRITE）。
 
-    最初の片は元の行のIDのまま、残りは新しいサブ行として連続追加される。候補が
-    2片未満（上限内、または区切れない）の場合は400エラーになる。
+    最初の片は元の行のIDのまま、残りは新しいサブ行として連続追加される。候補が2片未満（上限内、または
+    区切れない）の場合は400エラー。音声・コマは窓口が追随させる（split_line と同じ）。
     """
-    params: dict = {"episode": episode_number}
+    body = _line_target(line_id, order)
     if limit is not None:
-        params["limit"] = limit
-    return await dc.request(
-        "POST", f"api/scripting/projects/{project_id}/script/line/{order}/split-apply",
-        params=params,
-    )
+        body["limit"] = limit
+    return await _line_op(project_id, episode_number, "split-apply", body, dry_run)
 
 
-async def apply_split_proposal_all(project_id: str, episode_number: int,
-                                   limit: Optional[int] = None) -> dict:
-    """話数全体で、上限字数を超える行すべてに自動区切りを適用する（§9-3「話数全体」・可逆WRITE）。
+async def apply_split_proposal_all(project_id: str, episode_number: int, limit: Optional[int] = None,
+                                   dry_run: bool = False) -> dict:
+    """話数全体で、上限字数を超える行すべてに自動区切りを適用する（§9-3「話数全体」・窓口経由・可逆WRITE）。
 
-    対象は呼び出し時点で上限を超えている行（適用のたびに行が増えるが、それらは対象に
-    含めない）。戻り値の applied[] が実際に区切れた行、skipped[] が区切れなかった行
-    （読点が無い等・reason に理由）。
+    対象は呼び出し時点で上限を超えている行。**全体で1回の操作として履歴に積まれる**（undo_line_op 1回で戻る）。
+    先に dry_run=True で影響（何行が区切られるか）を確認するとよい。
     """
-    params: dict = {}
-    if limit is not None:
-        params["limit"] = limit
-    return await dc.request(
-        "POST", f"api/scripting/projects/{project_id}/episodes/{episode_number}/split-apply-all",
-        params=params,
-    )
+    body = {"limit": limit} if limit is not None else {}
+    return await _line_op(project_id, episode_number, "split-apply-all", body, dry_run)
 
 
 async def generate_series_script(project_id: str, style_id: str,
@@ -1134,41 +1272,53 @@ async def aroll_approve_images(project_id: str, episode_number: int,
         json=body)
 
 
-async def aroll_cuts(project_id: str, episode_number: int) -> dict:
-    """この話数の**カット割り**を返す(検査のみ・何も変えない・READ)。
+async def aroll_picture_groups(project_id: str, episode_number: int) -> dict:
+    """この話数の「同じ絵を使う行のまとまり」を返す(検査のみ・何も変えない・READ)。
 
-    穴9: 1行=1コマだとTTSの都合で分割した台詞が画像まで割ってしまうので、
-    連続する同じ話者の行を「カット」にまとめる。カットは保存せず毎回計算する。
+    既定は**1行につき1枚の絵**（サブ行を含む。行という単位を守る）。まとまりができるのは、
+    `aroll_share_picture(mode="same_as_previous")` で「前の行と同じ絵を使う」と明示した行だけ
+    （吹き出しだけ変わる区間）。話者・セクションが変わる所では必ず別の絵になる。
+    旧称は「カット」（Docs/LINE_WORKBENCH_PLAN.md D4 で廃止した語彙）。
 
-    規則(Docs/SUBLINE_PLAN.md §6-3・2026-09-26改訂): 話者/セクション交代で必ず切る。
-    1行(サブ行を含む)に1枚が基本。短すぎる行(推定3秒未満)は直前の行へ束ねる。
-    廃止: 決め台詞(最終行を単独にする規則)・前振りを12秒まで束ねる規則。
-
-    返り値の cuts[] は {cut_id, line_ids, role(solo/bundled), duration_sec, speaker_id}。
-    duration_source が "estimated" ならTTS前の推定尺(文字数×係数)で境界を決めている。
+    返り値の cuts[] は {cut_id, line_ids, role, duration_sec, speaker_id}（キー名は互換のため旧称のまま）。
+    line_ids が2行以上のものが「同じ絵」のまとまり。duration_source が "estimated" ならTTS前の推定尺。
     """
     return await dc.get(
         f"api/scrapping/projects/{project_id}/episodes/{episode_number}/aroll/cuts")
 
 
-async def aroll_set_cut(project_id: str, episode_number: int, line_id: str,
-                        boundary: Optional[str] = None,
-                        reset: bool = False) -> dict:
-    """カットの境界を手で直す(可逆WRITE)。
+async def aroll_share_picture(project_id: str, episode_number: int, line_id: str,
+                              mode: str = "same_as_previous") -> dict:
+    """「前の行と同じ絵を使う」かどうかを行ごとに決める(可逆WRITE)。台本の確定状態には影響しない。
 
-    boundary: "start"=この行から新しいカット / "join"=前のカットへつなげる。
-    reset: True でこの行の手直しを全部消して自動へ戻す。
-    ⚠️ **話者をまたぐ join は無視される**(1カットに2人の絵は入らない)。
-    ⚠️ role(決め台詞の付け替え)は廃止(Docs/SUBLINE_PLAN.md §6-3。決め台詞の規則自体が無い)。
-    手直しは `aroll.json` の cut_overrides に保存され、**再計算しても壊れない**。
+    mode: "same_as_previous"=この行は前の行と同じ絵を使う（同じ話者の時だけ有効。話者をまたぐ指定は無視）/
+    "own"=この行は自分の絵を使う（別の絵にする）/ "auto"=手直しを消して自動の判定へ戻す。
+    手直しは `aroll.json` に保存され、再計算しても壊れない。
     """
-    body: dict = {"reset": reset} if reset else {}
-    if boundary is not None:
-        body["boundary"] = boundary
+    body = {"same_as_previous": {"boundary": "join"}, "own": {"boundary": "start"}, "auto": {"reset": True}}.get(mode)
+    if body is None:
+        raise ValueError('mode は "same_as_previous" / "own" / "auto" のいずれかです')
     return await dc.request(
         "PUT",
         f"api/scrapping/projects/{project_id}/episodes/{episode_number}/aroll/cuts/{line_id}",
         json=body)
+
+
+async def aroll_cuts(project_id: str, episode_number: int) -> dict:
+    """【旧名・非推奨】`aroll_picture_groups` の別名（「カット」の語彙は廃止した）。同じ結果を返す。"""
+    return await aroll_picture_groups(project_id, episode_number)
+
+
+async def aroll_set_cut(project_id: str, episode_number: int, line_id: str,
+                        boundary: Optional[str] = None,
+                        reset: bool = False) -> dict:
+    """【旧名・非推奨】`aroll_share_picture` の別名。boundary="join"→same_as_previous /
+    "start"→own / reset=True→auto。新しく書くなら `aroll_share_picture` を使う。"""
+    if reset:
+        return await aroll_share_picture(project_id, episode_number, line_id, "auto")
+    return await aroll_share_picture(
+        project_id, episode_number, line_id,
+        {"join": "same_as_previous", "start": "own"}.get(boundary or "", ""))
 
 
 async def aroll_assign_backgrounds(project_id: str, episode_number: int,
@@ -1269,7 +1419,8 @@ async def psassist_jobs(project_id: str, episode_number: int) -> dict:
 
 
 async def psassist_run(project_id: str, episode_number: int, kind: str,
-                       lines: Optional[list[str]] = None, force: bool = False) -> dict:
+                       lines: Optional[list[str]] = None, force: bool = False,
+                       include_edited: bool = False) -> dict:
     """host_worker.py（ホスト常駐のPhotoshop工程）へジョブを1件キューに積む。
 
     ⚠️ **`cutout` / `build_panel` / `export_png` / `resync` は Photoshop を占有する。** 他の用途で
@@ -1293,6 +1444,15 @@ async def psassist_run(project_id: str, episode_number: int, kind: str,
     「待つ（何もしない）」か「このまま進める」か確認し、進める場合だけforce=Trueで呼び直すこと。
     PS環境を使っていない環境（CUTOUT_PS=off・worker.json無し）ではそもそも409にならない。
 
+    **再合成**（旧称「組版し直す」）＝Photoshop で1行分の合成を最初から作り直すこと。`resync`（または lines を
+    指定した `build_panel`）がそれ。確定の運用が始まっている話数では、再合成は**確定済みの行だけ**が対象
+    （未確定の行は飛ばす。対象が空なら409）。
+
+    ⚠️ **手直しの保護**: Photoshop で手直しした行（画面で「✋ 手直し済み」）は、`build_panel`/`resync` が
+    **既定で飛ばす**（手直しを上書きで消さないため。ジョブ結果の `skipped_edited` に行が出る）。
+    上書きするなら include_edited=True（**必ずユーザーに確認してから**。元のPSDを `psd_final/_backup/` に
+    退避してから上書きする＝結果の `backed_up`）。
+
     ⚠️ **先に psassist_worker_status() で alive を確認すること。** worker が動いていないと
     ジョブはキューに積まれるだけで何も実行されない（無言で放置される）。
     進捗は psassist_jobs をポーリングして status/log を見る。
@@ -1302,6 +1462,8 @@ async def psassist_run(project_id: str, episode_number: int, kind: str,
         body["lines"] = lines
     if force:
         body["force"] = True
+    if include_edited:
+        body["args"] = {"include_edited": True}
     return await dc.request(
         "POST", f"projects/{project_id}/episodes/{episode_number}/psassist/jobs", json=body)
 
@@ -1324,6 +1486,18 @@ TOOLS = [
     {"fn": generate_script,      "side_effects": [S.WRITE]},
     {"fn": generate_series_script, "side_effects": [S.WRITE]},
     {"fn": approve_script,       "side_effects": [S.WRITE]},
+    # 台本の行の操作（director の窓口経由・W5）。音声・コマ・確定が追随する
+    {"fn": update_script_line,   "side_effects": [S.WRITE]},
+    {"fn": insert_script_line,   "side_effects": [S.WRITE]},
+    {"fn": move_script_line,     "side_effects": [S.WRITE]},
+    {"fn": delete_script_line,   "side_effects": [S.WRITE]},
+    {"fn": get_llm_proposal,     "side_effects": [S.READ]},
+    {"fn": adopt_llm_proposal,   "side_effects": [S.WRITE]},
+    {"fn": get_line_states,      "side_effects": [S.READ]},
+    {"fn": start_confirmations,  "side_effects": [S.WRITE]},
+    {"fn": confirm_lines,        "side_effects": [S.WRITE, S.GPU, S.ASYNC]},
+    {"fn": undo_line_op,         "side_effects": [S.WRITE]},
+    {"fn": get_line_history,     "side_effects": [S.READ]},
     {"fn": regenerate_lines,     "side_effects": [S.WRITE]},
     {"fn": import_script,        "side_effects": [S.WRITE]},
     {"fn": get_script,           "side_effects": [S.READ]},
@@ -1360,8 +1534,10 @@ TOOLS = [
     {"fn": aroll_fill_missing,   "side_effects": [S.WRITE]},
     {"fn": aroll_approve_images, "side_effects": [S.WRITE]},
     {"fn": aroll_assign_backgrounds, "side_effects": [S.WRITE]},
-    {"fn": aroll_cuts,           "side_effects": [S.READ]},
-    {"fn": aroll_set_cut,        "side_effects": [S.WRITE]},
+    {"fn": aroll_picture_groups, "side_effects": [S.READ]},
+    {"fn": aroll_share_picture,  "side_effects": [S.WRITE]},
+    {"fn": aroll_cuts,           "side_effects": [S.READ]},        # 旧名（別名）
+    {"fn": aroll_set_cut,        "side_effects": [S.WRITE]},       # 旧名（別名）
     {"fn": aroll_update_line,    "side_effects": [S.WRITE]},
     # ホスト工程（psassist・Photoshop）
     {"fn": psassist_worker_status, "side_effects": [S.READ]},

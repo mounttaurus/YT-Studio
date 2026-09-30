@@ -5,7 +5,7 @@ import httpx
 from fastapi import APIRouter, HTTPException, Request, Response
 from fastapi.responses import FileResponse, JSONResponse
 
-from app.core import project_manager
+from app.core import confirmations, project_manager
 
 router = APIRouter(tags=["api"])
 
@@ -117,6 +117,27 @@ _PSASSIST_KINDS_ALLOW_ALL = {"build_plan", "cutout", "build_panel", "qa_check"}
 _PS_GATE_KINDS = {"build_panel", "resync", "export_png"}
 
 
+# W2（Docs/LINE_WORKBENCH_PLAN.md §4-3・§6-2）: **組版（PSDの作り直し＝再合成）は確定済みの行だけ**。
+# 書きかけの本文で Photoshop を回さない・手直しを無駄に上書きしない。確定の運用が始まっている話数
+# だけがゲートされる（運用外の話数は従来どおり全行対象）。検査・書き出し・下ごしらえ（build_plan・
+# cutout・qa_check・export_png）は絵そのものを作り直さないのでゲートしない。
+_PS_CONFIRM_GATE_KINDS = {"build_panel", "resync"}
+
+
+def _confirmed_only(project_id: str, episode_number: int, lines: list[str]) -> tuple[list[str], list[str], bool]:
+    """(組版に回す行, 未確定でスキップした行, ゲートがかかったか)。lines が空＝話数の全行（本文のある行だけ）。
+    確定の運用外の話数は (lines, [], False)＝何も変えない（空のまま＝従来どおり全件）。"""
+    ep_dir = project_manager.episode_dir(project_id, episode_number)
+    if not confirmations.enabled(ep_dir):
+        return lines, [], False
+    script_lines = confirmations.script_lines(ep_dir) or []
+    states = confirmations.line_states(script_lines, confirmations.read(ep_dir))
+    target = list(lines) if lines else [l for l, st in states.items() if st != confirmations.EMPTY]
+    ok = [l for l in target if states.get(l) == confirmations.CONFIRMED]
+    return (ok, [l for l in target if states.get(l) != confirmations.CONFIRMED and states.get(l) != confirmations.EMPTY],
+            True)
+
+
 async def _ps_cutout_gate(project_id: str, episode_number: int, lines: list[str]) -> dict | None:
     """対象行にPS切り抜き未処理のものがあれば `{ps_pending_lines, worker_alive}` を返す。
 
@@ -181,6 +202,16 @@ async def create_psassist_job(project_id: str, episode_number: int, request: Req
         # ⚠️ 空リストは「対象ゼロ」。export_png は対象行の明示を必須にする
         raise HTTPException(status_code=400, detail="lines is required (empty = no target)")
 
+    skipped_unconfirmed: list[str] = []
+    if kind in _PS_CONFIRM_GATE_KINDS:
+        lines, skipped_unconfirmed, gated = _confirmed_only(project_id, episode_number, lines)
+        # ⚠️ ゲートが効いている話数で対象が空になったら必ず止める（空リストを host_worker に渡すと
+        #    「全件」の意味になり、未確定の行まで組版してしまう）
+        if gated and not lines:
+            raise HTTPException(status_code=409, detail={
+                "unconfirmed_lines": skipped_unconfirmed,
+                "message": "組版できる（確定済みの）行がありません。未確定の行を確定してから組版してください"})
+
     if kind in _PS_GATE_KINDS and not body.get("force"):
         gate = await _ps_cutout_gate(project_id, episode_number, lines)
         if gate:
@@ -190,6 +221,8 @@ async def create_psassist_job(project_id: str, episode_number: int, request: Req
         project_id, episode_number, kind, lines, body.get("args") or {})
     if job is None:
         raise HTTPException(status_code=404, detail="episode not found")
+    if skipped_unconfirmed:
+        return {**job, "skipped_unconfirmed": skipped_unconfirmed}   # 件数を UI が出せるよう応答にだけ付ける
     return job
 
 

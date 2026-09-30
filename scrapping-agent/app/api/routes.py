@@ -2629,6 +2629,23 @@ async def aroll_orphan_line(project_id: str, episode_number: int, line_id: str):
     return {"line_id": line_id, "orphaned": panel is not None, "panel": panel}
 
 
+class SyncStructureRequest(BaseModel):
+    split_front_line_ids: list[str] = []   # 分割の前半（同期記録を焼き直す＝絵が古くならない）
+
+
+@router.post("/projects/{project_id}/episodes/{episode_number}/aroll/lines/sync-structure")
+async def aroll_sync_structure(project_id: str, episode_number: int,
+                               req: Optional[SyncStructureRequest] = None):
+    """台本の行構造へコマ一覧を合わせる（director の行操作の窓口用・LINE_WORKBENCH_PLAN §3-3）。
+
+    LLM・画像生成は呼ばない。台本から外れた行は孤立扱い（在庫の使用回数を戻す・絵は残す）、
+    新しい行はコマを追加、台本へ戻った行（Undo）は絵の割当と使用回数を戻し、話者を替えた行は
+    「絵が古い」にする。冪等。aroll.json が無い話数は何もしない（`skipped`）。
+    """
+    return aroll_manager.sync_structure(
+        project_id, episode_number, (req.split_front_line_ids if req else []) or [])
+
+
 class CutoutApplyRequest(BaseModel):
     line_ids: Optional[list[str]] = None   # 省略時は在庫で賄える全行
 

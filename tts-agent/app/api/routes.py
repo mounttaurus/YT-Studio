@@ -7,12 +7,13 @@ import uuid
 from datetime import datetime, timezone
 from pathlib import Path
 
+import httpx
 from fastapi import APIRouter, BackgroundTasks, File, HTTPException, UploadFile
 from fastapi.responses import Response
 from pydantic import BaseModel
 from typing import Optional
 
-from app.core import audio_utils, cache_manager, engines
+from app.core import audio_state, audio_utils, cache_manager, engines, structure_sync
 from app.core.engines import irodori, omnivoice
 from app.core.engines.omnivoice import MissingRefAudioError
 from app.core.emotion_mapper import apply_emotion_to_text, emotion_to_emoji
@@ -376,6 +377,140 @@ async def delete_line_audio(project_id: str, line_id: str, episode: int = 1, lan
             tts_path.write_text(json.dumps(tts, ensure_ascii=False, indent=2), encoding="utf-8")
 
     return {"line_id": line_id, "deleted_wav": deleted_wav, "deleted_tts_entry": deleted_entry}
+
+
+@router.post("/projects/{project_id}/audio/sync-structure")
+async def sync_audio_structure(project_id: str, episode: int = 1, lang: Optional[str] = None):
+    """台本の行構造へ tts.json を合わせる（director の行操作の窓口・Docs/LINE_WORKBENCH_PLAN.md §3・I5）。
+
+    台本から外れた行の音声は**消さず孤立扱い**にする（wav は残し、tts.json の
+    `orphaned_audio_files[]` へ退避）。台本へ戻った行（Undo）は `audio_files[]` へ戻す。
+    LLM・音声生成は呼ばない。冪等（何度呼んでも同じ結果）。
+    `delete_line_audio`（明示的な削除）とは別物で、こちらは元に戻せる。
+    """
+    try:
+        read_project(project_id)
+    except FileNotFoundError:
+        raise HTTPException(404, f"Project not found: {project_id}")
+    script_path = get_script_path(project_id, episode, lang=lang)
+    if not script_path.exists():
+        return {"skipped": "script.json not found", "orphaned": [], "restored": [], "refreshed": []}
+    tts, tts_path = _load_tts_json(project_id, episode, lang=lang)
+    if tts is None:
+        return {"skipped": "tts.json not found", "orphaned": [], "restored": [], "refreshed": []}
+
+    lines = parse_script_json(script_path)
+    result = structure_sync.sync_structure(tts, lines)
+    if result["changed"]:
+        _rebuild_tts_metadata(tts, lines)
+        tts_path.write_text(json.dumps(tts, ensure_ascii=False, indent=2), encoding="utf-8")
+    return {"orphaned": result["orphaned"], "restored": result["restored"],
+            "refreshed": result["refreshed"], "kept_files": True}
+
+
+def _line_audio_states(project_id: str, episode: int, lang: Optional[str]) -> tuple[dict, list, dict]:
+    """(project, 台本の行, {line_id: 'current'|'stale'|'missing'|'unassigned'})。
+    判定の規則は `audio_state`（director の TTS タブ `lineTtsState` と同じ）。"""
+    pj = read_project(project_id)
+    script_path = get_script_path(project_id, episode, lang=lang)
+    if not script_path.exists():
+        raise FileNotFoundError("script.json not found")
+    lines = parse_script_json(script_path)
+    tts, _ = _load_tts_json(project_id, episode, lang=lang)
+    entries = {f.get("line_id"): f for f in (tts or {}).get("audio_files", [])}
+    audio_dir = get_audio_dir(project_id, episode, lang=lang)
+    states = {}
+    for l in lines:
+        voice, caption = _resolve_voice_caption(pj, l.speaker_id)
+        if voice == "none":
+            states[l.id] = "unassigned"   # 声が未割当＝作れない（配役の問題）
+            continue
+        states[l.id] = audio_state.audio_state(
+            entries.get(l.id), (audio_dir / f"{l.id}.wav").exists(),
+            text=l.text, emotion=l.emotion, speed=l.speed, voice=voice, caption=caption)
+    return pj, lines, states
+
+
+@router.get("/projects/{project_id}/audio/pending")
+async def audio_pending(project_id: str, episode: int = 1, lang: Optional[str] = None):
+    """作り直しが要る行（未生成・要再生成）の一覧。エンジンが止まっていて作れなかった行の
+    「作り直し待ち」もここに出る（待ち行列のファイルは持たない＝台本と音声から毎回導く）。"""
+    try:
+        _, lines, states = _line_audio_states(project_id, episode, lang)
+    except FileNotFoundError as e:
+        raise HTTPException(404, str(e))
+    pending = [{"line_id": l.id, "state": states[l.id]} for l in lines
+               if states[l.id] in (audio_state.MISSING, audio_state.STALE)]
+    return {"pending": pending, "unassigned": [l.id for l in lines if states[l.id] == "unassigned"],
+            "total_lines": len(lines)}
+
+
+class RunLinesRequest(BaseModel):
+    line_ids: list[str]
+
+
+async def _run_lines(project_id: str, episode: int, lang: Optional[str], line_ids: list[str]) -> None:
+    """指定行を順に作り直す（`run_single_line` の繰り返し＝キャッシュ→生成→tts.json 同期）。
+    エンジンに繋がらない時は残りを諦める（1行ごとに待たない）。作れなかった行は
+    未生成・要再生成のまま残る＝`audio_pending` に出る（作り直し待ち）。"""
+    run_key = _run_key(project_id, episode, lang)
+    _running[run_key] = True
+    _progress[run_key] = {"total": len(line_ids), "done": 0, "current_line_id": None, "log": []}
+    lang_prefix = f"[{lang}] " if lang else ""
+    try:
+        for line_id in line_ids:
+            if not _running.get(run_key):
+                _progress[run_key]["log"].append(f"中断しました（{_progress[run_key]['done']}件生成済み）")
+                break
+            _progress[run_key]["current_line_id"] = line_id
+            try:
+                await run_single_line(project_id, line_id, episode, False, lang)
+                _progress[run_key]["done"] += 1
+                _progress[run_key]["log"].append(f"✔ {line_id} 完了")
+            except HTTPException as e:
+                append_error(project_id, "tts", "GENERATE_FAILED", f"{lang_prefix}{line_id}: {e.detail}",
+                             recoverable=True)
+                _progress[run_key]["log"].append(f"✘ {line_id} 失敗: {e.detail}")
+            except httpx.RequestError as e:
+                append_error(project_id, "tts", "ENGINE_UNREACHABLE",
+                             f"{lang_prefix}音声エンジンに繋がりません（残りは作り直し待ち）: {e}", recoverable=True)
+                _progress[run_key]["log"].append("✘ 音声エンジンに繋がらないため中断（作り直し待ち）")
+                break
+            except Exception as e:  # noqa: BLE001 — 1行の失敗で残りを止めない
+                logger.error("Line %s generation failed: %s", line_id, e, exc_info=True)
+                append_error(project_id, "tts", "GENERATE_FAILED", f"{lang_prefix}{line_id}: {e}", recoverable=True)
+                _progress[run_key]["log"].append(f"✘ {line_id} 失敗: {str(e)[:120]}")
+        _progress[run_key]["current_line_id"] = None
+    finally:
+        _running.pop(run_key, None)
+
+
+@router.post("/projects/{project_id}/run/lines")
+async def run_lines(project_id: str, req: RunLinesRequest, background_tasks: BackgroundTasks,
+                    episode: int = 1, lang: Optional[str] = None):
+    """指定行のうち、**最新でない行（未生成・要再生成）だけ**を作り直す（行の確定が呼ぶ・D9）。
+
+    最新の行は作り直さない（`already_current`）。声が未割当の行は作れない（`unassigned`）。
+    生成はバックグラウンド（ローカルGPU・無料）。進捗は `GET /projects/{id}/status` の `progress`。
+    エンジンが止まっていれば作れないが、その行は `GET .../audio/pending` に残る。
+    全行生成（`/run`）が走っている間は 409。
+    """
+    try:
+        _, lines, states = _line_audio_states(project_id, episode, lang)
+    except FileNotFoundError as e:
+        raise HTTPException(404, str(e))
+    run_key = _run_key(project_id, episode, lang)
+    if _running.get(run_key):
+        raise HTTPException(409, "Already running")
+
+    known = {l.id for l in lines}
+    unknown = [i for i in dict.fromkeys(req.line_ids) if i not in known]
+    wanted = [l.id for l in lines if l.id in set(req.line_ids)]      # 台本の並び順で作る
+    queued = [i for i in wanted if states[i] in (audio_state.MISSING, audio_state.STALE)]
+    if queued:
+        background_tasks.add_task(_run_lines, project_id, episode, lang, queued)
+    return {"queued": queued, "already_current": [i for i in wanted if states[i] == audio_state.CURRENT],
+            "unassigned": [i for i in wanted if states[i] == "unassigned"], "unknown": unknown}
 
 
 # ───────────────────────────── voices ──────────────────────────────
@@ -910,6 +1045,12 @@ async def _run_project(project_id: str, episode_number: int = 1, lang: Optional[
             },
         }
         tts_path = get_tts_json_path(project_id, episode_number, lang=lang)
+        # ⚠️ 全行生成は tts.json を作り直すので、外れた行の孤立エントリ（Undoで戻す音声）を
+        #    持ち越す。ここで落とすと、削除→全行生成→Undo で音声が戻らない（I5）
+        old_tts, _ = _load_tts_json(project_id, episode_number, lang=lang)
+        carried = structure_sync.carry_orphans(old_tts, {l.id for l in lines})
+        if carried:
+            tts_json[structure_sync.ORPHAN_KEY] = carried
         tts_path.write_text(
             json.dumps(tts_json, ensure_ascii=False, indent=2), encoding="utf-8")
         _progress[run_key]["current_line_id"] = None

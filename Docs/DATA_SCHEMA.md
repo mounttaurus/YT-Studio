@@ -26,6 +26,8 @@ shared/projects/{YYYYMMDD_seq_slug}/
 │   │   ├── audio/            ← tts-agent が生成した音声ファイル
 │   │   ├── footage/          ← scrapping-agent が確定DLした素材（Bロール）
 │   │   ├── a_roll/           ← scrapping-agent が書く（Aロール: マンガ形式パネル＋aroll.json。§6d）
+│   │   ├── line_ops/         ← director-agent が書く（行の操作の窓口の履歴＋Undo用スナップショット。§4「行の操作の窓口」）
+│   │   ├── confirmations.json ← director-agent が書く（行の確定の記録＝確定した時点の行の指紋。§4「行の確定」）
 │   │   ├── edit/              ← editing-agent が書く（OTIO+SRT+マニフェスト）
 │   │   │   ├── timeline.otio
 │   │   │   ├── subtitles.srt
@@ -573,6 +575,41 @@ shared/voices/irodori/
 - 操作（分ける・結合・追加・自動区切り）は `scripting-agent/app/core/subline_manager.py` に集約。
   下流（`aroll.json`・`tts.json`）への伝播はS2の範囲（§6d）
 
+### 行の操作の窓口の履歴（2026-09-29新規・`Docs/LINE_WORKBENCH_PLAN.md` §3・W1）
+
+台本を変える操作は director-agent の窓口（`POST /projects/{pid}/episodes/{n}/lines/{op}`）を通す。
+窓口は `episodes/epNN/line_ops/` に履歴を残し、Undo で台本（ドラフトと確定版を別々に）を書き戻す。
+
+- `{op_id}.json` … 操作の記録（`op`・`params`・`line_id`・`created_at`・`status`＝`pending`/`committed`・`undone`・`new_line_ids`・`removed_line_ids`・`warnings`）。`op_id` は時刻始まりでソート可能
+- `{op_id}.before.json` … 操作前の `{"draft": …, "script": …}` のスナップショット（無い方は null）
+- `_head.json` … 窓口が最後に確定させた台本の指紋。Undo の時に今の台本と違えば 409（窓口を通さない変更を潰さない）
+- 話数ごとに最新30件（`committed`）だけ残す。書き手は director-agent だけ
+- Undo は台本の変更だけを戻す。外れた行の音声（§5）・コマ（§6d）は消していないので、台本に戻った行へそのまま戻る
+
+### 行の確定（2026-09-29新規・`Docs/LINE_WORKBENCH_PLAN.md` §4・W2）
+
+**確定** ＝ 手で変えた行を行ごとに「これでいい」と決める操作。保存するのは**確定した時点の行の指紋だけ**で、
+確定済み／未確定は毎回の比較で導く（今の指紋＝記録の指紋→確定済み・違う／記録なし→未確定）。
+書き手は director-agent だけ。指紋関数は `director-agent/app/core/line_fingerprint.py`（1つ）。
+
+```json
+{ "schema_version": "1.0.0", "started_at": "2026-09-29T…", "baseline": true,
+  "fingerprint_fields": ["id","text","speaker_id","section","parent_line_id","emotion","speed","pause_after_sec"],
+  "lines": { "line_001": { "fingerprint": "9f2c…", "fields": { "text": "…", "speaker_id": "speaker_a", … },
+                            "confirmed_at": "2026-09-29T…" } } }
+```
+
+- **話数ごとに始まる**。ファイルが無い話数は「運用外」＝確定ゲートなし・従来どおり（本番の既存話数は始めるまで何も変わらない）。
+  始めるのは「LLMの案を採用」（`lines/adopt`）か「今の台本を全行確定済みで始める」（`lines/confirmations/start`）。
+  `baseline: true` は始めた時の全行を確定済みとして記録した印、false は空から（全行が未確定）
+- 台本の正本は `script.json`（ドラフトではない）。本文が空の行は未確定に数えず、確定もできない
+- **`script.json` の metadata には置かない**（import・Undo の丸ごと書き戻しで消える・巻き戻る 2026-09-28 の事故と同じ穴）
+- 並び順（`order`）・メモは指紋に入れない＝移動しても確定は外れない。外れた行の記録は残す（Undo で戻った行は確定済みへ戻る）
+- 確定で走るもの: 音声＝要再生成・未生成の行だけ tts-agent が作り直す（`POST /projects/{id}/run/lines`）／絵＝プロンプトが無い行の
+  下ごしらえ・背景・話者を替えた行の在庫の選び直し。画像の新規生成（課金）は走らない。組版（`build_panel`・`resync`）は
+  確定済みの行だけ（運用が始まっている話数のみ）。**確定と作り直した音声は Undo の対象外**（台本の変更だけを戻す）
+- 音声の「作り直し待ち」は保存しない（確定済み ∧ 音声が最新でない行＝tts-agent の `GET /projects/{id}/audio/pending`）
+
 ### speaker_id / speaker_name の解決（2026-07-01・表示ドリフト根治）
 - `speaker_id` は台本上の役（`config.tts.speakers[].id` と対応）。**名前・声の唯一の本籍はキャラ**（§2b）。
 - `speaker_name` は**表示キャッシュ**。scripting-agent は台本を返す時（`GET .../script`・`export-text`）に
@@ -669,6 +706,12 @@ tts-agentがIrodori-TTS-Server生成のモノラル音声を自動でステレ�
 }
 ```
 
+- `orphaned_audio_files[]`（2026-09-29新規・後方互換・`Docs/LINE_WORKBENCH_PLAN.md` §3・W1）: 台本から外れた行
+  （削除・結合で吸収された行）の `audio_files[]` のエントリを**消さずに退避**した置き場（`orphaned_at` 付き）。
+  wav も `audio/` に残る。読み手（editing-agent・director UI等）は `audio_files[]`・`timeline[]` だけを見るので、
+  外れた行は「音声の無い行」に見える。行が台本へ戻ると（Undo）同じエントリが `audio_files[]` へ戻る。
+  書き手は tts-agent の `POST /projects/{id}/audio/sync-structure`（冪等・LLM/音声生成なし）。
+  全行生成が tts.json を作り直す時も持ち越す。無ければキーごと存在しない
 - `parent_line_id`（2026-09-26新規・schema_version 1.1.0・後方互換MINOR）: script.json の同名
   フィールドをそのまま写す（サブ行のグループ。TTSタブでサブ行を親の下にまとめて表示するための
   情報。**本籍は`Docs/SUBLINE_PLAN.md` §4-2**）。無い行はnull（普通の行）
@@ -947,6 +990,24 @@ NanoBanana（参照画像同梱）でパネルを生成する。吹き出しは�
   にする。呼ばないと次のマニフェスト再構築まで消費が解放されないままになる
 - どちらも **入口（UI/MCP）はまだ無い**（`Docs/SUBLINE_PLAN.md` I7）。今は関数として
   存在するだけで、既存の挙動には影響しない
+  → **2026-09-29（W1）から行の操作の窓口が `sync_structure`（下記）経由で呼ぶ**
+
+### 行の操作の窓口の後始末（2026-09-29新規・後方互換・`Docs/LINE_WORKBENCH_PLAN.md` §3-3・W1）
+
+`POST /projects/{id}/episodes/{n}/aroll/lines/sync-structure`（body: `split_front_line_ids`）が台本の行構造へ
+コマ一覧を合わせる。LLM・画像生成は呼ばない・冪等・`aroll.json` が無い話数は何もしない。
+
+- 台本から外れた行 → 孤立扱い（`orphan: true`・絵のPNGは残す）。在庫割当は消さずに **`panels[].orphaned_cutout`**
+  （`cutout_slot_id`/`cutout_char_id`/`cutout_source`/`cutout_assigned_at`）へ預け、使用回数（`times_used`・`used_by`）を戻す
+- 台本にあってコマが無い行 → 空プロンプトのコマを追加。order・section・parent_line_id・text も台本へ追随
+- 台本へ戻った行（Undo）→ `orphaned_cutout` から割当と使用回数を戻す。戻せない時（在庫が消えた／別のカットに同じ絵が付いた）は
+  戻さず `warnings`。束ねたカットは消費を「カットにつき1回」で数える
+- 話者を付け替えた行 → **`panels[].speaker_changed`**（`{"from", "picture", "at"}`）を付け、`_panel_sync` が `stale`
+  を返す（`picture` は印を付けた時の絵の同一性＝選び直すと自然に外れる。行を明示した承認でも外れる）。
+  描くキャラ（`characters`）は、話者に従っていた行だけ新しい話者へ付け替える
+- `split_front_line_ids` の行 → `confirm_split_sync` と同じ（同期記録を今のテキストへ焼き直す）
+- `orphan` かつ絵が無いコマは `sync_report` の「行が消えた」に数えない（Undo用の預かり物）
+- `build_or_update_manifest` は既に `orphan` のコマを画像が無くても持ち越す（従来は落としていた）
 
 ### 演技スロット（2026-08-19 新規 — 画像再利用の下地）
 

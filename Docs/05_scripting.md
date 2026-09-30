@@ -53,7 +53,7 @@ scripting-agent/
     │   ├── __init__.py
     │   └── server.py            ← MCPサーバー（tts-agentと同形式）
     ├── static/
-    │   └── index.html           ← WebUI (Alpine.js)
+    │   └── index.html           ← 案内ページのみ（旧WebUIは2026-09-29廃止。台本の編集は director の台本タブ／行ワークベンチ。API はそのまま）
     └── tests/
         └── test_scripting.py
 ```
@@ -83,7 +83,7 @@ scripting-agent/
       ↓ ユーザー確認
 
 [ユーザーレビュー]
-  - WebUIで行単位プレビュー（話者カラー表示）
+  - director の台本タブ／行ワークベンチで行単位プレビュー（話者カラー表示）。※scripting-agent 自身の画面は廃止（Docs/LINE_WORKBENCH_PLAN.md §10・W3）
   - 行クリックで直接編集
   - チャット欄でフィードバック → 再生成
 

@@ -132,6 +132,17 @@ python scripts/host_worker.py --shared "<別のリポ>/shared"
 稼働中の director が読む `<稼働側>/shared/_psassist/worker.json` が永遠に生まれず、
 「ボタンが出ない」だけが症状として出た。
 
+### 手直しの保護（再合成しても Photoshop での手直しを消さない）
+
+再合成の出力先 `psd_final/` は、ユーザーが手直しして保存する PSD と**同じファイル**。上書きで手直しが消えないよう、host_worker が行ごとに記録を持つ
+（`scripts/build_records.py`・正本 `Docs/LINE_WORKBENCH_PLAN.md` §6-2・D15）。
+
+- **`psassist/build_records.json`** — `{line_id: {built_at, psd_sha256, size, mtime_ns, lang, source}}`。自動で作った（再合成した）時点の PSD の指紋。行ごとに更新し、他の行の記録は消さない。
+- **「✋ 手直し済み」＝今の PSD の内容（sha256）が記録と違う**。更新時刻では判定しない（コピー・同期ソフトで時刻だけ変わる誤検知を避ける）。(size, mtime_ns) が同じなら「変わっていない」と見なす近道あり。記録が無い行は判定不能＝手直し扱いしない。
+- **記録が無い既存の PSD** は、`build_panel`/`resync` の最初に「今の状態＝自動で作ったもの」として初期化する。
+- **`build_panel`/`resync` は手直し済みの行を既定で飛ばす**（結果の `skipped_edited`）。ジョブの `args.include_edited: true` を明示した時だけ上書きし、その前に元の PSD を `psd_final/_backup/{line_id}_{日時}.psd` へ退避する（結果の `backed_up`）。飛ばして対象が空になっても、空リストを bridge に渡さない（空＝全件の意味になるため）。
+- director（読み取り専用）が同じ判定を `director-agent/app/core/psd_records.py` で持つ。**記録の形を変える時は両方を直す。**
+
 ### 在庫スイープ（キャラ在庫のPS切り抜き。P1）
 
 エピソードの `jobs/queue/` を1周期分見ても拾うジョブが無かった時だけ、

@@ -378,9 +378,12 @@ def build_or_update_manifest(
         panels.append(panel)
 
     # 台本から消えた行のうち画像を持つものは証拠として残す（バッチ対象からは常に除外）
+    # ⚠️ 既に orphan の行は画像が無くても持ち越す（`sync_structure` が孤立扱いにした行。
+    #    在庫の割当を `orphaned_cutout` に預けてあり、台本へ戻った時（Undo）に生き返らせる。
+    #    ここで落とすと、削除→プロンプト作り直し→Undo で絵の割当が戻らない。LINE_WORKBENCH_PLAN I5）
     live_ids = {p["line_id"] for p in panels}
     for lid, prev in old_panels.items():
-        if lid in live_ids or prev.get("status") != "done":
+        if lid in live_ids or (prev.get("status") != "done" and not prev.get("orphan")):
             continue
         panels.append({**prev, "orphan": True})
 
@@ -719,6 +722,12 @@ def _script_lines_by_id(project_id: str, episode: int, script: dict | None = Non
     }
 
 
+def picture_key(panel: dict) -> str:
+    """パネルの「今の絵」の同一性。話者変更の印（`speaker_changed`）が、印を付けた時の絵に
+    対してだけ効くようにするための鍵。選び直す・作り直す・在庫を替えると変わる。"""
+    return f"{panel.get('cutout_slot_id')}|{panel.get('image')}|{panel.get('generated_at')}"
+
+
 def _panel_sync(panel: dict, line: dict | None, out_dir: Path | None) -> str:
     """1パネルの同期状態を判定する（台本行 line が正・panel.orphan は参考にしない）。
 
@@ -735,6 +744,11 @@ def _panel_sync(panel: dict, line: dict | None, out_dir: Path | None) -> str:
             return SYNC_MISSING  # マニフェストはdoneだが実ファイルが無い（手動削除など）
     elif not panel.get("cutout_slot_id"):
         return SYNC_MISSING  # 生成画像も在庫割当も無い
+    # 話者を付け替えた行（行操作の窓口の `speaker`）。絵は前の話者のキャラのまま＝古い。
+    # 印を付けた時の絵と今の絵が同じ間だけ効く＝選び直せば（絵が変われば）自然に外れる
+    marker = panel.get("speaker_changed")
+    if marker and marker.get("picture") == picture_key(panel):
+        return SYNC_STALE
     prev_hash = panel.get("source_text_hash")
     if not prev_hash:
         return SYNC_UNKNOWN
@@ -764,6 +778,11 @@ def sync_report(project_id: str, episode: int, script: dict | None = None) -> di
             continue
         seen.add(lid)
         line = lines_by_id.get(lid)
+        if line is None and p.get("orphan") and p.get("status") != "done":
+            # 行操作の窓口（`sync_structure`）が孤立扱いにした、絵が無いコマ。残っているのは
+            # 「Undoで戻すための預かり物」だけで、直すものも警告する材料も無い（生成画像の
+            # PNGが残っている孤立だけが「行が消えた」として数える＝従来どおり）
+            continue
         state = _panel_sync(p, line, out_dir)
         counts[state] += 1
         cur_text = (line or {}).get("text", "")
@@ -898,7 +917,7 @@ def set_cut_override(project_id: str, episode: int, line_id: str,
             "cuts": cut_report(project_id, episode, manifest)["total_cuts"]}
 
 
-def _used_slot_tags(panel: dict) -> dict | None:
+def _used_slot_tags(panel: dict, cache: dict | None = None) -> dict | None:
     """コマ一覧が表示する「実際に使われている絵」のタグ（emotion/shot/angle/pose）。
 
     ⚠️ **`panel["slot"]` とは別物**。`slot` はLLMが決めた**希望**のラベルで、
@@ -910,7 +929,14 @@ def _used_slot_tags(panel: dict) -> dict | None:
     char_id, slot_id = panel.get("cutout_char_id"), panel.get("cutout_slot_id")
     if not char_id or not slot_id:
         return None
-    e = panel_library_manager.get_entry(char_id, slot_id)
+    if cache is None:
+        e = panel_library_manager.get_entry(char_id, slot_id)
+    else:
+        # ⚠️ get_entry は呼ぶたびに library.json（本番のルカで約4MB）を丸ごと読む。141コマ×毎回だと
+        # 1話の GET /aroll が11秒かかった（2026-09-29 実測）。1回のリクエストではキャラごとに1回だけ読む。
+        if char_id not in cache:
+            cache[char_id] = {x.get("slot_id"): x for x in panel_library_manager.load_index(char_id).get("entries", [])}
+        e = cache[char_id].get(slot_id)
     if not e:
         return None
     return {"emotion": e.get("emotion"), "shot": e.get("shot"),
@@ -931,11 +957,12 @@ def annotate_manifest(project_id: str, episode: int, manifest: dict) -> dict:
     lines_by_id = _script_lines_by_id(project_id, episode)
     out_dir = aroll_dir(project_id, episode)
     out = dict(manifest)
+    tag_cache: dict = {}
     out["panels"] = [
         {**p,
          "text": (lines_by_id.get(p.get("line_id")) or {}).get("text", p.get("text", "")),
          "sync": _panel_sync(p, lines_by_id.get(p.get("line_id")), out_dir),
-         "used_slot": _used_slot_tags(p)}
+         "used_slot": _used_slot_tags(p, tag_cache)}
         for p in manifest.get("panels", [])
     ]
     return out
@@ -1020,6 +1047,8 @@ def approve_images(project_id: str, episode: int, line_ids: list[str] | None = N
         p["image_approved_at"] = _now()
         p["image_approved_hash"] = hashlib.sha256(data).hexdigest()[:16]
         line = lines_by_id.get(lid)
+        if wanted is not None and p.pop("speaker_changed", None) and lid not in synced:
+            synced.append(lid)   # 話者を替えた行の絵を、人が見て「これでいい」と確定した
         if line is not None:
             h = text_hash(line.get("text"))
             prev_hash = p.get("source_text_hash")
@@ -1028,7 +1057,8 @@ def approve_images(project_id: str, episode: int, line_ids: list[str] | None = N
                 p["source_text_hash"] = h
                 if (p.get("prompt") or "").strip():
                     p["prompt_text_hash"] = h
-                synced.append(lid)
+                if lid not in synced:
+                    synced.append(lid)
         approved.append(lid)
         if not register or p.get("cutout_slot_id"):
             # T1で既に登録済み（pending）。確定は image_approved_at を立てるだけで、
@@ -2232,6 +2262,17 @@ def reject_current_image(project_id: str, episode: int, line_id: str) -> dict:
     return {"line_id": line_id, "char_id": char_id, "slot_id": slot_id, "deleted": deleted}
 
 
+def _confirm_split_panel(panel: dict, cur_text: str) -> bool:
+    """分割の前半のパネルの同期記録を今のテキストへ焼き直す（絵も在庫割当も無ければ何もしない）。"""
+    if panel.get("status") != "done" and not panel.get("cutout_slot_id"):
+        return False
+    panel["source_text"] = cur_text
+    panel["source_text_hash"] = text_hash(cur_text)
+    if (panel.get("prompt") or "").strip():
+        panel["prompt_text_hash"] = text_hash(cur_text)
+    return True
+
+
 def confirm_split_sync(project_id: str, episode: int, line_id: str) -> dict | None:
     """行が分割された直後、前半(line_id)の同期記録を今のテキストへ焼き直す
     （`Docs/SUBLINE_PLAN.md` §5「分ける」・S2 §14）。
@@ -2251,17 +2292,88 @@ def confirm_split_sync(project_id: str, episode: int, line_id: str) -> dict | No
     panel = next((p for p in manifest.get("panels", []) if p.get("line_id") == line_id), None)
     if panel is None:
         raise ValueError(f"line not found: {line_id}")
-    if panel.get("status") != "done" and not panel.get("cutout_slot_id"):
-        return None
-
     line = _script_lines_by_id(project_id, episode).get(line_id)
-    cur_text = (line or {}).get("text", "")
-    panel["source_text"] = cur_text
-    panel["source_text_hash"] = text_hash(cur_text)
-    if (panel.get("prompt") or "").strip():
-        panel["prompt_text_hash"] = text_hash(cur_text)
+    if not _confirm_split_panel(panel, (line or {}).get("text", "")):
+        return None
     save_manifest(project_id, episode, manifest)
     return panel
+
+
+def _other_live_holder(manifest: dict, panel: dict, char_id: str, slot_id: str) -> list[dict]:
+    """同じ在庫の絵（char_id/slot_id）を今も持っている、`panel` 以外の生きた行。"""
+    return [q for q in manifest.get("panels", [])
+            if q is not panel and not q.get("orphan")
+            and q.get("cutout_slot_id") == slot_id
+            and (q.get("cutout_char_id") or char_id) == char_id]
+
+
+def _orphan_panel(project_id: str, episode: int, manifest: dict, panel: dict) -> bool:
+    """パネルを孤立扱いにする（`manifest` を in-place で書き換える。保存は呼び出し側）。
+
+    在庫の割当は**捨てずに** `orphaned_cutout` へ預ける（台本へ行が戻った時＝Undo に
+    `_restore_panel_cutout` が生き返らせる。LINE_WORKBENCH_PLAN I5）。使用回数は戻す。
+    同じ絵を共有する生きた兄弟行（束ねたカット）が居る間は、消費（times_used）は
+    カットにつき1回なので戻さない（`set_cutout_selection` と同じ規則）。
+    既に孤立のパネルは何もしない。
+    """
+    if panel.get("orphan"):
+        return False
+    slot_id, char_id = panel.get("cutout_slot_id"), panel.get("cutout_char_id")
+    if slot_id and char_id:
+        kw = {"count": False} if _other_live_holder(manifest, panel, char_id, slot_id) else {}
+        panel_library_manager.release_usage(
+            char_id, slot_id, project_id=project_id, episode=episode,
+            line_id=panel.get("line_id"), **kw)
+        panel["orphaned_cutout"] = {
+            "cutout_slot_id": slot_id, "cutout_char_id": char_id,
+            "cutout_source": panel.get("cutout_source"),
+            "cutout_assigned_at": panel.get("cutout_assigned_at"),
+        }
+    panel["cutout_slot_id"] = None
+    panel["cutout_char_id"] = None
+    panel["cutout_source"] = None
+    panel["cutout_assigned_at"] = None
+    panel["orphan"] = True
+    return True
+
+
+def _restore_panel_cutout(project_id: str, episode: int, manifest: dict, panel: dict) -> str | None:
+    """`orphaned_cutout` に預けた在庫割当を、台本へ戻った行に返す（`manifest` を in-place で更新）。
+
+    戻せない時は割当を戻さず理由を返す（行は「絵が無い」状態＝在庫で埋め直せる）:
+    - 在庫の絵が消えた・承認が外れた（在庫側の都合が変わった）
+    - 外している間に、同じ絵が**別のカットの**行へ割り当たった（1話で同じ絵を二度使わない規則）
+    戻せた時は使用回数を数え直す（外した時に戻した分）。同じカットの兄弟行が持っている間は
+    消費を数えない（`_orphan_panel` と対称）。戻せたら None。
+    """
+    stash = panel.pop("orphaned_cutout", None)
+    if not stash:
+        return None
+    slot_id, char_id = stash.get("cutout_slot_id"), stash.get("cutout_char_id")
+    entry = panel_library_manager.get_entry(char_id, slot_id) if (slot_id and char_id) else None
+    if (not entry or not panel_library_manager.usable_as(entry)["cutout"]
+            or entry.get("review_status", "approved") != "approved"):
+        return f"在庫の絵 {slot_id} が使えなくなっていたため、絵の割当は戻していません（在庫で埋め直せます）"
+
+    holders = _other_live_holder(manifest, panel, char_id, slot_id)
+    same_cut = False
+    if holders:
+        cut = cut_planner.cut_of_line(
+            cut_report(project_id, episode, manifest)["cuts"]).get(panel.get("line_id"))
+        cut_ids = set((cut or {}).get("line_ids", []))
+        if all(h.get("line_id") in cut_ids for h in holders):
+            same_cut = True
+        else:
+            return (f"外している間に同じ絵 {slot_id} が別の行へ割り当たっていたため、"
+                    "絵の割当は戻していません（1話で同じ絵を二度使わない）")
+    panel_library_manager.record_usage(
+        char_id, slot_id, project_id=project_id, episode=episode,
+        line_id=panel.get("line_id"), count=not same_cut)
+    panel["cutout_slot_id"] = slot_id
+    panel["cutout_char_id"] = char_id
+    panel["cutout_source"] = stash.get("cutout_source")
+    panel["cutout_assigned_at"] = stash.get("cutout_assigned_at")
+    return None
 
 
 def orphan_line(project_id: str, episode: int, line_id: str) -> dict | None:
@@ -2273,25 +2385,115 @@ def orphan_line(project_id: str, episode: int, line_id: str) -> dict | None:
     次回のマニフェスト再構築で同じ行を自動で orphan 化するが、それまで
     times_used が解放されないままになる（生涯上限に嘘の消費で早く到達する）。
     既に orphan の行・パネルが無い行は何もせず None を返す。
+
+    在庫の割当は `orphaned_cutout` に預ける（`_orphan_panel`）。行操作の窓口は
+    台本全体の構造を見る `sync_structure` を使う（こちらは1行だけの後始末）。
     """
     manifest = load_manifest(project_id, episode)
     if manifest is None:
         raise ValueError("aroll.json not found")
     panel = next((p for p in manifest.get("panels", []) if p.get("line_id") == line_id), None)
-    if panel is None or panel.get("orphan"):
+    if panel is None or not _orphan_panel(project_id, episode, manifest, panel):
         return None
-
-    slot_id, char_id = panel.get("cutout_slot_id"), panel.get("cutout_char_id")
-    if slot_id and char_id:
-        panel_library_manager.release_usage(
-            char_id, slot_id, project_id=project_id, episode=episode, line_id=line_id)
-    panel["cutout_slot_id"] = None
-    panel["cutout_char_id"] = None
-    panel["cutout_source"] = None
-    panel["cutout_assigned_at"] = None
-    panel["orphan"] = True
     save_manifest(project_id, episode, manifest)
     return panel
+
+
+def _follows_speaker(panel: dict, speaker_id: str, speaker_map: dict) -> bool:
+    """パネルの `characters` が、その話者の描くキャラ（単独）に従っているか。"""
+    drawn = (speaker_map.get(speaker_id) or {}).get("image_char_id") or ""
+    return (panel.get("characters") or []) == ([drawn] if drawn else [])
+
+
+def sync_structure(project_id: str, episode: int,
+                   split_front_line_ids: list[str] | None = None) -> dict:
+    """台本の行構造へコマ一覧を合わせる（director の行操作の窓口・LINE_WORKBENCH_PLAN §3-3・W1）。
+
+    **LLMも画像生成も呼ばない。** 冪等（台本が変わっていなければ何も変わらない）。
+    aroll.json が無い話数（Aロール未着手）は何もしない。
+
+    1. 台本から外れた行 → 孤立扱い（在庫の使用回数を戻す・絵のPNGは残す・割当は預ける）
+    2. 台本にあってコマが無い行 → プロンプト無しのコマを追加（`build_or_update_manifest`）。
+       order・section・parent_line_id・text の追随もここで効く。台本へ戻った行は孤立を外す
+    3. 戻ってきた行 → 預けた在庫の割当と使用回数を戻す（Undo）
+    4. 話者を付け替えた行 → 絵を「古い」にする（`speaker_changed` の印）＋描くキャラを新しい話者へ
+    5. `split_front_line_ids`（分割の前半） → 同期記録を今のテキストへ焼き直す（絵が古くならない）
+    """
+    empty = {"added": [], "orphaned": [], "restored": [], "speaker_changed": [],
+             "split_confirmed": [], "warnings": []}
+    manifest = load_manifest(project_id, episode)
+    if manifest is None:
+        return {"has_manifest": False, "skipped": "aroll.json not found", **empty}
+    script = project_manager.get_episode_script(project_id, episode)
+    if script is None:
+        return {"has_manifest": True, "skipped": "script.json not found", **empty}
+
+    lines_by_id = _script_lines_by_id(project_id, episode, script)
+    speaker_map = get_speaker_map(project_id)
+    warnings: list[str] = []
+
+    # 話者の付け替えは、再構築が speaker_id を上書きする前に検出する
+    speaker_moves: dict[str, str] = {}
+    for p in manifest.get("panels", []):
+        lid = p.get("line_id")
+        if p.get("orphan") or lid not in lines_by_id:
+            continue
+        old, new = p.get("speaker_id") or "", lines_by_id[lid].get("speaker_id") or ""
+        if old and new and old != new:
+            speaker_moves[lid] = old
+
+    had_orphan = {p.get("line_id") for p in manifest.get("panels", []) if p.get("orphan")}
+    had_panel = {p.get("line_id") for p in manifest.get("panels", [])}
+
+    orphaned = []
+    for p in manifest.get("panels", []):
+        if p.get("line_id") in lines_by_id:
+            continue
+        if _orphan_panel(project_id, episode, manifest, p):
+            orphaned.append(p.get("line_id"))
+    if orphaned:
+        save_manifest(project_id, episode, manifest)
+
+    manifest = build_or_update_manifest(project_id, episode, script, {}, overwrite=False)
+    panels_by_id = {p.get("line_id"): p for p in manifest["panels"] if not p.get("orphan")}
+    added = [lid for lid in lines_by_id if lid not in had_panel]
+
+    restored = [lid for lid in lines_by_id if lid in had_orphan and lid in panels_by_id]
+    for lid, p in panels_by_id.items():
+        if p.get("orphaned_cutout"):
+            why = _restore_panel_cutout(project_id, episode, manifest, p)
+            if why:
+                warnings.append(f"{lid}: {why}")
+
+    speaker_changed = []
+    for lid, old in speaker_moves.items():
+        p = panels_by_id.get(lid)
+        if p is None:
+            continue
+        new = lines_by_id[lid].get("speaker_id") or ""
+        marker = p.get("speaker_changed")
+        # 描くキャラは、話者に従っていた行だけ新しい話者へ付け替える（手で選んだキャラは尊重）
+        if _follows_speaker(p, old, speaker_map):
+            drawn = (speaker_map.get(new) or {}).get("image_char_id") or ""
+            p["characters"] = [drawn] if drawn else []
+            p["slot_key"] = compute_slot_key(p["characters"], p.get("slot"))
+        if marker and marker.get("from") == new:
+            p.pop("speaker_changed", None)     # 元の話者へ戻った（Undo）＝絵はまた正しい
+        elif p.get("cutout_slot_id") or (p.get("status") == "done" and p.get("image")):
+            p["speaker_changed"] = {"from": (marker or {}).get("from") or old,
+                                    "picture": picture_key(p), "at": _now()}
+            speaker_changed.append(lid)
+
+    split_confirmed = []
+    for lid in split_front_line_ids or []:
+        p = panels_by_id.get(lid)
+        if p is not None and _confirm_split_panel(p, lines_by_id.get(lid, {}).get("text", "")):
+            split_confirmed.append(lid)
+
+    save_manifest(project_id, episode, manifest)
+    return {"has_manifest": True, "added": added, "orphaned": orphaned, "restored": restored,
+            "speaker_changed": speaker_changed, "split_confirmed": split_confirmed,
+            "warnings": warnings}
 
 
 def apply_cutout_plan(project_id: str, episode: int, line_ids: list[str] | None = None) -> dict:

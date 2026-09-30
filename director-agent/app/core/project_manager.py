@@ -9,6 +9,8 @@ import uuid
 from datetime import datetime, timezone
 from pathlib import Path
 
+from app.core import confirmations
+
 SHARED_DIR = Path(os.getenv("SHARED_DIR", "/shared"))
 PROJECTS_DIR = SHARED_DIR / "projects"
 
@@ -36,6 +38,20 @@ def list_projects() -> list[dict]:
             "episodes": pj.get("episodes", []),
         })
     return summaries
+
+
+def proposal_pending(ep_dir: Path) -> bool:
+    """LLMの案（ドラフト）が採用待ちか＝ドラフトがあり、正本が無いか正本と行の内容が違う。
+    差の判定の本籍は scripting-agent の adoption.py（ここは一覧に出す目印だけ・並び順は数えない）。"""
+    draft = _read_json(ep_dir / "script_draft.json")
+    if not draft:
+        return False
+    script = _read_json(ep_dir / "script.json")
+    if not script:
+        return True
+    def norm(doc):
+        return [{k: v for k, v in l.items() if k != "order"} for l in doc.get("lines", [])]
+    return norm(draft) != norm(script) or (draft.get("generated_at") != script.get("generated_at"))
 
 
 def get_project_episodes(project_id: str) -> list[dict]:
@@ -76,6 +92,12 @@ def get_project_episodes(project_id: str) -> list[dict]:
             "has_script": has_script,
             "has_draft": has_draft,
             "line_count": line_count,
+            # 行の確定の要約（W2）。運用外の話数は {"enabled": False}。話数の「台本完了」は
+            # 「採用済みの正本があり、未確定の行がゼロ」＝ enabled かつ unconfirmed==0 で導く
+            # （保存された status.scripting は従来の意味のまま＝下流の前提チェックを変えない）
+            "confirmation": confirmations.summary(ep_dir),
+            # LLMの案（ドラフト）が正本へ採用待ちか（W2・§4-1。承認後の regenerate-lines も含む）
+            "proposal_pending": proposal_pending(ep_dir),
         })
     return result
 
