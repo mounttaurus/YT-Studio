@@ -202,7 +202,7 @@ function detailHtml(l) {
   if (S.tab === 'script') {
     const n = (l.text || '').length;
     return `<div class="detail"><span class="chip">${M.EMOJI[l.emotion] || ''} ${esc(l.emotion || 'neutral')}</span>
-      <span class="mono">${n}字・推定${M.estSec(l.text)}秒</span>${n > M.LONG_LIMIT ? '<span class="chip warn">長い（55字超）</span>' : ''}
+      <span class="mono">${n}字・推定${M.estSec(l.text)}秒</span>${n > M.LONG_LIMIT ? `<span class="chip warn" title="上限${M.LONG_LIMIT}字を${n - M.LONG_LIMIT}字超えています">長い（${n}字／上限${M.LONG_LIMIT}字）</span>` : ''}
       ${l.split_review ? '<span class="chip warn" title="読点などで区切った行。人が見たら外れます">区切りを要確認</span>' : ''}</div>`;
   }
   if (S.tab === 'aroll') return AR.detailHtml(l);
@@ -279,9 +279,12 @@ function pendingHtml(l) {
       <div class="splitprev"><div><b>前半 ${esc(l.id)}</b><span id="pv-f">${esc(l.text.slice(0, p.params.pos))}</span></div>
       <div><b>後半（新しいサブ行）</b><span id="pv-b">${esc(l.text.slice(p.params.pos))}</span></div></div></div>` : '';
   const ok = !p.loading && !p.error && p.dry && p.dry.ok !== false && p.dry.changed !== false;
+  // 実行して確定: この操作で未確定になる行があり、確定の運用中の時だけ（見込みは dry_run の state から）
+  const will = ok ? M.confirmTargets(p.dry.state) : [];
+  const andConfirm = will.length ? `<button class="btn ok" data-act="runopconfirm" title="実行したあと、この操作で未確定になった${will.length}行をそのまま確定します（音声の作り直し・絵の下ごしらえが走ります。画像の生成は走りません）">実行して確定<span class="n">${will.length}</span></button>` : '';
   return `<div class="confirm" id="m-confirm"><h3>「${name}」でこうなります（どのタブから押しても同じ）</h3>${form}${body}
     <div class="inline"><span class="hint">費用 0円（画像の生成は走りません）</span><span class="spacer"></span>
-      <button class="btn ghost" data-act="cancelop">やめる</button><button class="btn primary" data-act="runop" ${ok ? '' : 'disabled'}>${name}を実行</button></div></div>`;
+      <button class="btn ghost" data-act="cancelop">やめる</button><button class="btn primary" data-act="runop" ${ok ? '' : 'disabled'}>${name}を実行</button>${andConfirm}</div></div>`;
 }
 
 function drawModal() {
@@ -292,8 +295,9 @@ function drawModal() {
   const castOpts = S.cast.filter((c) => c.assignable);
   const secBody = {
     script: () => `
-      <div class="field"><label for="m-text">本文</label><textarea id="m-text">${esc(l.text)}</textarea>
-        <div class="inline"><button class="btn" data-op="text">本文を保存</button><span class="hint mono">${(l.text || '').length}字・推定${M.estSec(l.text)}秒</span></div></div>
+      <div class="field"><label for="m-text">本文</label><textarea id="m-text">${esc(draftText(l))}</textarea>
+        <div class="inline"><button class="btn" data-op="text">本文を保存</button><span class="hint mono">${(l.text || '').length}字・推定${M.estSec(l.text)}秒</span>
+          <span class="hint">Enter で保存 ／ Ctrl+Enter でカーソルの位置で分ける</span></div></div>
       <div class="pair">
         <div class="box"><span class="flabel">話者（まれな操作）</span><div class="inline"><select id="m-spk">
           ${l.speaker_id ? '' : '<option value="">（未選択）</option>'}${castOpts.map((c) => `<option value="${esc(c.id)}" ${c.id === l.speaker_id ? 'selected' : ''}>${esc(c.name)}</option>`).join('')}</select>
@@ -342,14 +346,54 @@ function drawModal() {
     modal.querySelector('#pv-f').textContent = l.text.slice(0, M_.pending.params.pos);
     modal.querySelector('#pv-b').textContent = l.text.slice(M_.pending.params.pos);
   });
-  if (M_.pending) { const c = modal.querySelector('#m-confirm'); if (c && c.scrollIntoView) c.scrollIntoView({ block: 'nearest' }); }
+  const ta = modal.querySelector('#m-text');
+  if (ta) {
+    ta.addEventListener('input', () => {
+      // 改行は本文として意味が無い（TTS・字幕・吹き出しへ流れる）。貼り付け・ドロップでも入らないよう、入った時点で取り除く
+      if (/[\r\n]/.test(ta.value)) {
+        const before = ta.value.slice(0, ta.selectionStart).replace(/[\r\n]/g, '').length;
+        ta.value = M.oneLine(ta.value);
+        ta.setSelectionRange(before, before);
+      }
+      M_.draft = { id: l.id, text: ta.value };
+    });
+    ta.addEventListener('keydown', (e) => textKey(e, ta, l));
+  }
+  if (M_.pending) {
+    const c = modal.querySelector('#m-confirm'); if (c && c.scrollIntoView) c.scrollIntoView({ block: 'nearest' });
+    // 影響が出揃ったら実行ボタンへ（キーボードだけで「Enter → 確認を見る → Enter」と進める）
+    const run = modal.querySelector('[data-act=runop]');
+    if (run && !run.disabled && run.focus) run.focus();
+  }
+}
+
+/** 本文欄に出す文字。描き直し（確認欄を開く・閉じる・区画の切り替え）で書きかけを失わない。 */
+function draftText(l) {
+  const d = S.modal && S.modal.draft;
+  return d && d.id === l.id ? d.text : l.text;
+}
+
+/** 本文欄のキー: Enter＝保存（確認欄へ）／Ctrl(Cmd)+Enter＝カーソルの位置で分ける／Shift+Enter＝何もしない（改行は入れない）。
+ *  日本語入力の変換を確定する Enter は拾わない。 */
+function textKey(e, ta, l) {
+  if (e.key !== 'Enter' || e.isComposing || e.keyCode === 229) return;
+  e.preventDefault();
+  if (S.working || e.shiftKey) return;
+  if (!(e.ctrlKey || e.metaKey)) { startOp('text'); return; }
+  const v = M.oneLine(ta.value);
+  if (v !== l.text) return toast('本文に保存していない変更があります。先に Enter で保存してから分けてください', { bad: true });
+  const pos = ta.selectionStart;
+  if (!(pos > 0 && pos < l.text.length)) return toast('分ける位置にカーソルを置いてください（先頭・末尾では分けられません）', { bad: true });
+  const why = M.can('split', l, S.lines, S.enabled);
+  if (why) return toast(why, { bad: true });
+  startOp('split', { pos });
 }
 
 // ── 行の操作（確認欄＝dry_run → 実行） ───────────────────────
-async function startOp(op) {
+async function startOp(op, opts = {}) {
   const l = byId(S.modal.id);
   let p = {};
-  if (op === 'text') { const v = modal.querySelector('#m-text').value; if (v === l.text) return toast('本文は変わっていません'); p = { text: v }; }
+  if (op === 'text') { const v = M.oneLine(modal.querySelector('#m-text').value); if (v === l.text) return toast('本文は変わっていません'); p = { text: v }; }
   else if (op === 'emotion') { const v = modal.querySelector('#m-emo').value; if (v === (l.emotion || 'neutral')) return toast('感情は変わっていません'); p = { emotion: v }; }
   else if (op === 'timing') {
     const speed = Number(modal.querySelector('#m-speed').value), pause = Number(modal.querySelector('#m-pause').value);
@@ -362,7 +406,7 @@ async function startOp(op) {
     if (!v) return toast('話者を選んでください');
     if (v === l.speaker_id) return toast('話者は変わっていません');
     p = { speaker_id: v, speaker_name: (S.cast.find((c) => c.id === v) || {}).name };
-  } else if (op === 'split') p = { pos: M.snap(l.text, Math.floor(l.text.length / 2)) };
+  } else if (op === 'split') p = { pos: M.snap(l.text, opts.pos ?? Math.floor(l.text.length / 2)) };
   const a = M.toApi(op, l, p);
   const pending = { op, params: p, api: { apiOp: a.op, body: a.body }, dry: null, loading: true, error: '' };
   S.modal.pending = pending;
@@ -372,21 +416,27 @@ async function startOp(op) {
   if (S.modal && S.modal.pending === pending) drawModal();        // 閉じた・別の操作に替えた後の返事は捨てる
 }
 
-async function runOp() {
+async function runOp(andConfirm = false) {
   const M_ = S.modal, p = M_.pending, l = byId(M_.id);
   if (!p || p.loading || S.working) return;
   const focus = (res) => M.focusAfter(p.op, l, S.lines, res);
-  await working('実行しています…', async () => {
+  let ids = [];
+  const ran = await working('実行しています…', async () => {
     const res = await api.lineOp(S.pid, S.ep, p.api.apiOp, p.api.body);
     const target = focus(res);           // 再読込の前に、モーダルを合わせる先を決める（削除で行が消えても落ちない）
-    M_.pending = null; M_.edited = false;
+    ids = M.confirmTargets(res.state);
+    M_.pending = null; M_.edited = false; M_.draft = null;
     if (target) M_.id = target;
     await load();
     if (!res.changed) { toast('変更はありませんでした'); if (S.modal) drawModal(); return; }
     if (!target || !byId(target)) closeModal(); else if (S.modal) { drawModal(); flash(target); }
     notify(res.warnings);
     toast(`${M.OP_NAMES[p.op]}：台本・音声・コマに反映しました${res.warnings.length ? '（注意あり）' : ''}`);
+    return true;
   });
+  if (!andConfirm || !ran) return;
+  // 実行後の正本で、この操作が触れて未確定になった行だけを確定する（他の未確定の行は巻き込まない）
+  if (ids.length) await confirmLines(ids);
 }
 
 function notify(warnings) {
@@ -617,7 +667,8 @@ document.addEventListener('click', (e) => {
     close: closeModal,
     nav: () => { const l = byId(S.modal.id), n = S.lines[idx(l) + +b.dataset.d]; if (n) { S.modal.id = n.id; S.modal.pending = null; S.modal.edited = false; drawModal(); flash(n.id); } },
     cancelop: () => { S.modal.pending = null; drawModal(); },
-    runop: runOp,
+    runop: () => runOp(),
+    runopconfirm: () => runOp(true),
     confirm: () => confirmLines([id]),
     confirmall: () => confirmLines(null),
     startconf: startConfirmations,

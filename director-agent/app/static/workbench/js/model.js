@@ -112,6 +112,11 @@ export function can(op, l, lines, enabled) {
 }
 
 /** 分割位置を近くの句読点の直後へ吸着させる（無ければそのまま）。 */
+/** 本文から改行を取り除く（本文に改行は意味が無い。TTS・字幕・吹き出しへ流れるのを防ぐ）。 */
+export function oneLine(text) {
+  return (text || '').replace(/[\r\n]+/g, '');
+}
+
 export function snap(text, pos) {
   const c = [];
   for (let i = 1; i < text.length; i++) if ('。！？、」』'.includes(text[i - 1])) c.push(i);
@@ -153,6 +158,17 @@ export function focusAfter(uiOp, l, lines, res) {
     return (lines[i + 1] || lines[i - 1] || {}).id || null;
   }
   return l.id;
+}
+
+/**
+ * 「実行して確定」で確定する行＝**この操作が触れた行のうち、操作後に未確定の行**。
+ * 窓口の応答の `state`（dry_run は見込み・実行後は正本）の `touched_line_ids` × `unconfirmed_line_ids`。
+ * 触れていない未確定の行（別の直しかけ・他の画面や MCP の変更）は巻き込まない。運用外の話数は空。
+ */
+export function confirmTargets(state) {
+  if (!state || !state.confirmation_enabled) return [];
+  const touched = new Set(state.touched_line_ids || []);
+  return (state.unconfirmed_line_ids || []).filter((id) => touched.has(id));
 }
 
 /**
