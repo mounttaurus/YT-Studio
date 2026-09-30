@@ -58,7 +58,7 @@ sys.path.insert(0, os.path.join(PSASSIST_ROOT, "psassist-agent"))
 # Phase 5 で組版の全工程を載せた。director はこの文字列だけを知る（§2-6）。
 # ★Photoshop を占有するものと、しないものを分けて持つ。UI が警告を出し分けるため。
 # resync（T3）は①③④⑤を1ジョブで連鎖する複合工程。lines必須（対象を明示する設計）。
-_JOB_KINDS_LIST = ["build_plan", "cutout", "build_panel", "qa_check", "export_png", "resync"]
+_JOB_KINDS_LIST = ["build_plan", "cutout", "build_panel", "qa_check", "export_png", "resync", "open_psd"]
 JOB_KINDS = set(_JOB_KINDS_LIST)  # jobs/queue/ 経由で受け付ける実際のジョブ種別
 
 # P1（Docs/CUTOUT_PS_PRIMARY_PLAN.md）: 在庫スイープ。jobs/queue/ を経由しない常駐機能
@@ -567,6 +567,49 @@ def run_resync_job(ep_dir: str, job: dict, log: list[str], on_line=None) -> dict
     return {"plan": plan_result, "build": panel_result, "qa": qa_result, "export": export_result}
 
 
+_OPEN_LINE_ID_RE = re.compile(r"^[A-Za-z0-9_\-]+$")
+
+
+def resolve_open_target(ep_dir: str, line_id: str) -> str:
+    """open_psd で開いてよいファイルの絶対パス。`psd_final/panel_{line_id}.psd` 以外は開かない。
+
+    ⚠️ パスは行IDから**ここで組み立てる**（ジョブから任意のパスを受け取らない）。行IDの文字種も絞り、
+    組み立てた結果が psd_final の中にあることを確かめる（`..` 等で外へ出られないように）。
+    """
+    if not _OPEN_LINE_ID_RE.match(line_id or ""):
+        raise ValueError("不正な行IDです: %r" % line_id)
+    base = os.path.realpath(os.path.join(ep_dir, "psassist", "psd_final"))
+    path = os.path.realpath(os.path.join(base, "panel_%s.psd" % line_id))
+    if os.path.dirname(path) != base:
+        raise ValueError("psd_final の外は開けません: %s" % path)
+    if not os.path.exists(path):
+        raise FileNotFoundError("合成PSDがまだありません（先に再合成してください）: %s" % path)
+    return path
+
+
+def run_open_psd_job(ep_dir: str, job: dict, log: list[str]) -> dict:
+    """手直しのため、1行の合成PSDをホストで開く（2026-09-30）。
+
+    既定は拡張子の関連付け（＝Photoshop）で開く。`args.reveal` はエクスプローラーでファイルを選んだ状態に
+    する。COM は使わない（OS に開かせるだけ）ので Photoshop の操作とは衝突しない。ただしワーカーは
+    ジョブを1つずつ処理するので、合成ジョブの実行中はその完了後に開く。
+    保存すると手直しとして検知され（build_records）、次の再合成で既定では守られる。
+    """
+    lines = job.get("lines") or []
+    if len(lines) != 1:
+        raise ValueError("open_psd は行IDを1つだけ指定します")
+    path = resolve_open_target(ep_dir, lines[0])
+    if os.name != "nt":
+        raise RuntimeError("このホスト（%s）ではファイルを開けません（Windows 専用）" % os.name)
+    if (job.get("args") or {}).get("reveal"):
+        subprocess.Popen(["explorer", "/select,", path])
+        log.append("エクスプローラーで開きました: %s" % path)
+        return {"opened": path, "reveal": True}
+    os.startfile(path)  # noqa: S606 — パスは resolve_open_target で psd_final 内に限定済み
+    log.append("Photoshop で開きました: %s" % path)
+    return {"opened": path, "reveal": False}
+
+
 def run_export_png_job(ep_dir: str, job: dict, log: list[str]) -> dict:
     lines = job.get("lines") or []
     if not lines:
@@ -685,6 +728,8 @@ def process_job(ep_dir: str, job_path: str) -> None:
             result = run_build_panel_job(ep_dir, job, log, on_line=on_line)
         elif kind == "resync":
             result = run_resync_job(ep_dir, job, log, on_line=on_line)
+        elif kind == "open_psd":
+            result = run_open_psd_job(ep_dir, job, log)
         status = "cancelled" if result.get("cancelled") else "done"
     except Exception as e:
         log.append("エラー: %s" % e)

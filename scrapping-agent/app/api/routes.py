@@ -2275,26 +2275,43 @@ async def aroll_generate_prompts(project_id: str, episode_number: int, req: Arol
     # なぜその役のコマにキャラが出ないのかは必ずここで言う。
     warnings: list[str] = list(aroll_manager.cast_warnings(project_id))
 
+    # 章ごとの問い合わせは独立なので並べて投げる（数を絞って）。1章が失敗しても**他の章の結果は保存する**
+    # （以前は1章の失敗で全章ぶんを捨てて502だった＝数分待った結果が全部消えた）
+    targets = [(s, ls) for s, ls in _group_line_objs_by_section(script)
+               if not req.sections or s in req.sections]
+    sem = asyncio.Semaphore(aroll_prompt_generator.SECTION_CONCURRENCY)
+
+    async def one(section: str, lines: list[dict]):
+        async with sem:
+            try:
+                return section, await aroll_prompt_generator.generate_section_prompts(
+                    section, lines, speaker_map, known_chars,
+                    extra_prompt=req.extra_prompt, model=req.model), None
+            except Exception as e:  # noqa: BLE001
+                return section, None, e
+
     prompts_by_line: dict[str, dict] = {}
-    for section, lines in _group_line_objs_by_section(script):
-        if req.sections and section not in req.sections:
+    failed: list[dict] = []
+    for section, res, err in await asyncio.gather(*(one(s, ls) for s, ls in targets)):
+        if err is not None:
+            refused = isinstance(err, aroll_prompt_generator.PromptRefused)
+            project_manager.append_error(project_id, f"aroll prompt generation failed ({section}): {err}")
+            failed.append({"section": section, "refused": refused, "error": str(err)[:300]})
+            warnings.append(f"❌ 章 '{section}': {str(err)[:300]}")
             continue
-        try:
-            result, warns = await aroll_prompt_generator.generate_section_prompts(
-                section, lines, speaker_map, known_chars,
-                extra_prompt=req.extra_prompt, model=req.model,
-            )
-        except Exception as e:
-            project_manager.append_error(project_id, f"aroll prompt generation failed: {e}")
-            raise HTTPException(status_code=502, detail=f"prompt generation failed ({section}): {e}")
+        result, warns = res
         prompts_by_line.update(result)
         warnings.extend(warns)
+
+    if targets and len(failed) == len(targets):
+        raise HTTPException(status_code=502, detail={
+            "message": "すべての章でプロンプト生成に失敗しました", "failed_sections": failed, "warnings": warnings})
 
     manifest = aroll_manager.build_or_update_manifest(
         project_id, episode_number, script, prompts_by_line,
         aspect=req.aspect, style=req.style, overwrite=req.overwrite,
     )
-    return {"manifest": manifest, "warnings": warnings}
+    return {"manifest": manifest, "warnings": warnings, "failed_sections": failed}
 
 
 @router.get("/projects/{project_id}/episodes/{episode_number}/aroll")

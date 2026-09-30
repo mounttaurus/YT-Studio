@@ -200,6 +200,25 @@ export function createFinalUi(ctx) {
       ${issue ? `<div class="hint">${esc(issue)}${(f.issues || []).length > 1 ? ` ほか${f.issues.length - 1}` : ''}</div>` : ''}</div>`;
   }
 
+  // ── Photoshop で開く（host_worker の open_psd・2026-09-30） ──────────
+  // ワーカーが開くのは psd_final/panel_{line_id}.psd だけ。古いワーカー（capabilities に無い）は再起動を案内する
+  function openHtml(l, m) {
+    const why = !m.alive ? 'ホスト工程（host_worker）が止まっています'
+      : !(m.capabilities || []).includes('open_psd') ? 'host_worker が古い版です（再起動すると使えます）'
+        : !(l.final || {}).has_psd ? 'まだ合成PSDがありません' : '';
+    const dis = why || S.working ? 'disabled' : '';
+    return `<button class="btn primary" data-a="f-open" data-id="${esc(l.id)}" ${dis} title="${esc(why || 'ホストの Photoshop でこの行のPSDを開きます')}">🖌 Photoshop で開く</button>
+      <button class="btn" data-a="f-reveal" data-id="${esc(l.id)}" ${dis} title="${esc(why || 'エクスプローラーでPSDの場所を開きます')}">📂 場所を開く</button>
+      ${why ? `<span class="hint warnt">${esc(why)}</span>` : ''}`;
+  }
+
+  async function openPsd(lineId, reveal) {
+    try {
+      await api.psassist.createJob(pid(), ep(), { kind: 'open_psd', lines: [lineId], ...(reveal ? { args: { reveal: true } } : {}) });
+      toast(reveal ? 'エクスプローラーで開くよう頼みました' : 'Photoshop で開くよう頼みました（数秒かかります。合成ジョブの実行中はその後に開きます）');
+    } catch (e) { fail(e); }
+  }
+
   // ── 描画: 行モーダルの「仕上がり」区画 ─────────────────────
   function modalHtml(l) {
     const f = l.final || {}, a = l.aroll || {}, s = R.severity(l), m = meta();
@@ -226,7 +245,9 @@ export function createFinalUi(ctx) {
         ${f.export ? `<a class="btn" href="${esc(url(f.export))}" target="_blank" rel="noopener">🖼 納品PNG（1920×1080）</a>` : ''}
         <button class="btn" data-a="f-m-export" ${!f.has_psd || busy() || !m.alive ? 'disabled' : ''} title="この行だけ納品PNGを書き出し直す">🖼 この行だけ更新</button></div>
       ${confirmHtml('modal')}
-      ${f.psd ? `<div class="box"><span class="flabel">Photoshop で手直しする（クリックでコピー）</span><pre class="cmd" data-a="f-copy" data-copy="${esc(R.psdHostPath(m, f))}" title="クリックでコピー">${esc(R.psdHostPath(m, f))}</pre>
+      ${f.has_psd || f.psd ? `<div class="box"><span class="flabel">Photoshop で手直しする</span>
+        <div class="inline">${openHtml(l, m)}</div>
+        ${f.psd ? `<pre class="cmd" data-a="f-copy" data-copy="${esc(R.psdHostPath(m, f))}" title="クリックでコピー">${esc(R.psdHostPath(m, f))}</pre>` : ''}
         <span class="hint">保存すると自動で再検査されます。手直しした行は「✋ 手直し済み」になり、再合成しても既定では上書きされません。</span></div>` : ''}
       ${R.measuredRows(f).length ? `<details class="aset"><summary>実測値</summary>${R.measuredRows(f).map(([k, v]) => `<div class="hint">${esc(k)}: ${esc(String(v))}</div>`).join('')}</details>` : ''}`;
   }
@@ -304,6 +325,8 @@ export function createFinalUi(ctx) {
       'f-step': () => step(el.dataset.kind),
       'f-cancel-job': cancelJob,
       'f-copy': () => copy(el.dataset.copy),
+      'f-open': () => openPsd(el.dataset.id, false),
+      'f-reveal': () => openPsd(el.dataset.id, true),
     }[a];
     if (act) await act();
     void id;

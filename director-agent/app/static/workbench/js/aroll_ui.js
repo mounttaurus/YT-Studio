@@ -12,7 +12,7 @@ export function createArollUi(ctx) {
   const A = {
     presets: null, styles: [], chars: null, plan: null, planBusy: false, planMsg: '',
     job: null, running: false, timer: null, ver: 1, msg: '', warnings: [],
-    settings: { style: '', aspect: '16:9', extra: '', overwrite: false, paid: false, target: 'missing' }, touched: false,
+    settings: { style: '', aspect: '16:9', extra: '', model: '', overwrite: false, paid: false, target: 'missing' }, touched: false,
     credits: null, setOpen: false,
     picker: null,     // {lineId, items, note, busy}
     bg: null,         // {lineId, items, cat, busy}
@@ -145,6 +145,7 @@ export function createArollUi(ctx) {
         <label class="fld">スタイル<select data-a="style">${styles.map((x) => opt(x, x, s.style)).join('') || '<option value="">（既定）</option>'}</select></label>
         <label class="fld">アスペクト比<select data-a="aspect">${['16:9', '1:1', '9:16', '4:3'].map((x) => opt(x, x, s.aspect)).join('')}</select></label>
         <label class="fld grow">追加指示（任意・プロンプト生成LLMへ）<input type="text" data-a="extra" value="${esc(s.extra)}" placeholder="例: 全体的にコミカルに、背景は教室で統一"></label>
+        <label class="fld">モデル（任意・空＝既定の無料枠）<input type="text" data-a="model" value="${esc(s.model)}" placeholder="anthropic/claude-sonnet-5" title="安全フィルタで拒否される機微なテーマは anthropic/claude-sonnet-5（有料・直接API）で通ります"></label>
         ${withStyle ? `<label class="chk"><input type="checkbox" data-a="overwrite" ${s.overwrite ? 'checked' : ''}> 既存プロンプトを作り直す（手編集した行は保持）</label>
         <button class="btn" data-a="prompts" ${S.working || A.running ? 'disabled' : ''}>✍ プロンプトを作り直す</button>` : ''}
       </div>
@@ -425,12 +426,32 @@ export function createArollUi(ctx) {
     if (A.bg === B) redrawModal();
   }
 
+  // 章ごとの失敗（時間切れ・安全フィルタの拒否）の一言。成功した章は保存済み（2026-09-30）
+  const failNote = (d) => {
+    const f = (d && d.failed_sections) || [];
+    if (!f.length) return '';
+    const refused = f.some((x) => x.refused);
+    return `（⚠ ${f.length}章は失敗: ${f.map((x) => x.section).join('・')}。${refused
+      ? '安全フィルタの拒否は、設定の「モデル」に anthropic/claude-sonnet-5 を入れて作り直すと通ります'
+      : 'もう一度押すと、失敗した章だけ作れます'}）`;
+  };
+  // すべての章が失敗した時（502）は、章ごとの理由を警告欄へ出す（トーストだけだと理由が読めない）
+  async function promptCall(body) {
+    try {
+      return await api.aroll.prompts(pid(), ep(), body);
+    } catch (e) {
+      if (e.detail && e.detail.failed_sections) { say(`❌ ${e.message}${failNote(e.detail)}`, e.detail.warnings || []); return null; }
+      throw e;
+    }
+  }
+
   async function prompts(all) {
     const s = A.settings;
     if (!all && s.overwrite && !confirm('既存のプロンプトを作り直します（手編集した行は保持）。LLMを使います（無料枠）。続行しますか？')) return;
-    await working(busyMsg('LLMがプロンプトを作っています（数分かかることがあります）'), async () => {
-      const d = await api.aroll.prompts(pid(), ep(), { extra_prompt: s.extra || null, overwrite: !all && s.overwrite, aspect: s.aspect, style: s.style || 'kamishibai' });
-      say(`✔ ${(d.manifest.panels || []).filter((p) => p.prompt).length}行のプロンプトを用意しました`, d.warnings || []);
+    await working(busyMsg('LLMがプロンプトを作っています（章ごとに最大90秒で打ち切ります）'), async () => {
+      const d = await promptCall({ extra_prompt: s.extra || null, overwrite: !all && s.overwrite, aspect: s.aspect, style: s.style || 'kamishibai', model: s.model || null });
+      if (!d) return;
+      say(`✔ ${(d.manifest.panels || []).filter((p) => p.prompt).length}行のプロンプトを用意しました${failNote(d)}`, d.warnings || []);
       await refresh();
     });
   }
@@ -441,11 +462,12 @@ export function createArollUi(ctx) {
     if (!confirm(`コマまたはプロンプトが無い ${n}行分のプロンプトを用意します（無料・画像生成なし）。続行しますか？`)) return;
     const s = A.settings, sections = [...new Set(targets.map((l) => l.section || 'main'))];
     await working(busyMsg('プロンプトを作っています'), async () => {
-      const d = await api.aroll.prompts(pid(), ep(), { sections, overwrite: false, aspect: s.aspect, style: s.style || 'kamishibai' });
+      const d = await promptCall({ sections, overwrite: false, aspect: s.aspect, style: s.style || 'kamishibai', model: s.model || null });
+      if (!d) return;
       // 新しい行だけが背景未割当のはずなので only_missing で絞れる
       let bg = null;
       try { bg = await api.aroll.autoAssignBackgrounds(pid(), ep(), { only_missing: true }); } catch { /* 背景は後からでもよい */ }
-      say(`✔ ${n}行を下ごしらえしました${bg && bg.assigned ? `（背景 ${bg.assigned}件を割当）` : ''}`, d.warnings || []);
+      say(`✔ ${n}行を下ごしらえしました${bg && bg.assigned ? `（背景 ${bg.assigned}件を割当）` : ''}${failNote(d)}`, d.warnings || []);
       await refresh();
     });
   }
@@ -511,7 +533,7 @@ export function createArollUi(ctx) {
     const a = el.dataset.a;
     if (a === 'selline') { el.checked ? S.sel.add(el.dataset.id) : S.sel.delete(el.dataset.id); ctx.rerender(); return; }
     if (a === 'selall') { S.sel = R.toggleAll(S.sel, visibleRows(), el.checked); ctx.rerender(); return; }
-    const setv = { target: 'target', style: 'style', aspect: 'aspect', extra: 'extra' }[a];
+    const setv = { target: 'target', style: 'style', aspect: 'aspect', extra: 'extra', model: 'model' }[a];
     if (setv) { A.settings[setv] = el.value; A.touched = true; ctx.rerender(); return; }
     if (a === 'overwrite') { A.settings.overwrite = el.checked; A.touched = true; return; }
     if (a === 'paid') {

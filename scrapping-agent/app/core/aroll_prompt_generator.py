@@ -223,6 +223,19 @@ def resolve_slot(
     return out, "mixed"
 
 
+# 1章の1回の問い合わせの上限（秒）。これが無いと、プロバイダが応答を返さない時に画面が固まった
+# （2026-09-30 実測。director の中継は300秒で切れるが、scrapping 側は待ち続けていた）
+CALL_TIMEOUT_SEC = float(os.getenv("AROLL_PROMPT_TIMEOUT_SEC", "90"))
+# 同時に投げる章の数（章ごとに独立した問い合わせ。無料枠の毎分上限に当たらない程度に）
+SECTION_CONCURRENCY = max(1, int(os.getenv("AROLL_PROMPT_CONCURRENCY", "3")))
+# 拒否された時に案内するモデル（自動では使わない＝有料への無断フォールバックをしない）
+REFUSAL_HINT_MODEL = "anthropic/claude-sonnet-5"
+
+
+class PromptRefused(RuntimeError):
+    """安全フィルタの拒否。別のモデルを指定すれば通る見込みがある（自動では切り替えない）。"""
+
+
 def _model_available(model: str) -> bool:
     """モデルのAPIキーが設定されているかを判定する。"""
     if model.startswith("gemini/"):
@@ -349,11 +362,19 @@ async def generate_section_prompts(
     last_err: Exception | None = None
     for m in _model_chain(model):
         try:
-            raw = await llm_client.chat(prompt, model=m, system=SYSTEM_PROMPT, max_tokens=8192)
+            raw = await llm_client.chat(prompt, model=m, system=SYSTEM_PROMPT, max_tokens=8192,
+                                        timeout=CALL_TIMEOUT_SEC)
             parsed = _parse_llm_json(raw)
             break
-        except Exception as e:  # 429/503/パース失敗 → 次のモデルへ
+        except Exception as e:  # noqa: BLE001
             last_err = e
+            if llm_client.is_refusal(e):
+                # 安全フィルタの拒否は、無料ルーター（毎回違うモデルに当たる）へ回しても直らないことが多く、
+                # 壊れたJSONで失敗を重ねるだけだった（2026-09-30 本番 mk_cia50）。ここで止めて理由を返す
+                raise PromptRefused(
+                    f"章 '{section}' は {m} の安全フィルタで拒否されました。"
+                    f"機微なテーマは、モデルに {REFUSAL_HINT_MODEL} を指定すると通ります") from e
+            # 時間切れ・429/503・JSONの壊れ → 次のモデルへ
             warnings.append(f"[{section}] {m} failed: {str(e)[:150]}")
     if parsed is None:
         raise RuntimeError(f"prompt generation failed for section '{section}': {last_err}")

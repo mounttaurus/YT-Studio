@@ -2,6 +2,7 @@
 LiteLLM ラッパー（scrapping-agent用の軽量版）。
 キーワード抽出にのみ使うため、scripting-agentのようなプロバイダー一覧UIは持たない。
 """
+import asyncio
 import os
 from typing import Optional
 
@@ -44,13 +45,44 @@ def _build_api_kwargs(model: str) -> dict:
     return kwargs
 
 
+class LLMTimeout(Exception):
+    """応答が時間内に終わらなかった（プロバイダ側で止まった・混雑）。"""
+
+
+class LLMRefused(Exception):
+    """安全フィルタで拒否された、または中身の無い応答が返った（別のモデルなら通ることがある）。"""
+
+
+# 安全フィルタの拒否として扱う例外文言（Gemini は SAFETY / PROHIBITED_CONTENT、litellm は content_filter）
+_REFUSAL_MARKERS = ("safety", "content_filter", "prohibited_content", "blocked", "recitation")
+
+
+def is_refusal(err: Exception) -> bool:
+    if isinstance(err, LLMRefused):
+        return True
+    text = str(err).lower()
+    return any(m in text for m in _REFUSAL_MARKERS)
+
+
 async def chat(
     prompt: str,
     model: Optional[str] = None,
     system: Optional[str] = None,
     temperature: float = 0.3,
     max_tokens: int = 2048,
+    timeout: Optional[float] = None,
 ) -> str:
+    """1回の問い合わせ。`timeout`（秒）を渡すと、応答全体（ストリームの受信まで）がその時間を
+    超えたら `LLMTimeout`。安全フィルタの拒否・空の応答は `LLMRefused`。"""
+    if timeout is None:
+        return await _chat(prompt, model, system, temperature, max_tokens)
+    try:
+        return await asyncio.wait_for(_chat(prompt, model, system, temperature, max_tokens), timeout)
+    except asyncio.TimeoutError:
+        raise LLMTimeout(f"{model or get_default_model()} が {timeout:.0f} 秒以内に応答しませんでした")
+
+
+async def _chat(prompt, model, system, temperature, max_tokens) -> str:
     model = model or get_default_model()
     # OpenRouterは中間業者でマージンが乗る。オリジナルAPI(anthropic/, openai/, gemini/)がある
     # モデルをOpenRouter経由の有料枠で叩く意味は無いため、無料モデル以外は拒否する。
@@ -79,9 +111,16 @@ async def chat(
         **kwargs,
     )
     parts: list[str] = []
+    finish = None
     async for chunk in stream:
         if chunk.choices:
             delta = chunk.choices[0].delta.content
             if delta:
                 parts.append(delta)
-    return "".join(parts)
+            finish = getattr(chunk.choices[0], "finish_reason", None) or finish
+    text = "".join(parts)
+    if finish and str(finish).lower() in ("content_filter", "safety", "prohibited_content", "recitation"):
+        raise LLMRefused(f"{model} が安全フィルタで応答を止めました（finish_reason={finish}）")
+    if not text.strip():
+        raise LLMRefused(f"{model} の応答が空でした（安全フィルタで拒否された時の典型）")
+    return text

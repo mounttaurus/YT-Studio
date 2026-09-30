@@ -154,3 +154,38 @@ def test_skipping_everything_never_falls_back_to_all(monkeypatch, tmp_path):
         fh.write(b"hand!")
     res = hw.run_build_panel_job(ep, {"job_id": "j3", "lines": ["line_001"]}, [])
     assert calls == [] and res["lines"] == 0 and res["skipped_edited"] == ["line_001"]
+
+
+# ── open_psd: 開けるのは psd_final/panel_{line_id}.psd だけ（2026-09-30） ──────────────
+def test_open_target_is_confined_to_psd_final(tmp_path):
+    hw = _import_host_worker()
+    ep = tmp_path / "ep01"
+    _psd(str(ep / "psassist"), "line_001")
+    assert hw.resolve_open_target(str(ep), "line_001").endswith(os.path.join("psd_final", "panel_line_001.psd"))
+    for bad in ("../x", "line_001/../../a", "", "a b"):
+        try:
+            hw.resolve_open_target(str(ep), bad)
+        except ValueError:
+            continue
+        raise AssertionError("開けてはいけない: %r" % bad)
+    try:
+        hw.resolve_open_target(str(ep), "line_999")
+    except FileNotFoundError:
+        pass
+    else:
+        raise AssertionError("無いPSDは開かない")
+
+
+def test_open_psd_job_uses_startfile_or_explorer(monkeypatch, tmp_path):
+    hw = _import_host_worker()
+    ep = tmp_path / "ep01"
+    _psd(str(ep / "psassist"), "line_001")
+    opened, popen = [], []
+    monkeypatch.setattr(hw.os, "name", "nt")
+    monkeypatch.setattr(hw.os, "startfile", lambda p: opened.append(p), raising=False)
+    monkeypatch.setattr(hw.subprocess, "Popen", lambda argv: popen.append(argv))
+    log = []
+    r = hw.run_open_psd_job(str(ep), {"lines": ["line_001"]}, log)
+    assert r["reveal"] is False and opened == [r["opened"]]
+    r = hw.run_open_psd_job(str(ep), {"lines": ["line_001"], "args": {"reveal": True}}, log)
+    assert popen == [["explorer", "/select,", r["opened"]]]

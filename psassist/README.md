@@ -106,7 +106,7 @@ python scripts/host_worker.py
 
 全プロジェクト・全エピソードの `psassist/` を1プロセスで見張る（`--episode` 指定は無い）。
 **`qa_check.py --watch` を内包して置き換える**（2つ常駐させない）。director-agent の
-🖼️Aロールタブ → 🔍合成チェックはこのプロセスの生死を見て「🖼 納品PNGを更新」ボタンを出す
+ワークベンチの仕上がりタブ（旧: director の🖼️Aロールタブ → 🔍合成チェック）はこのプロセスの生死を見て「🖼 納品PNGを更新」ボタンを出す
 （`shared/_psassist/worker.json` のハートビート・詳細は `Docs/AROLL_TAB_REDESIGN_PLAN.md` Phase 0）。
 出しっぱなしにしておけば、PSDの保存監視も納品PNGの書き出しもここから動く。
 
@@ -143,6 +143,13 @@ python scripts/host_worker.py --shared "<別のリポ>/shared"
 - **`build_panel`/`resync` は手直し済みの行を既定で飛ばす**（結果の `skipped_edited`）。ジョブの `args.include_edited: true` を明示した時だけ上書きし、その前に元の PSD を `psd_final/_backup/{line_id}_{日時}.psd` へ退避する（結果の `backed_up`）。飛ばして対象が空になっても、空リストを bridge に渡さない（空＝全件の意味になるため）。
 - director（読み取り専用）が同じ判定を `director-agent/app/core/psd_records.py` で持つ。**記録の形を変える時は両方を直す。**
 
+### Photoshop で開く（`open_psd`・2026-09-30）
+ワークベンチの仕上がりの行モーダル「🖌 Photoshop で開く」「📂 場所を開く」が積むジョブ。host_worker が
+`psd_final/panel_{line_id}.psd` を OS の関連付けで開く（`args.reveal: true` はエクスプローラーで選択）。
+**パスは行IDから host_worker が組み立てる**（ジョブから任意のパスは受けない・psd_final の外は拒否＝`resolve_open_target`）。
+COM を使わないので Photoshop の操作とは衝突しないが、ワーカーはジョブを1つずつ処理するので合成ジョブの実行中はその後に開く。
+capabilities に `open_psd` が無い古いワーカーではボタンが押せない（再起動で有効）。
+
 ### 在庫スイープ（キャラ在庫のPS切り抜き。P1）
 
 エピソードの `jobs/queue/` を1周期分見ても拾うジョブが無かった時だけ、
@@ -176,7 +183,7 @@ python host-bridge/export_png.py --episode <episode_dir> --all --resume
 ```
 
 検査結果は `psassist/qa_report.json` に出る。director-agent（:8005）の
-**🖼️Aロールタブ → 🔍 合成チェック**が同じファイルを共有フォルダ越しに読んで、
+**ワークベンチの仕上がりタブ（旧: director の🖼️Aロールタブ → 🔍 合成チェック。2026-09-30 撤去）**が同じファイルを共有フォルダ越しに読んで、
 全コマのサムネイル一覧＋指摘箇所の赤枠として表示する（**HTTPで繋がない**。
 詳細は `Docs/QA_UI_PLAN.md` §3・§10）。
 

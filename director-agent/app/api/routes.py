@@ -105,7 +105,11 @@ async def get_psassist_file(project_id: str, episode_number: int, rel: str):
 # host_worker.py が実行できる工程。director はこの文字列だけを知り、Photoshop 固有の
 # 詳細（COM・JSX・PSD）には触れない（AROLL_TAB_REDESIGN_PLAN.md §2-6）。
 # resync（T3）は①③④⑤を1ジョブで連鎖する複合工程。AROLL_UNIFIED_FLOW_PLAN.md §17。
-_PSASSIST_JOB_KINDS = {"build_plan", "cutout", "build_panel", "qa_check", "export_png", "resync"}
+_PSASSIST_JOB_KINDS = {"build_plan", "cutout", "build_panel", "qa_check", "export_png", "resync", "open_psd"}
+# open_psd（2026-09-30）: 手直しのため、1行の合成PSDをホストの Photoshop で開く（args.reveal=true はエクスプローラーで
+# 場所を開く）。開けるのは psd_final/panel_{line_id}.psd だけ（パスは host_worker が行IDから組み立てる＝任意のパスは受けない）
+_PSASSIST_SINGLE_LINE_KINDS = {"open_psd"}
+_LINE_ID_RE = re.compile(r"[A-Za-z0-9_\-]+")
 # lines 省略で「全件」を意味する工程。export_png と resync は対象行の明示を必須にする
 #（--resume が mtime を見ないため、全件指定だと直した行が飛ばされる。Phase 0-c。
 # resync も「要組み直しの行だけ」を明示させる設計のため同じ扱い）。
@@ -201,6 +205,8 @@ async def create_psassist_job(project_id: str, episode_number: int, request: Req
     elif not isinstance(lines, list) or not lines:
         # ⚠️ 空リストは「対象ゼロ」。export_png は対象行の明示を必須にする
         raise HTTPException(status_code=400, detail="lines is required (empty = no target)")
+    if kind in _PSASSIST_SINGLE_LINE_KINDS and (len(lines) != 1 or not _LINE_ID_RE.fullmatch(str(lines[0]))):
+        raise HTTPException(status_code=400, detail=f"{kind} は行IDを1つだけ指定します")
 
     skipped_unconfirmed: list[str] = []
     if kind in _PS_CONFIRM_GATE_KINDS:
