@@ -302,6 +302,10 @@ function drawModal() {
         <div class="box"><span class="flabel">声の感情（TTSの演技にだけ効く）</span><div class="inline"><select id="m-emo">
           ${M.EMOTIONS.map((e) => `<option ${e === (l.emotion || 'neutral') ? 'selected' : ''}>${e}</option>`).join('')}</select>
           <button class="btn" data-op="emotion">変更</button></div></div></div>
+      <div class="field"><span class="flabel">速度・間（TTSの読み上げ速度と、次の行までの間）</span><div class="inline">
+        <label class="hint" for="m-speed">速度</label><input id="m-speed" type="number" step="0.05" min="0.5" max="2" value="${esc(l.speed ?? 1)}" style="width:80px">
+        <label class="hint" for="m-pause">間（秒）</label><input id="m-pause" type="number" step="0.1" min="0" max="10" value="${esc(l.pause_after_sec ?? 0.4)}" style="width:80px">
+        <button class="btn" data-op="timing">保存</button><span class="hint">間だけ変えた行は、音声を作り直さずタイムラインを作り直すと反映</span></div></div>
       <div class="field"><span class="flabel">行の構造</span><div class="ops">
         ${opBtn('split', l, '✂ ここで分ける', '後半を新しいサブ行に')}${opBtn('merge', l, '⤓ 次の行と結合', '次の行の本文をつなぐ')}
         ${opBtn('split-apply', l, '✂ 自動で区切る', '句点・読点で最少分割')}
@@ -311,7 +315,8 @@ function drawModal() {
     tts: () => `<div class="box"><div class="inline">${pill(seg.tts[0], seg.tts[1])}${l.tts.duration_sec ? `<span class="mono">${l.tts.duration_sec}s</span>` : ''}
         <span class="hint">声の感情: ${M.EMOJI[l.emotion] || ''} ${esc(l.emotion || 'neutral')}</span></div>
         <div class="inline">${l.tts.duration_sec ? `<button class="btn" data-act="play" data-id="${esc(l.id)}">▶ 再生</button>` : ''}
-        <button class="btn" data-act="regen" data-id="${esc(l.id)}" ${l.text && (l.tts.state === 'none' || l.tts.state === 'stale') ? '' : 'disabled'}>🎙 この行を生成</button></div>
+        <button class="btn" data-act="regen" data-id="${esc(l.id)}" ${l.text && (l.tts.state === 'none' || l.tts.state === 'stale') ? '' : 'disabled'}>🎙 この行を生成</button>
+        <button class="btn" data-act="retake" data-id="${esc(l.id)}" ${l.text && l.tts.state === 'done' ? '' : 'disabled'} title="最新の音声を、キャッシュを使わずもう一度作ります（TTSは生成ごとに読み方が変わることがあります）">🎲 もう一度作る（テイクやり直し）</button></div>
         <span class="note">変更した行は「✓ 確定」を押すと、音声が自動で作り直されます（ローカルGPU・無料）。エンジンが止まっている時は「作り直し待ち」のまま残り、起動後に「未生成・要再生成を生成」で作れます。</span></div>`,
     aroll: () => AR.modalHtml(l),
     final: () => FI.modalHtml(l),
@@ -346,7 +351,13 @@ async function startOp(op) {
   let p = {};
   if (op === 'text') { const v = modal.querySelector('#m-text').value; if (v === l.text) return toast('本文は変わっていません'); p = { text: v }; }
   else if (op === 'emotion') { const v = modal.querySelector('#m-emo').value; if (v === (l.emotion || 'neutral')) return toast('感情は変わっていません'); p = { emotion: v }; }
-  else if (op === 'speaker') {
+  else if (op === 'timing') {
+    const speed = Number(modal.querySelector('#m-speed').value), pause = Number(modal.querySelector('#m-pause').value);
+    if (!(speed >= 0.5 && speed <= 2)) return toast('速度は0.5〜2で指定してください', { bad: true });
+    if (!(pause >= 0 && pause <= 10)) return toast('間は0〜10秒で指定してください', { bad: true });
+    if (speed === (l.speed ?? 1) && pause === (l.pause_after_sec ?? 0.4)) return toast('速度・間は変わっていません');
+    p = { speed, pause_after_sec: pause };
+  } else if (op === 'speaker') {
     const v = modal.querySelector('#m-spk').value;
     if (!v) return toast('話者を選んでください');
     if (v === l.speaker_id) return toast('話者は変わっていません');
@@ -436,6 +447,16 @@ async function generate(ids) {
     else toast(`${res.queued.length}行の音声を作り直しています`);
     if (res.queued.length) { S.queued = new Set(res.queued); startFollow(); }
     await load();
+  });
+}
+
+/** テイクのやり直し（最新の1行を、キャッシュを無視してもう一度作る）。同期で返るので待つ。GPUエンジンが要る。 */
+async function retake(id) {
+  await working('作り直しています…（1行あたり数十秒かかることがあります）', async () => {
+    await api.retakeLine(S.pid, S.ep, id);
+    S.ver++;                                    // 同じURLの音声のキャッシュを外す
+    await load();
+    toast('音声をもう一度作りました');
   });
 }
 
@@ -607,6 +628,7 @@ document.addEventListener('click', (e) => {
     undo,
     genall: () => generate(M.audioTodo(S.lines).map((l) => l.id)),
     regen: () => generate([id]),
+    retake: () => retake(id),
     play: () => player.playFrom(id),
     playall: () => player.playAll(),
     pcontinue: () => player.continueFromLast(),
@@ -684,7 +706,12 @@ async function picker() {
 (async function boot() {
   if (!S.pid || !S.ep) { await picker(); return; }
   $('back').href = '/';
-  try { await load(); if (S.tab === 'aroll') AR.enter(); else if (S.tab === 'final') FI.enter(); } catch (e) {
+  try {
+    await load();
+    if (S.tab === 'aroll') AR.enter(); else if (S.tab === 'final') FI.enter();
+    const want = params.get('line');
+    if (want && byId(want)) { openModal(want); flash(want); }
+  } catch (e) {
     $('banner').hidden = false;
     $('banner').innerHTML = `<div class="banner bad">この話数を読み込めませんでした: ${esc(e.message)}</div>`;
   }

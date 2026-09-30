@@ -74,6 +74,8 @@ export function createApi(fetchImpl = (...a) => fetch(...a)) {
     llmUsage: () => call('GET', '/api/scripting/llm-usage'),
     backgroundUrl: (bgId) => `/api/scrapping/backgrounds/file/${encodeURIComponent(bgId)}.png`,
     cutoutUrl: (charId, filename) => `/api/scrapping/characters/${encodeURIComponent(charId)}/panel_library/cutout/${encodeURIComponent(filename)}`,
+    // 1行だけ作り直す（force＝キャッシュを無視して新規生成。TTSは生成ごとに結果が変わる＝テイクのやり直し）。同期で返る
+    retakeLine: (pid, n, lineId) => call('POST', `/api/tts/projects/${encodeURIComponent(pid)}/run/line/${encodeURIComponent(lineId)}`, undefined, { episode: n, force: true }),
     audioUrl: (pid, n, lineId, v) => `/api/tts/audio/project/${encodeURIComponent(pid)}/${encodeURIComponent(lineId)}.wav?episode=${n}&v=${v}`,
   };
 }

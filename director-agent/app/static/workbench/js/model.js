@@ -120,7 +120,7 @@ export function snap(text, pos) {
 
 export const OP_NAMES = { text: '本文を保存', emotion: '声の感情を変更', speaker: '話者を変更', split: 'ここで分ける',
   merge: '次の行と結合', addsub: 'サブ行を追加', insert: '下に行を挿入', up: '上へ移動', down: '下へ移動', delete: '削除',
-  'split-apply': '長い行を自動で区切る', 'split-apply-all': '長い行をすべて自動で区切る' };
+  'split-apply': '長い行を自動で区切る', 'split-apply-all': '長い行をすべて自動で区切る', timing: '速度・間を保存' };
 
 /** 画面の操作名 → 窓口（director の lines/{op}）の op と本文。 */
 export function toApi(uiOp, l, p = {}) {
@@ -135,6 +135,7 @@ export function toApi(uiOp, l, p = {}) {
     case 'up': return { op: 'move', body: { line_id: l.id, direction: 'up' } };
     case 'down': return { op: 'move', body: { line_id: l.id, direction: 'down' } };
     case 'delete': return { op: 'delete', body: { line_id: l.id } };
+    case 'timing': return { op: 'edit', body: { line_id: l.id, speed: p.speed, pause_after_sec: p.pause_after_sec } };
     case 'split-apply': return { op: 'split-apply', body: { line_id: l.id } };
     case 'split-apply-all': return { op: 'split-apply-all', body: {} };
     default: throw new Error(`unknown op: ${uiOp}`);
