@@ -319,12 +319,14 @@ class ArollDerivative(Derivative):
         return res.json()
 
     async def confirm(self, ctx: ConfirmContext) -> dict:
-        """確定した行の絵の下ごしらえ（すべて無料・画像は生成しない＝I6）。
+        """確定した行の絵の下ごしらえ（すべて無料・機械処理だけ。**LLM も画像生成も呼ばない**＝I6・
+        `Docs/AROLL_EMOTION_LOCAL_PLAN.md` §5 E1）。
 
-        ① 行構造をコマ一覧へ合わせる（窓口を通らず変わった台本でもコマがあるように・冪等）
-        ② プロンプトが無い行の**章だけ**プロンプトを作る（LLM。既存プロンプトは上書きしない）
-        ③ 背景を自動で当てる（確定した行だけ・`only_missing`＝手で選んだ背景は壊さない）
-        ④ 話者を替えた行は在庫から選び直す（行を明示した `cutout-plan/apply`）
+        ① 行構造をコマ一覧へ合わせ、プロンプトの無いコマを埋める（窓口を通らず変わった台本でもコマが
+           あるように・冪等）。サブ行は親のコマを引き継ぎ、独立した新しい行はルールの slot（E2・E3）。
+           英語の演出プロンプトは「残りを生成」の時に無い行だけ作る（E4）＝ここでは作らない
+        ② 背景を自動で当てる（確定した行だけ・`only_missing`＝手で選んだ背景は壊さない）
+        ③ 話者を替えた行は在庫から選び直す（行を明示した `cutout-plan/apply`）
         各段の失敗は `warnings` に載せて次へ進む。在庫の候補は新しい行に自動では当てない
         （『在庫で埋める』は Aロールタブの一括操作＝W4b。ワンパターンの発生源にしない）。
         """
@@ -345,18 +347,7 @@ class ArollDerivative(Derivative):
             out[key] = res.json()
             return out[key]
 
-        await step("sync", "行構造の同期", "/lines/sync-structure", {})
-        panels = _aroll_panels(_ctx_stub(ctx)) or {}
-        by_id = {l.get("id"): l for l in ctx.script_lines}
-        need = [lid for lid in ctx.line_ids
-                if lid in panels and not (panels[lid].get("prompt") or "").strip()]
-        sections = list(dict.fromkeys((by_id[lid].get("section") or "main") for lid in need if lid in by_id))
-        if sections:
-            r = await step("prompts", "プロンプト生成", "/prompts",
-                           {"sections": sections, "overwrite": False}, timeout=600.0)
-            if r is not None:   # 応答は aroll.json 全体を含むので、要点だけ残す
-                out["prompts"] = {"sections": sections, "lines": need, "warnings": r.get("warnings") or []}
-                out["warnings"] += [f"プロンプト: {w}" for w in (r.get("warnings") or [])]
+        await step("sync", "行構造の同期", "/lines/sync-structure", {"fill_line_ids": list(ctx.line_ids)})
         await step("backgrounds", "背景の割当", "/backgrounds/auto_assign",
                    {"only_missing": True, "line_ids": ctx.line_ids})
         panels = _aroll_panels(_ctx_stub(ctx)) or {}

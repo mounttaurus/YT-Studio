@@ -37,8 +37,24 @@ def error_detail(res: httpx.Response) -> str:
         d = res.json().get("detail")
         if isinstance(d, str):
             return d
+        if isinstance(d, dict):
+            return _detail_text(d)
         if d is not None:
             return str(d)
     except Exception:
         pass
     return f"HTTP {res.status_code}: {res.text[:200]}"
+
+
+def _detail_text(d: dict) -> str:
+    """`detail` が dict の時（例: プロンプト生成の `{message, failed_sections, warnings}`）の読める形。
+    生の dict を画面に出さない。`message` が主文。`failed_sections` があれば各理由を1行ずつ足し、
+    `warnings` は理由と重なるので足さない。どちらも無ければ dict そのまま。"""
+    msg = d.get("message")
+    if not msg:
+        return str(d)
+    reasons = []
+    for f in d.get("failed_sections") or []:
+        if isinstance(f, dict) and f.get("error"):
+            reasons.append(f"{f.get('section')}: {f['error']}" if f.get("section") else str(f["error"]))
+    return f"{msg}（{' / '.join(reasons)}）" if reasons else str(msg)

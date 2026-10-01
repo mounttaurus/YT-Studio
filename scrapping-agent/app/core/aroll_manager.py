@@ -35,7 +35,7 @@ import httpx
 from app.core import (
     aroll_prompt_generator, background_manager, camera_plan, character_manager, cut_planner,
     cutout_selector, nanobanana_client, panel_library_manager, panel_presets, project_manager,
-    shot_meter, style_manager,
+    shot_meter, slot_rules, style_manager,
 )
 
 SCHEMA_VERSION = "1.3.0"  # 1.3.0: panels[].parent_line_id を追加（サブ行・SUBLINE_PLAN §4-2）
@@ -2405,8 +2405,72 @@ def _follows_speaker(panel: dict, speaker_id: str, speaker_map: dict) -> bool:
     return (panel.get("characters") or []) == ([drawn] if drawn else [])
 
 
+def _inherit_donor(panels: list[dict], panel: dict) -> dict | None:
+    """サブ行のコマが引き継ぐ元＝同じグループ（`parent_line_id`）の、プロンプトを持つ別のコマ。
+
+    分けた行の直前にあるものを優先し（s2 を s1 から分けたら s1）、無ければグループ内で最初のもの。
+    グループに属さない行・グループにプロンプトを持つコマが無い行は None（ルールで埋める）。
+    """
+    parent = panel.get("parent_line_id")
+    if not parent:
+        return None
+    mates = [q for q in panels
+             if q is not panel and not q.get("orphan") and q.get("parent_line_id") == parent
+             and (q.get("prompt") or "").strip()]
+    if not mates:
+        return None
+    order = lambda q: q.get("order") or 0  # noqa: E731
+    before = [q for q in mates if order(q) < order(panel)]
+    return max(before, key=order) if before else min(mates, key=order)
+
+
+def fill_slots_without_llm(manifest: dict, line_ids, lines_by_id: dict) -> dict:
+    """プロンプトの無いコマを **LLM を呼ばずに** 埋める（`Docs/AROLL_EMOTION_LOCAL_PLAN.md` §5・E2/E3）。
+
+    - **サブ行 → 親（同じグループ）のコマを引き継ぐ**（E2）: 英語の演出プロンプト・描くキャラ・slot を写す。
+      寄り引き・向きは何もしない（在庫選定では `camera_plan` が話者の連続を単位に決める）。
+      `prompt_text_hash` はサブ行自身の本文で焼く＝引き継いだプロンプトが「古い」扱いにならない。
+    - **独立した新しい行 → ルールの slot**（E3）: 台本の感情＋記号から emotion を決める。
+      プロンプトは作らない（新しく絵を生成する時に、無い行だけ作る＝E4）。
+
+    触らないコマ: 孤立・プロンプトがある・絵が出来ている/在庫を割り当て済み・手で slot を直した
+    （`slot_source=="user"` は slot を残す）。`manifest` をその場で書き換える（保存は呼び出し側）。
+    戻り値: {"inherited": [line_id], "rule": [line_id]}
+    """
+    out = {"inherited": [], "rule": []}
+    panels = [p for p in manifest.get("panels", []) if not p.get("orphan")]
+    wanted = set(line_ids or [])
+    for p in panels:
+        lid = p.get("line_id")
+        if lid not in wanted:
+            continue
+        if (p.get("prompt") or "").strip() or p.get("status") == "done" or p.get("cutout_slot_id"):
+            continue
+        line = lines_by_id.get(lid) or {}
+        donor = _inherit_donor(panels, p)
+        if donor is not None:
+            p["prompt"] = donor["prompt"]
+            p["prompt_source"] = "inherited"
+            p["prompt_text_hash"] = text_hash(line.get("text") or p.get("text"))
+            if donor.get("characters"):
+                p["characters"] = list(donor["characters"])
+            if p.get("slot_source") != "user" and donor.get("slot"):
+                p["slot"] = dict(donor["slot"])
+                p["slot_source"] = "inherited"
+            elif p.get("slot") is None and p.get("slot_source") != "user":
+                p["slot"], p["slot_source"] = slot_rules.rule_slot(line), "rule"
+            p["slot_key"] = compute_slot_key(p.get("characters"), p.get("slot"))
+            out["inherited"].append(lid)
+        elif p.get("slot") is None and p.get("slot_source") != "user":
+            p["slot"], p["slot_source"] = slot_rules.rule_slot(line), "rule"
+            p["slot_key"] = compute_slot_key(p.get("characters"), p.get("slot"))
+            out["rule"].append(lid)
+    return out
+
+
 def sync_structure(project_id: str, episode: int,
-                   split_front_line_ids: list[str] | None = None) -> dict:
+                   split_front_line_ids: list[str] | None = None,
+                   fill_line_ids: list[str] | None = None) -> dict:
     """台本の行構造へコマ一覧を合わせる（director の行操作の窓口・LINE_WORKBENCH_PLAN §3-3・W1）。
 
     **LLMも画像生成も呼ばない。** 冪等（台本が変わっていなければ何も変わらない）。
@@ -2418,9 +2482,11 @@ def sync_structure(project_id: str, episode: int,
     3. 戻ってきた行 → 預けた在庫の割当と使用回数を戻す（Undo）
     4. 話者を付け替えた行 → 絵を「古い」にする（`speaker_changed` の印）＋描くキャラを新しい話者へ
     5. `split_front_line_ids`（分割の前半） → 同期記録を今のテキストへ焼き直す（絵が古くならない）
+    6. プロンプトの無いコマを LLM なしで埋める（`fill_slots_without_llm`）: 今回足したコマ＋`fill_line_ids`
+       （director の確定が、確定した行を渡す）。サブ行は親から引き継ぎ、独立した新しい行はルールの slot
     """
     empty = {"added": [], "orphaned": [], "restored": [], "speaker_changed": [],
-             "split_confirmed": [], "warnings": []}
+             "split_confirmed": [], "filled": {"inherited": [], "rule": []}, "warnings": []}
     manifest = load_manifest(project_id, episode)
     if manifest is None:
         return {"has_manifest": False, "skipped": "aroll.json not found", **empty}
@@ -2490,10 +2556,13 @@ def sync_structure(project_id: str, episode: int,
         if p is not None and _confirm_split_panel(p, lines_by_id.get(lid, {}).get("text", "")):
             split_confirmed.append(lid)
 
+    # 分割・サブ行追加・挿入でできた（プロンプトの無い）コマを、LLM を呼ばずに埋める
+    filled = fill_slots_without_llm(manifest, [*added, *(fill_line_ids or [])], lines_by_id)
+
     save_manifest(project_id, episode, manifest)
     return {"has_manifest": True, "added": added, "orphaned": orphaned, "restored": restored,
             "speaker_changed": speaker_changed, "split_confirmed": split_confirmed,
-            "warnings": warnings}
+            "filled": filled, "warnings": warnings}
 
 
 def apply_cutout_plan(project_id: str, episode: int, line_ids: list[str] | None = None) -> dict:

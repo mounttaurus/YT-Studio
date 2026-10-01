@@ -2648,6 +2648,9 @@ async def aroll_orphan_line(project_id: str, episode_number: int, line_id: str):
 
 class SyncStructureRequest(BaseModel):
     split_front_line_ids: list[str] = []   # 分割の前半（同期記録を焼き直す＝絵が古くならない）
+    # プロンプトの無いコマを LLM なしで埋める対象（今回足したコマに加えて）。director の確定が
+    # 確定した行を渡す。サブ行は親から引き継ぎ、独立した新しい行はルールの slot（E2・E3）
+    fill_line_ids: list[str] = []
 
 
 @router.post("/projects/{project_id}/episodes/{episode_number}/aroll/lines/sync-structure")
@@ -2658,9 +2661,12 @@ async def aroll_sync_structure(project_id: str, episode_number: int,
     LLM・画像生成は呼ばない。台本から外れた行は孤立扱い（在庫の使用回数を戻す・絵は残す）、
     新しい行はコマを追加、台本へ戻った行（Undo）は絵の割当と使用回数を戻し、話者を替えた行は
     「絵が古い」にする。冪等。aroll.json が無い話数は何もしない（`skipped`）。
+    プロンプトの無いコマ（今回足したもの＋`fill_line_ids`）は LLM なしで埋める
+    （サブ行＝親のコマを引き継ぐ／独立した行＝ルールの slot）。
     """
     return aroll_manager.sync_structure(
-        project_id, episode_number, (req.split_front_line_ids if req else []) or [])
+        project_id, episode_number, (req.split_front_line_ids if req else []) or [],
+        (req.fill_line_ids if req else []) or [])
 
 
 class CutoutApplyRequest(BaseModel):
