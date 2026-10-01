@@ -32,6 +32,52 @@ def renumber_lines(doc: dict) -> None:
     for i, l in enumerate(doc.get("lines", []), 1):
         l["order"] = i
     doc.setdefault("metadata", {})["line_count"] = len(doc.get("lines", []))
+    heal_sections(doc)
+
+
+def heal_sections(doc: dict) -> bool:
+    """`sections[].line_ids` の食い違いを直す（冪等・整っていれば何もしない）。直したかを返す。
+
+    ①同じ行IDの重複は先頭だけ残す ②どの章にも入っていない行は、その行の `section` の章へ
+    直前の行の隣に入れる。2026-09-28 の行ID重複の修復が章のリストを直さず、MKウルトラ回で
+    `line_082_s1`・`line_103_s1` の重複と `line_103_s2` の抜けが残った（2026-10-01）。
+    行から消えたIDの除去は各削除の経路が担う（ここでは触らない）。
+    """
+    secs = doc.get("sections") or []
+    lines = doc.get("lines") or []
+    if not secs or not lines:
+        return False
+    changed = False
+    seen: set = set()
+    for s in secs:
+        ids = s.get("line_ids")
+        if not isinstance(ids, list):
+            continue
+        kept = []
+        for i in ids:
+            if i in seen:
+                changed = True
+                continue
+            seen.add(i)
+            kept.append(i)
+        s["line_ids"] = kept
+    by_id = {s.get("id"): s for s in secs if isinstance(s.get("line_ids"), list)}
+    for idx, l in enumerate(lines):
+        if l.get("id") in seen:
+            continue
+        sec = by_id.get(l.get("section"))
+        if sec is None:
+            continue
+        ids = sec["line_ids"]
+        pos = 0
+        for prev in reversed(lines[:idx]):
+            if prev.get("id") in ids:
+                pos = ids.index(prev["id"]) + 1
+                break
+        ids.insert(pos, l["id"])
+        seen.add(l["id"])
+        changed = True
+    return changed
 
 
 def next_line_id(*docs: Optional[dict]) -> str:

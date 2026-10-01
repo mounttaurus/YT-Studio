@@ -44,6 +44,8 @@ export function createApi(fetchImpl = (...a) => fetch(...a)) {
     // 絵（Aロール）。課金するもの・上書きするものは呼び出し側（画面）が確認してから呼ぶ
     aroll: {
       prompts: (pid, n, body) => call('POST', `${ar(pid, n)}/prompts`, body),
+      // コマの下ごしらえ（LLMなし）: 指名した行のプロンプト無しのコマを、サブ行は親から引き継ぎ・独立した行はルールで埋める
+      syncStructure: (pid, n, body) => call('POST', `${ar(pid, n)}/lines/sync-structure`, body || {}),
       status: (pid, n) => call('GET', `${ar(pid, n)}/status`),
       stop: (pid, n) => call('POST', `${ar(pid, n)}/stop`),
       generate: (pid, n, body) => call('POST', `${ar(pid, n)}/generate`, body),

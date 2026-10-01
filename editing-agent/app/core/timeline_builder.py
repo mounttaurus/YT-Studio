@@ -27,6 +27,33 @@ LINE_NOT_IN_TIMELINE = "LINE_NOT_IN_TIMELINE"
 AROLL_MISSING = "AROLL_MISSING"
 FOOTAGE_ABSENT = "FOOTAGE_ABSENT"
 EXPORT_STALE = "EXPORT_STALE"
+TTS_LINES_MISSING = "TTS_LINES_MISSING"
+TTS_TEXT_STALE = "TTS_TEXT_STALE"
+
+
+def script_sync_warnings(script: dict | None, tts: dict) -> list[dict]:
+    """台本（script.json）と音声（tts.json）のズレを警告にする（検査のみ・止めない）。
+
+    台本を直した後に音声を作り直していないと、タイムラインは「音声が無い行を黙って飛ばし」
+    「古い音声をそのまま使う」。MKウルトラ回では5行が抜け3行が古いまま繋がる状態だった（2026-10-01）。
+    """
+    if not script:
+        return []
+    audio = {a.get("line_id"): a for a in tts.get("audio_files", [])}
+    lines = script.get("lines", [])
+    missing = [l["id"] for l in lines if l.get("id") not in audio]
+    stale = [l["id"] for l in lines if l.get("id") in audio
+             and (audio[l["id"]].get("text") or "") != (l.get("text") or "")]
+    out = []
+    if missing:
+        out.append({"code": TTS_LINES_MISSING, "line_ids": missing,
+                    "message": f"台本にあるのに音声が無い行が{len(missing)}行あります（タイムラインから抜けます）: "
+                               + ", ".join(missing[:8]) + (" …" if len(missing) > 8 else "")})
+    if stale:
+        out.append({"code": TTS_TEXT_STALE, "line_ids": stale,
+                    "message": f"音声の本文が今の台本と違う行が{len(stale)}行あります（古い音声のまま繋がります）: "
+                               + ", ".join(stale[:8]) + (" …" if len(stale) > 8 else "")})
+    return out
 
 
 def _sec_to_frame(sec: float, fps: int) -> int:

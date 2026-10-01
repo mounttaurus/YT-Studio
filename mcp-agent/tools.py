@@ -394,7 +394,8 @@ async def confirm_lines(project_id: str, episode_number: int, line_ids: Optional
     """行を確定する（D8②・窓口経由）。line_ids 省略で「未確定のすべて」。
 
     確定すると、**音声が自動で作り直される（ローカルGPU・無料・非同期）**ほか、新しい行のコマの下ごしらえ
-    （プロンプト・背景。画像は生成しない）が走り、再合成（組版）の対象に入る。
+    （サブ行は親のコマの引き継ぎ・独立した行は感情のルール・背景の割当。**LLMは呼ばない**・画像は生成しない）が走り、
+    再合成（組版）の対象に入る。英語の演出プロンプトは絵を新規生成する時に作られる（2026-10-01 以降）。
     確定の運用が始まっていない話数（`get_line_states` の enabled=false）は、先に `start_confirmations` か
     `adopt_llm_proposal` で運用を始める。戻り値の applied.tts.queued が音声を作り直し中の行。
     エンジンが止まっていると音声は「作り直し待ち」のまま残る（起動後に run_tts か画面の「未生成・要再生成を生成」）。
@@ -409,6 +410,20 @@ async def start_confirmations(project_id: str, episode_number: int, baseline: bo
     （運用外の話数は確定でゲートされず、従来どおり全行が組版などの対象）。"""
     return await dc.request("POST", f"projects/{project_id}/episodes/{episode_number}/lines/confirmations/start",
                             json={"baseline": baseline})
+
+
+async def audit_episode(project_id: str, episode_number: int) -> dict:
+    """1話の整合検査（READ・何も書かない）。台本→確定→音声→絵→仕上がりの**どこまで最新か**と、
+    **次にやること**（ツール名・引数・費用の種類つき）を順に返す。
+
+    ユーザーが台本に手を入れた後、後続の処理を任された時は**必ず最初にこれ**を呼ぶ。
+    layers.{script,confirm,tts,aroll,final}.state: ok（最新）/ behind（追随が要る）/ unknown（他コンテナに繋がらない）/
+    na（その環境や話数に無い工程）。issues[] は code・severity（error=次へ進む前に直す・warn=直したほうがよい・
+    info=知っておく）・line_ids。next_actions[] は上から順に実行する想定で、cost は free/gpu（無料・ローカル）/
+    paid（課金）/photoshop（Photoshop占有）/user（ユーザー作業）、confirm=true は**実行前にユーザーへ一文で確認**。
+    headline は「台本 150行 ／ 確定 150/150 ／ 音声 150/150 ／ 絵 148/150 ／ 仕上がり 112/150」の1行要約。
+    """
+    return await dc.get(f"projects/{project_id}/episodes/{episode_number}/audit")
 
 
 async def get_line_states(project_id: str, episode_number: int) -> dict:
@@ -1129,14 +1144,22 @@ async def generate_aroll_prompts(project_id: str, episode_number: int,
                                  extra_prompt: Optional[str] = None,
                                  overwrite: bool = False,
                                  aspect: str = "16:9", style: str = "kamishibai",
-                                 model: Optional[str] = None) -> dict:
+                                 model: Optional[str] = None,
+                                 sections: Optional[list[str]] = None) -> dict:
     """承認済み台本の全セリフ行にマンガ1コマ分の画像生成プロンプトをLLMで用意する。
 
     章単位でLLM(既定Gemini無料枠→OpenRouter無料)を呼び、aroll.jsonに保存する（課金なし）。
     登場キャラ(1〜2人)もLLMが判定する。overwrite=Trueでも手編集済み(prompt_source=user)は保持。
     前提: 台本承認済み(approve_script)＋配役割当済み(assign_cast)。未割当話者はwarningsに出る。
+
+    sections: 章idの配列。指定した章だけ作る（例: ["ki"]）。**省略で全章**。
+    ⚠️ **分割・挿入で足した行のコマを埋めるだけなら、これではなく `aroll_prepare_lines` を使う**
+    （LLMを呼ばない・拒否されない・無料）。英語の演出プロンプトは絵を新規生成する時に自動で作られる。
+    安全フィルタの拒否が出る章は model="anthropic/claude-sonnet-5" を指定すると通る。
     """
     body: dict = {"overwrite": overwrite, "aspect": aspect, "style": style}
+    if sections is not None:
+        body["sections"] = sections
     if extra_prompt is not None:
         body["extra_prompt"] = extra_prompt
     if model is not None:
@@ -1187,7 +1210,7 @@ async def aroll_sync(project_id: str, episode_number: int) -> dict:
 
     台本を後から追加/削除/推敲した後は必ずこれで確認する。items[].sync の意味:
     - stale   … セリフが変わったのに絵が生成時のまま → run_aroll_batch(line_ids=[…]) で描き直す
-    - missing … 画像が無い行。status=no_panel なら先に generate_aroll_prompts(sections=[…]) で
+    - missing … 画像が無い行。status=no_panel（コマ/プロンプトが無い）なら先に aroll_prepare_lines(line_ids=[…])（LLMなし・無料）で
                 実体化してから aroll_fill_missing(line_ids=[…]) を呼ぶと無料の手段（カットの
                 引き継ぎ→在庫）で埋まる分だけ埋まり、残りは need_generation として返る（2026-09-24）
     - orphan  … 台本から消えた行のPNGが残っているだけ（編集には使われない）
@@ -1232,6 +1255,24 @@ async def aroll_apply_cutout_plan(project_id: str, episode_number: int,
     return await dc.request(
         "POST", f"api/scrapping/projects/{project_id}/episodes/{episode_number}/aroll/cutout-plan/apply",
         json=body)
+
+
+async def aroll_prepare_lines(project_id: str, episode_number: int,
+                              line_ids: list[str]) -> dict:
+    """指名した行のコマを**LLMなしで**下ごしらえする（可逆WRITE・無料・画像は生成しない）。
+
+    プロンプトの無いコマ（分割・サブ行追加・挿入でできた行、確定の運用が始まる前の古い行）を埋める:
+    サブ行（parent_line_id を持つ行）は親のコマからプロンプト・キャラ・slot を引き継ぎ、独立した行は
+    台本の感情からルール（11語）で slot を決める。足りないコマは作る。絵・手直し済みの slot・
+    在庫割当済みの行は触らない。冪等。
+    `aroll_sync` が missing の行、`get_line_states` で確定済みなのに絵が決まらない行に使う。
+    **この後 `aroll_fill_missing`（在庫で埋める）→足りなければ `run_aroll_batch`（課金）**。
+    背景は `aroll_assign_backgrounds(only_missing=True)` で割り当てる。
+    ⚠️ line_ids は必須（空リストは何もしない）。応答の filled に {inherited, rule}（行idの配列）。
+    """
+    return await dc.request(
+        "POST", f"api/scrapping/projects/{project_id}/episodes/{episode_number}/aroll/lines/sync-structure",
+        json={"fill_line_ids": list(line_ids)})
 
 
 async def aroll_fill_missing(project_id: str, episode_number: int,
@@ -1431,6 +1472,8 @@ async def psassist_run(project_id: str, episode_number: int, kind: str,
     "export_png"（納品PNG書き出し・Photoshop占有）|
     "resync"（T3: 在庫を選び直した行を①build_plan→③build_panel→④qa_check→⑤export_pngで
     1ジョブに連鎖して組み直す・Photoshop占有・要組み直しの行だけが対象）。
+    （ほかにワークベンチ専用の "open_psd"＝PSDをPhotoshopで開く・"library_cutout"＝在庫のPS切り抜きがある。）
+    ⚠️ ホスト工程（host_worker）が止まっているとジョブは積まれるだけで進まない。先に psassist_worker_status で確認。
 
     lines: 対象行のline_id配列。build_plan/cutout/build_panel/qa_checkは省略で「全件」。
     ⚠️ **export_png と resync だけは lines 省略不可**（空/省略はエラーになる）。
@@ -1493,6 +1536,7 @@ TOOLS = [
     {"fn": delete_script_line,   "side_effects": [S.WRITE]},
     {"fn": get_llm_proposal,     "side_effects": [S.READ]},
     {"fn": adopt_llm_proposal,   "side_effects": [S.WRITE]},
+    {"fn": audit_episode,        "side_effects": [S.READ]},
     {"fn": get_line_states,      "side_effects": [S.READ]},
     {"fn": start_confirmations,  "side_effects": [S.WRITE]},
     {"fn": confirm_lines,        "side_effects": [S.WRITE, S.GPU, S.ASYNC]},
@@ -1531,6 +1575,7 @@ TOOLS = [
     {"fn": aroll_export,         "side_effects": [S.WRITE]},
     {"fn": aroll_cutout_plan,    "side_effects": [S.READ]},
     {"fn": aroll_apply_cutout_plan, "side_effects": [S.WRITE]},
+    {"fn": aroll_prepare_lines,  "side_effects": [S.WRITE]},
     {"fn": aroll_fill_missing,   "side_effects": [S.WRITE]},
     {"fn": aroll_approve_images, "side_effects": [S.WRITE]},
     {"fn": aroll_assign_backgrounds, "side_effects": [S.WRITE]},

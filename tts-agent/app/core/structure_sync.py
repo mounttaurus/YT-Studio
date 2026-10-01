@@ -29,7 +29,7 @@ def sync_structure(tts: dict, script_lines: list) -> dict:
 
     - 台本に無い行のエントリ → `orphaned_audio_files[]` へ（`orphaned_at` を付ける）
     - 台本へ戻った行の孤立エントリ → `audio_files[]` へ戻す（`orphaned_at` を外す）
-    - 残る行の `order`・`parent_line_id` を台本に追随させる（wav は触らない。
+    - 残る行の `order`・`parent_line_id`・話者名（ID/空のままのもの）を台本に追随させる（wav は触らない。
       並び替え・分割・結合の後にタイムラインの順序と TTSタブのグループ表示を正しくするため）
 
     `script_lines` は `Line`（`.id` `.order` `.parent_line_id` を持つもの）の並び。
@@ -75,6 +75,14 @@ def sync_structure(tts: dict, script_lines: list) -> dict:
             changed = True
         if (f.get("parent_line_id") or None) != (line.parent_line_id or None):
             f["parent_line_id"] = line.parent_line_id
+            changed = True
+        # 話者名が ID のまま・空のエントリは、台本（配役で補った名前）に追随させる。
+        # 字幕の「名前: 本文」・編集のトラック名に出る。音声は触らない（キャッシュは名前を見ない）
+        name = getattr(line, "speaker_name", "") or ""
+        if ("speaker_name" in f and name and name != line.speaker_id
+                and f.get("speaker_name") in ("", None, f.get("speaker_id"))
+                and f.get("speaker_name") != name):
+            f["speaker_name"] = name
             changed = True
         if changed:
             refreshed.append(f.get("line_id"))

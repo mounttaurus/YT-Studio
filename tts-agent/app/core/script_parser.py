@@ -21,15 +21,32 @@ class Line:
     parent_line_id: Optional[str] = None
 
 
+def _cast_names(path: Path) -> dict[str, str]:
+    """台本の置き場から上へたどって project.json を探し、配役の {話者ID: 名前} を返す。
+    台本の行に speaker_name が無い（分割・挿入でできた行など）時の補いに使う。無ければ空。"""
+    for d in path.resolve().parents:
+        pj = d / "project.json"
+        if pj.is_file():
+            try:
+                data = json.loads(pj.read_text(encoding="utf-8-sig"))
+            except (OSError, ValueError):
+                return {}
+            sp = ((data.get("config") or {}).get("tts") or {}).get("speakers") or []
+            return {s["id"]: s["name"] for s in sp if isinstance(s, dict) and s.get("id") and s.get("name")}
+    return {}
+
+
 def parse_script_json(path: Path) -> list[Line]:
     data = json.loads(path.read_text(encoding="utf-8"))
+    cast = _cast_names(path)
     lines = []
     for item in data.get("lines", []):
         lines.append(Line(
             id=item["id"],
             order=item["order"],
             speaker_id=item["speaker_id"],
-            speaker_name=item.get("speaker_name", item["speaker_id"]),
+            # 行に名前が無い・空の時は配役の名前、それも無ければ話者ID（以前は ID か空文字が字幕に出ていた）
+            speaker_name=item.get("speaker_name") or cast.get(item["speaker_id"]) or item["speaker_id"],
             text=item["text"],
             emotion=item.get("emotion", "neutral"),
             speed=item.get("speed", 1.0),

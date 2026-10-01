@@ -49,6 +49,9 @@ def run_edit(
             project_id, episode_number, tts, footage, project_dir, episode_dir, fps=fps, path_style=path_style,
             aroll=aroll, psassist_export_log=psassist_export_log,
         )
+        if not lang:   # 翻訳音声は翻訳台本と突き合わせる別の話（原語の台本とは比べない）
+            warnings.extend(timeline_builder.script_sync_warnings(
+                project_manager.get_episode_script(project_id, episode_number), tts))
         otio_text = otio.adapters.write_to_string(timeline, adapter_name="otio_json")
         srt_text = srt_writer.build_srt(tts, speaker_prefix=speaker_prefix)
 

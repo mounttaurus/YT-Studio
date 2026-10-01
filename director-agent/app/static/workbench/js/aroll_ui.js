@@ -124,7 +124,7 @@ export function createArollUi(ctx) {
         ${AXES.map(([k, label]) => `<select data-a="bulkslot" data-axis="${k}" aria-label="一括: ${label}" ${!n || S.working ? 'disabled' : ''}><option value="">一括: ${label.replace('(任意)', '')}</option>${((A.presets || {})[k] || []).map((o) => `<option value="${esc(o.id)}">${esc(o.label_ja)}</option>`).join('')}</select>`).join('')}</div>
       <div class="arow"><b class="alabel">下ごしらえ</b>
         <button class="btn" data-a="bg-missing" ${S.working ? 'disabled' : ''} title="背景が未割当の行に自動で割り当てます（無料・手動で選んだ行は変えません）">🏞️ 未割当の行に背景を自動割当</button>
-        <button class="btn" data-a="prep" ${!newLines.length || S.working ? 'disabled' : ''} title="コマまたはプロンプトが無い行の分だけ、LLMで演出プロンプトを作り背景を割り当てます（無料・画像は生成しません）">🆕 プロンプトの無い行を下ごしらえ<span class="n">${newLines.length || ''}</span></button>
+        <button class="btn" data-a="prep" ${!newLines.length || S.working ? 'disabled' : ''} title="コマまたはプロンプトが無い行の分だけ、サブ行は親のコマを引き継ぎ・独立した行は台本の感情から決め、背景を割り当てます（LLMは使いません・無料・画像は生成しません）">🆕 プロンプトの無い行を下ごしらえ<span class="n">${newLines.length || ''}</span></button>
         <span class="hint">絵の在庫（許可・ラベル手直し）と背景アーカイブは director で</span></div>
       ${settingsHtml(true)}${msgHtml()}</div>`;
   }
@@ -216,7 +216,7 @@ export function createArollUi(ctx) {
   function modalHtml(l) {
     const a = l.aroll || {};
     if (!a.has_manifest) return `<div class="box"><span class="note">この話数のAロールはまだ始まっていません。絵タブの「プロンプトを作る」から始めます。</span></div>`;
-    const prepBtn = `<div class="inline"><button class="btn primary" data-a="prep-line" data-id="${esc(l.id)}" ${S.working ? 'disabled' : ''}>🆕 この行を下ごしらえ</button><span class="hint">プロンプトを作り、背景を割り当てます（無料・画像は生成しません）</span></div>`;
+    const prepBtn = `<div class="inline"><button class="btn primary" data-a="prep-line" data-id="${esc(l.id)}" ${S.working ? 'disabled' : ''}>🆕 この行を下ごしらえ</button><span class="hint">親のコマを引き継ぎ（独立した行は台本の感情から決め）、背景を割り当てます（LLMは使いません・無料・画像は生成しません）。英語の演出プロンプトは絵を生成する時に作ります</span></div>`;
     if (!a.panel) return `<div class="box">${chip('bad', 'コマが無い')}<span class="note">台本にあってAロールに無い行です。</span>${prepBtn}</div>`;
     // コマはあるがプロンプトが無い行（分割の後半・挿入した行＝窓口が空のコマだけ作る）。一括の「プロンプトの無い行を下ごしらえ」と同じ条件（R.needsPrep）
     const prepBox = R.needsPrep(l) ? `<div class="box">${chip('warn', 'プロンプトが無い')}<span class="note">この行はまだ演出プロンプトがありません（分けた後半・挿入した行など）。在庫から選ぶことはできますが、生成し直すには先に下ごしらえが要ります。</span>${prepBtn}</div>` : '';
@@ -462,15 +462,15 @@ export function createArollUi(ctx) {
   async function prep(targets) {
     const n = targets.length;
     if (!n) return;
-    if (!confirm(`コマまたはプロンプトが無い ${n}行分のプロンプトを用意します（無料・画像生成なし）。続行しますか？`)) return;
-    const s = A.settings, sections = [...new Set(targets.map((l) => l.section || 'main'))];
-    await working(busyMsg('プロンプトを作っています'), async () => {
-      const d = await promptCall({ sections, overwrite: false, aspect: s.aspect, style: s.style || 'kamishibai', model: s.model || null });
-      if (!d) return;
+    if (!confirm(`コマまたはプロンプトが無い ${n}行分を下ごしらえします（LLMは使いません・無料・画像生成なし）。サブ行は親のコマを引き継ぎ、独立した行は台本の感情から決めます。続行しますか？`)) return;
+    await working(busyMsg('コマを下ごしらえしています'), async () => {
+      // 確定の下ごしらえと同じ経路（LINE_WORKBENCH_PLAN §20-2 / AROLL_EMOTION_LOCAL_PLAN §5）。LLMの演出プロンプトは絵を生成する直前に作る
+      const d = await api.aroll.syncStructure(pid(), ep(), { fill_line_ids: targets.map((l) => l.id) });
       // 新しい行だけが背景未割当のはずなので only_missing で絞れる
       let bg = null;
       try { bg = await api.aroll.autoAssignBackgrounds(pid(), ep(), { only_missing: true }); } catch { /* 背景は後からでもよい */ }
-      say(`✔ ${n}行を下ごしらえしました${bg && bg.assigned ? `（背景 ${bg.assigned}件を割当）` : ''}${failNote(d)}`, d.warnings || []);
+      const f = d.filled || {};
+      say(`✔ ${n}行を下ごしらえしました（親から引き継ぎ ${(f.inherited || []).length}・ルール ${(f.rule || []).length}${bg && bg.assigned ? `・背景 ${bg.assigned}件を割当` : ''}）。絵は「在庫で埋める」か「残りを生成」で`, d.warnings || []);
       await refresh();
     });
   }
