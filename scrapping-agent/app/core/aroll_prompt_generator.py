@@ -228,8 +228,17 @@ def resolve_slot(
 CALL_TIMEOUT_SEC = float(os.getenv("AROLL_PROMPT_TIMEOUT_SEC", "90"))
 # 同時に投げる章の数（章ごとに独立した問い合わせ。無料枠の毎分上限に当たらない程度に）
 SECTION_CONCURRENCY = max(1, int(os.getenv("AROLL_PROMPT_CONCURRENCY", "3")))
-# 拒否された時に案内するモデル（自動では使わない＝有料への無断フォールバックをしない）
-REFUSAL_HINT_MODEL = "anthropic/claude-sonnet-5"
+# 拒否された時に案内するモデル。`LLM_FALLBACK_ALLOW_PAID=true`（明示オプトイン）の環境では、
+# 無料の連鎖が拒否・全滅した時の**最後の1手**としてこのモデルを自動で使う（有料・直接API）。
+# 既定は使わない＝有料への無断フォールバックをしない（`Docs/LLM_FALLBACK_PLAN.md` §0 の3・4）。
+REFUSAL_HINT_MODEL = os.getenv("LLM_FALLBACK_PAID_MODEL", "anthropic/claude-sonnet-5")
+
+
+def paid_fallback_model() -> Optional[str]:
+    """有料の最終フォールバック先。**オプトインした環境で、そのAPIキーがある時だけ**返す。"""
+    if os.getenv("LLM_FALLBACK_ALLOW_PAID", "").strip().lower() not in ("1", "true", "yes", "on"):
+        return None
+    return REFUSAL_HINT_MODEL if _model_available(REFUSAL_HINT_MODEL) else None
 
 
 class PromptRefused(RuntimeError):
@@ -359,24 +368,47 @@ async def generate_section_prompts(
 
     warnings: list[str] = []
     parsed = None
+    used_model: str | None = None
+    refused: PromptRefused | None = None
     last_err: Exception | None = None
-    for m in _model_chain(model):
+    chain = _model_chain(model)
+    for m in chain:
         try:
             raw = await llm_client.chat(prompt, model=m, system=SYSTEM_PROMPT, max_tokens=8192,
                                         timeout=CALL_TIMEOUT_SEC)
-            parsed = _parse_llm_json(raw)
+            parsed, used_model = _parse_llm_json(raw), m
             break
         except Exception as e:  # noqa: BLE001
             last_err = e
             if llm_client.is_refusal(e):
                 # 安全フィルタの拒否は、無料ルーター（毎回違うモデルに当たる）へ回しても直らないことが多く、
-                # 壊れたJSONで失敗を重ねるだけだった（2026-09-30 本番 mk_cia50）。ここで止めて理由を返す
-                raise PromptRefused(
+                # 壊れたJSONで失敗を重ねるだけだった（2026-09-30 本番 mk_cia50）。無料の連鎖はここで止める
+                refused = PromptRefused(
                     f"章 '{section}' は {m} の安全フィルタで拒否されました。"
-                    f"機微なテーマは、モデルに {REFUSAL_HINT_MODEL} を指定すると通ります") from e
+                    f"機微なテーマは、モデルに {REFUSAL_HINT_MODEL} を指定すると通ります")
+                refused.__cause__ = e
+                break
             # 時間切れ・429/503・JSONの壊れ → 次のモデルへ
             warnings.append(f"[{section}] {m} failed: {str(e)[:150]}")
+
+    # 有料の最終フォールバック（オプトインした環境だけ・どのモデルで通ったかを結果に残す＝LLM_FALLBACK_PLAN §0 の4）
+    paid = paid_fallback_model()
+    if parsed is None and paid and paid not in chain:
+        why = "安全フィルタで拒否" if refused else "無料の連鎖が全て失敗"
+        try:
+            raw = await llm_client.chat(prompt, model=paid, system=SYSTEM_PROMPT, max_tokens=8192,
+                                        timeout=CALL_TIMEOUT_SEC)
+            parsed, used_model = _parse_llm_json(raw), paid
+            warnings.append(f"[{section}] {why}のため {paid}（有料）で生成しました")
+        except Exception as e:  # noqa: BLE001
+            last_err = e
+            warnings.append(f"[{section}] {paid}（有料）も失敗: {str(e)[:150]}")
+            if llm_client.is_refusal(e):
+                refused = PromptRefused(f"章 '{section}' は {paid}（有料）の安全フィルタでも拒否されました")
+                refused.__cause__ = e
     if parsed is None:
+        if refused is not None:
+            raise refused
         raise RuntimeError(f"prompt generation failed for section '{section}': {last_err}")
 
     by_line: dict[str, dict] = {}
@@ -423,5 +455,6 @@ async def generate_section_prompts(
         result[lid] = {
             "characters": chars, "prompt": text,
             "slot": slot, "slot_source": slot_source,
+            "model": used_model, "paid": bool(paid and used_model == paid),
         }
     return result, warnings

@@ -2292,6 +2292,7 @@ async def aroll_generate_prompts(project_id: str, episode_number: int, req: Arol
 
     prompts_by_line: dict[str, dict] = {}
     failed: list[dict] = []
+    models_used: dict[str, str] = {}   # {章: 通ったモデル}。有料のフォールバックで通った章も分かる
     for section, res, err in await asyncio.gather(*(one(s, ls) for s, ls in targets)):
         if err is not None:
             refused = isinstance(err, aroll_prompt_generator.PromptRefused)
@@ -2302,6 +2303,9 @@ async def aroll_generate_prompts(project_id: str, episode_number: int, req: Arol
         result, warns = res
         prompts_by_line.update(result)
         warnings.extend(warns)
+        used = next((v.get("model") for v in result.values() if v.get("model")), None)
+        if used:
+            models_used[section] = used
 
     if targets and len(failed) == len(targets):
         raise HTTPException(status_code=502, detail={
@@ -2311,7 +2315,7 @@ async def aroll_generate_prompts(project_id: str, episode_number: int, req: Arol
         project_id, episode_number, script, prompts_by_line,
         aspect=req.aspect, style=req.style, overwrite=req.overwrite,
     )
-    return {"manifest": manifest, "warnings": warnings, "failed_sections": failed}
+    return {"manifest": manifest, "warnings": warnings, "failed_sections": failed, "models_used": models_used}
 
 
 @router.get("/projects/{project_id}/episodes/{episode_number}/aroll")
@@ -2502,7 +2506,7 @@ async def aroll_start_batch(project_id: str, episode_number: int, req: ArollGene
         aroll_manager.save_manifest(project_id, episode_number, manifest)
 
     targets = aroll_manager.select_targets(
-        project_id, episode_number, manifest, req.line_ids, req.only_missing)
+        project_id, episode_number, manifest, req.line_ids, req.only_missing, require_prompt=False)
     if not targets:
         raise HTTPException(status_code=400, detail="対象行がありません（プロンプト未生成 or 全行生成済み）")
 

@@ -1399,8 +1399,13 @@ async def generate_line_image(
     allow_paid_fallback: bool = False, log: list[str] | None = None,
     use_library: bool = True, library_only: bool = False,
     exclude_slot_ids: set[str] | None = None,
+    ensure_prompt: bool = True,
 ) -> dict:
     """1行分のパネル画像を生成してマニフェストへ反映する（成功/失敗とも記録）。
+
+    ``ensure_prompt``: 新規生成の直前にプロンプトが無ければ LLM で作る（E4・`ensure_prompts`）。
+    在庫の引用はプロンプトを使わないので、プロンプトが要るのは新規生成の時だけ。
+    バッチ（`run_batch`）は先にまとめて作るので False を渡す（行ごとに拒否を繰り返さない）。
 
     use_library=True（既定）: 先にキャラ所有ライブラリ（Phase 3）を引き、一致すれば
     無料でコピーして即返す（NanoBananaは呼ばない）。「この行だけ作り直す」時は
@@ -1424,8 +1429,7 @@ async def generate_line_image(
         raise ValueError(f"line not found in aroll.json: {line_id}")
     if panel.get("orphan"):
         raise ValueError(f"台本から削除された行です（生成しません）: {line_id}")
-    if not (panel.get("prompt") or "").strip():
-        raise ValueError(f"prompt is empty: {line_id}")
+    # プロンプトが要るのは新規生成の時だけ（在庫の引用は使わない）。無ければ生成の直前に作る
 
     out_dir = aroll_dir(project_id, episode)
     out_dir.mkdir(parents=True, exist_ok=True)
@@ -1500,6 +1504,16 @@ async def generate_line_image(
                 f"ライブラリに一致するスロットがありません（{line_id}）。"
                 "課金生成するにはキャラ画像タブでバリアントを作るか、「この行を新規生成」を使ってください。"
             )
+
+    if _panel_needs_prompt(panel):
+        got = None
+        if ensure_prompt:
+            got = await ensure_prompts(project_id, episode, [line_id], log=log)
+            manifest = load_manifest(project_id, episode) or manifest
+            panel = next((p for p in manifest["panels"] if p.get("line_id") == line_id), panel)
+        if _panel_needs_prompt(panel):
+            why = "; ".join(f["error"] for f in (got or {}).get("failed", []))
+            raise ValueError(f"prompt is empty: {line_id}" + (f"（演出プロンプトを作れませんでした: {why}）" if why else ""))
 
     full_prompt = _compose_prompt(panel, manifest.get("style", "kamishibai"))
     refs = _resolve_refs(panel.get("characters", []), log)
@@ -1635,6 +1649,7 @@ def _panel_decided(p: dict) -> bool:
 def select_targets(
     project_id: str, episode: int, manifest: dict,
     line_ids: list[str] | None, only_missing: bool,
+    require_prompt: bool = True,
 ) -> list[dict]:
     """バッチ対象パネルを選ぶ。**対象は行ではなくカットの先頭行**（穴9 §15-1・2026-09-21）。
 
@@ -1658,6 +1673,11 @@ def select_targets(
     ⚠️ **ナレーション行（``characters`` が空）も常に除外する。** 話者が変われば必ず
     カットの境界になるため（``cut_planner._runs``）、先頭行だけ見れば足りる。ここを
     外さないと、参照画像0枚のまま「誰でもない人物」が課金生成される。
+
+    ``require_prompt=False``: プロンプトが無いカットも対象に含める（`Docs/AROLL_EMOTION_LOCAL_PLAN.md`
+    §5 E4）。独立した新しい行はプロンプトを持たない（確定の下ごしらえは LLM を呼ばない）ので、
+    既定のままだと「残りを生成」・見積もりから**黙って落ちる**。生成の直前に `ensure_prompts` が作る。
+    在庫から選べる行はプロンプトを使わない（`build_generation_plan` が先に振り分ける）。
     """
     panels_by_id = {p.get("line_id"): p for p in manifest.get("panels", []) if not p.get("orphan")}
     cuts = cut_report(project_id, episode, manifest)["cuts"]
@@ -1673,7 +1693,7 @@ def select_targets(
         head = members[0]
         if not head.get("characters"):
             continue
-        if not (head.get("prompt") or "").strip():
+        if require_prompt and not (head.get("prompt") or "").strip():
             continue
         if wanted is not None and not any(m.get("line_id") in wanted for m in members):
             continue
@@ -1803,11 +1823,17 @@ def generation_plan_estimate(
     manifest = load_manifest(project_id, episode)
     if manifest is None:
         raise ValueError("aroll.json not found (run /aroll/prompts first)")
-    targets = select_targets(project_id, episode, manifest, line_ids, only_missing)
+    # プロンプトの無い行も数える（実行側 `run_batch` と同じ対象。在庫から選べない行だけ演出プロンプトを作る＝E4）
+    targets = select_targets(project_id, episode, manifest, line_ids, only_missing, require_prompt=False)
     plan = build_generation_plan(targets, max_reuse=max_reuse, min_gap=min_gap, use_library=use_library)
     unkeyed = sum(1 for e in plan["generate"] if e["variant_id"] is None)
+    panels = {p.get("line_id"): p for p in manifest.get("panels", [])}
+    prompt_needed = sum(1 for e in plan["generate"] if _panel_needs_prompt(panels.get(e["line_id"])))
     return {
         "target_count": len(targets),
+        # 生成の直前に LLM で演出プロンプトを作る行の数（拒否されたら有料の最終フォールバックが動く環境もある）
+        "prompt_needed_count": prompt_needed,
+        "paid_prompt_fallback": bool(aroll_prompt_generator.paid_fallback_model()),
         "library_count": plan["library_count"],
         "generate_count": plan["generate_count"],
         "copy_count": plan["copy_count"],
@@ -1882,7 +1908,8 @@ async def run_batch(
     """
     key = _job_key(project_id, episode)
     manifest = load_manifest(project_id, episode) or {}
-    targets = select_targets(project_id, episode, manifest, line_ids, only_missing)
+    # プロンプトの無い行も対象に含める（独立した新しい行。在庫で賄えない行だけ、下で生成の直前に作る＝E4）
+    targets = select_targets(project_id, episode, manifest, line_ids, only_missing, require_prompt=False)
     plan = build_generation_plan(targets, max_reuse=max_reuse, min_gap=min_gap, use_library=use_library)
     generate_entries = plan["generate"]
     copy_by_source: dict[str, list[dict]] = {}
@@ -1901,6 +1928,18 @@ async def run_batch(
     }
     log: list[str] = job["log"]
 
+    # E4: 新しく生成する行のうちプロンプトの無い行だけ、LLM で演出プロンプトを作る（在庫から選ぶ行・
+    # プロンプトがある行は呼ばない）。作れなかった行は下の生成で「失敗」として理由つきで記録される
+    panels_now = {p.get("line_id"): p for p in (load_manifest(project_id, episode) or {}).get("panels", [])}
+    need_prompt = [e["line_id"] for e in generate_entries if _panel_needs_prompt(panels_now.get(e["line_id"]))]
+    if need_prompt:
+        job["current_line"] = need_prompt[0]
+        log.append(f"✍ プロンプトの無い {len(need_prompt)}行の演出プロンプトを作ります…")
+        try:
+            await ensure_prompts(project_id, episode, need_prompt, log=log)
+        except Exception as e:  # noqa: BLE001
+            log.append(f"✘ 演出プロンプトの作成に失敗: {str(e)[:150]}")
+
     # ⚠️ build_generation_plan の見積もりと同じアルゴリズム（char_idごとに使用済み
     # slot_idを蓄積）で実適用する。片方だけ直すと見積もりと実際の課金結果がズレる
     # （詳細 memory/aroll-duplicate-cutout-same-batch・2026-09-23）。
@@ -1915,7 +1954,7 @@ async def run_batch(
             exclude = used_slots.get(char_hint) if char_hint else None
             result_panel = await generate_line_image(
                 project_id, episode, lid, log=log, use_library=True,
-                exclude_slot_ids=exclude,
+                exclude_slot_ids=exclude, ensure_prompt=False,
             )
             got_char, got_slot = result_panel.get("cutout_char_id"), result_panel.get("cutout_slot_id")
             if got_char and got_slot:
@@ -1937,7 +1976,7 @@ async def run_batch(
                 await generate_line_image(
                     project_id, episode, lid,
                     allow_paid_fallback=allow_paid_fallback, log=log,
-                    use_library=use_library,
+                    use_library=use_library, ensure_prompt=False,
                 )
                 if entry.get("variant_id"):
                     _stamp_variant(project_id, episode, lid, entry["variant_id"])
@@ -2465,6 +2504,81 @@ def fill_slots_without_llm(manifest: dict, line_ids, lines_by_id: dict) -> dict:
             p["slot"], p["slot_source"] = slot_rules.rule_slot(line), "rule"
             p["slot_key"] = compute_slot_key(p.get("characters"), p.get("slot"))
             out["rule"].append(lid)
+    return out
+
+
+def _panel_needs_prompt(panel: dict | None) -> bool:
+    return panel is not None and not panel.get("orphan") and not (panel.get("prompt") or "").strip()
+
+
+async def ensure_prompts(project_id: str, episode: int, line_ids: list[str],
+                         model: str | None = None, log: list[str] | None = None) -> dict:
+    """**新しく絵を生成する行のうち、プロンプトの無い行だけ** LLM で英語の演出プロンプトを作る
+    （`Docs/AROLL_EMOTION_LOCAL_PLAN.md` §5 E4）。確定の下ごしらえは LLM を呼ばないので、
+    独立した新しい行（プロンプト無し・ルールの slot だけ）は、生成の直前にここで作る。
+
+    - 章ごとに問い合わせる（章の全セリフを文脈として渡す）が、**保存するのは `line_ids` の行だけ**
+      （既存のプロンプト・手で直したプロンプトには触れない＝`overwrite=False`）
+    - 拒否・失敗しても例外にしない。作れなかった行は `failed` に入れ、呼び出し側が生成をスキップする
+    - 有料の最終フォールバック（`LLM_FALLBACK_ALLOW_PAID`）と「どのモデルで通ったか」は
+      `generate_section_prompts` が担う。`models` に章ごとの結果を返す
+    戻り値: {"generated": [line_id], "failed": [{"section","refused","error"}], "models": {章: モデル}, "warnings": []}
+    """
+    out: dict = {"generated": [], "failed": [], "models": {}, "warnings": []}
+    manifest = load_manifest(project_id, episode)
+    script = project_manager.get_episode_script(project_id, episode)
+    if manifest is None or script is None:
+        return out
+    panels = {p.get("line_id"): p for p in manifest.get("panels", [])}
+    need = [lid for lid in dict.fromkeys(line_ids) if _panel_needs_prompt(panels.get(lid))]
+    if not need:
+        return out
+
+    by_section: dict[str, list[dict]] = {}
+    for ln in script.get("lines", []):
+        if (ln.get("text") or "").strip():
+            by_section.setdefault(ln.get("section") or "main", []).append(ln)
+    need_set = set(need)
+    sections = [s for s, ls in by_section.items() if any(l.get("id") in need_set for l in ls)]
+
+    speaker_map, known_chars = get_speaker_map(project_id), get_cast_characters(project_id)
+    out["warnings"] += list(cast_warnings(project_id))
+    sem = asyncio.Semaphore(aroll_prompt_generator.SECTION_CONCURRENCY)
+
+    async def one(section: str):
+        async with sem:
+            try:
+                return section, await aroll_prompt_generator.generate_section_prompts(
+                    section, by_section[section], speaker_map, known_chars, model=model), None
+            except Exception as e:  # noqa: BLE001
+                return section, None, e
+
+    prompts_by_line: dict[str, dict] = {}
+    for section, res, err in await asyncio.gather(*(one(s) for s in sections)):
+        if err is not None:
+            refused = isinstance(err, aroll_prompt_generator.PromptRefused)
+            project_manager.append_error(project_id, f"aroll prompt generation failed ({section}): {err}")
+            out["failed"].append({"section": section, "refused": refused, "error": str(err)[:300]})
+            out["warnings"].append(f"❌ 章 '{section}': {str(err)[:300]}")
+            continue
+        result, warns = res
+        out["warnings"] += warns
+        used = next((v.get("model") for v in result.values() if v.get("model")), None)
+        if used:
+            out["models"][section] = used
+        # 保存するのは、プロンプトが無かった行だけ（同じ章の他の行は触らない）
+        prompts_by_line.update({lid: v for lid, v in result.items() if lid in need_set})
+
+    if prompts_by_line:
+        build_or_update_manifest(project_id, episode, script, prompts_by_line,
+                                 aspect=manifest.get("aspect") or "16:9",
+                                 style=manifest.get("style") or "kamishibai", overwrite=False)
+        out["generated"] = [lid for lid in need if lid in prompts_by_line]
+    if log is not None:
+        for section, used in out["models"].items():
+            log.append(f"✍ 章 '{section}' の演出プロンプトを {used} で作りました")
+        for f in out["failed"]:
+            log.append(f"❌ 章 '{f['section']}' のプロンプトを作れませんでした: {f['error']}")
     return out
 
 
