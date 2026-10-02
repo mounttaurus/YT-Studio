@@ -127,7 +127,7 @@ function renderHealth() {
     <div class="hcard"><div class="lbl">台本（すべての本籍）</div><div class="val">${script} ${proposal}</div></div>
     <div class="hcard"><div class="lbl">音声</div><div class="val">${pills(c.tts, [['ok', 'ok', '生成済み'], ['warn', 'warn', '要再生成'], ['info', 'info', '作り直し中'], ['bad', 'bad', '声未割当'], ['none', 'none', '未生成']])}${prog}</div></div>
     <div class="hcard"><div class="lbl">絵</div><div class="val">${hasAroll ? pills(c.aroll, [['bad', 'bad', 'コマ無し'], ['warn', 'warn', '台本とズレ'], ['info', 'info', '記録なし'], ['ok', 'ok', '絵あり'], ['none', 'none', '絵なし']]) : pill('none', 'Aロール未着手')}</div></div>
-    <div class="hcard"><div class="lbl">仕上がり（合成）</div><div class="val">${pills(c.final, [['bad', 'bad', '要対応'], ['warn', 'warn', '助言・要組み直し'], ['ok', 'ok', '問題なし'], ['info', 'info', '合成済み'], ['none', 'none', '未合成']])}</div></div>`;
+    <div class="hcard"><div class="lbl">仕上がり（合成）</div><div class="val">${pills((() => { const n = FM.counts(S.lines); return { bad: n.blocking, warn: n.advisory, purple: n.needbuild, ok: n.clean, none: n.ungenerated }; })(), [['bad', 'bad', '要対応'], ['warn', 'warn', '助言'], ['purple', 'purple', '要合成'], ['ok', 'ok', '問題なし'], ['none', 'none', '絵なし']])}</div></div>`;
 }
 
 function renderTabs() {
@@ -220,7 +220,7 @@ function rowHtml(l) {
   return `<div class="row ${sub ? 'sub' : ''} ${S.enabled && l.confirm === 'unconfirmed' ? 'dirty' : ''} ${player.id === l.id ? 'playing' : ''}" id="r-${esc(l.id)}" tabindex="0" data-open="${esc(l.id)}">
     <div class="meta">${S.tab === 'aroll' ? AR.rowSelHtml(l) : ''}<span class="ord mono">${sub ? '<span class="arrow">↳</span>' : ''}${l.order}</span><span class="spk ${M.speakerClass(l, S.cast)}">${esc(speakerName(l))}</span></div>
     <div class="body"><div class="text">${esc(l.text) || '<span style="color:var(--faint)">（本文なし）</span>'}</div>${detailHtml(l)}</div>
-    <div class="side">${stripHtml(seg)}<button class="btn ok" data-act="confirm" data-id="${esc(l.id)}" ${reason ? `disabled title="${esc(reason)}"` : 'title="この行の変更を確定（音声は自動で作り直し・再合成の対象になる）"'}>✓ 確定</button></div></div>`;
+    <div class="side">${stripHtml(seg)}<button class="btn ok" data-act="confirm" data-id="${esc(l.id)}" ${reason ? `disabled title="${esc(reason)}"` : 'title="この行の変更を確定（音声は自動で作り直し・合成の対象になる）"'}>✓ 確定</button></div></div>`;
 }
 
 function renderList() {
@@ -483,7 +483,7 @@ async function confirmLines(ids) {
     notify(res.warnings);
     const q = (res.applied && res.applied.tts && res.applied.tts.queued) || [];
     if (q.length) { S.queued = new Set(q); startFollow(); }
-    toast(res.confirmed.length ? `${res.confirmed.length}行を確定：${q.length ? `音声 ${q.length}行を作り直し中・` : ''}再合成の対象に入りました${res.warnings.length ? '（注意あり）' : ''}`
+    toast(res.confirmed.length ? `${res.confirmed.length}行を確定：${q.length ? `音声 ${q.length}行を作り直し中・` : ''}合成の対象に入りました${res.warnings.length ? '（注意あり）' : ''}`
       : '確定する行はありませんでした');
     if (S.modal) drawModal();
   });

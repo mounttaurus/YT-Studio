@@ -2,7 +2,7 @@
 // 状態は director の GET .../workbench（lines[].aroll）。絵の決定は今の scrapping-agent の `…/aroll/…` を
 // director の中継（/api/scrapping/）経由でそのまま呼ぶ＝バックエンドは新設しない。
 // 課金するもの・絵を上書きするものは、押した後に必ず確認を出す（文面は director の Aロールタブと同じ）。
-// 選び直した直後の自動再合成は入れない（D25＝W4b-2）。「再合成が要る」の印だけ出す。
+// 選び直した直後の自動合成は入れない（D25＝W4b-2）。「要合成」の印だけ出す。
 import * as R from './aroll_model.js';
 
 const AXES = [['emotion', '表情'], ['shot', 'ショット'], ['angle', 'アングル'], ['pose', 'ポーズ(任意)']];
@@ -251,7 +251,7 @@ export function createArollUi(ctx) {
           ${R.hasPicture(a) ? approveCtl(l, a, off) : '<span class="hint">まだ絵がありません。絵を選ぶか生成すると「この絵でOK」を押せます</span>'}
           ${a.sync === 'stale' ? staleHtml(l, a) : ''}
           ${a.speaker_changed ? '<div class="note warn">話者を変えた行です。在庫から絵を選び直してください。</div>' : ''}
-          ${a.restale ? '<div class="note warn">♻️ 選び直した絵がまだ合成（PSD）に反映されていません。再合成が要ります（「仕上がり」区画の「この行を再合成」から。確定済み・手直し無しの行は選び直した直後に自動で再合成されます）。</div>' : ''}</div></div></div>
+          ${a.restale ? '<div class="note warn">🔧 要合成: 選び直した絵が、まだ合成（PSD）に反映されていません。「仕上がり」区画の「この行を合成」で組みます（確定済み・手直し無しの行は、選び直した直後に自動で合成されます）。</div>' : ''}</div></div></div>
       ${prepBox}
       <div class="pair">
         <div class="box"><span class="flabel">声の感情（台本）</span><span>${esc(l.emotion || 'neutral')}</span></div>
@@ -352,7 +352,7 @@ export function createArollUi(ctx) {
   async function regen() {
     const ids = selected();
     if (!ids.length) return;
-    if (!confirm(`選択した ${ids.length}行 を生成し直します（概算 $${R.usd(ids.length)}・実課金）。\n既存の絵は上書きされ、Photoshopでの再合成が必要になります。続行しますか？`)) return;
+    if (!confirm(`選択した ${ids.length}行 を生成し直します（概算 $${R.usd(ids.length)}・実課金）。\n既存の絵は上書きされ、Photoshopでの合成が必要になります。続行しますか？`)) return;
     await working(busyMsg('生成を頼んでいます'), () => startGenerate({ line_ids: ids, only_missing: false }));
   }
 
@@ -401,7 +401,7 @@ export function createArollUi(ctx) {
     const a = byId(lineId).aroll;
     if (fresh) {
       if (!confirm('ライブラリを使わず新規課金生成します（≈$0.04）。よろしいですか？')) return;
-    } else if (a.has_image && !confirm(`${lineId} の絵を作り直します。\n\n・今の絵は上書きされます（元に戻せません）\n・ライブラリに一致が無ければ課金されます（≈$0.04）\n・合成済みの場合、Photoshopでの再合成が必要になります\n\nよろしいですか？`)) return;
+    } else if (a.has_image && !confirm(`${lineId} の絵を作り直します。\n\n・今の絵は上書きされます（元に戻せません）\n・ライブラリに一致が無ければ課金されます（≈$0.04）\n・合成済みの場合、Photoshopでの合成が必要になります\n\nよろしいですか？`)) return;
     await working(busyMsg('生成しています（数十秒かかります）'), async () => {
       try {
         await api.aroll.generateLine(pid(), ep(), lineId, { allow_paid_fallback: A.settings.paid, ...(fresh ? { use_library: false } : {}) });
@@ -425,15 +425,15 @@ export function createArollUi(ctx) {
   }
 
   async function pick(lineId, slotId) {
-    // パネル画像の差し替えではなく、合成素材の指定。自動の再合成は走らせない（D25＝確定済み ∧ 手直し無しの行だけ・W4b-2）
+    // パネル画像の差し替えではなく、合成素材の指定。自動の合成は走らせない（D25＝確定済み ∧ 手直し無しの行だけ・W4b-2）
     await working(busyMsg('割り当てています'), async () => {
       await api.aroll.setCutout(pid(), ep(), lineId, slotId);
       A.picker = null;
       await refresh();
-      // 確定済み ∧ 手直し無しの行だけ自動で再合成する（D25）。それ以外は「再合成が要る」の印だけ残す
+      // 確定済み ∧ 手直し無しの行だけ自動で合成する（D25）。それ以外は「要合成」の印だけ残す
       const ran = ctx.autoResync ? await ctx.autoResync(lineId) : false;
-      say(ran ? `${lineId} に在庫の絵を割り当て、再合成を頼みました（Photoshop を使います）`
-        : `${lineId} に在庫の絵を割り当てました。合成に反映するには再合成が要ります（確定済み・手直し無しの行は自動で再合成されます）`);
+      say(ran ? `${lineId} に在庫の絵を割り当て、合成を頼みました（Photoshop を使います）`
+        : `${lineId} に在庫の絵を割り当てました。合成には、まだ反映されていません＝要合成です（確定済み・手直し無しの行は自動で合成されます）`);
       ctx.rerender();
     });
   }

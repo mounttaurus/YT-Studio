@@ -380,12 +380,12 @@ class FinalDerivative(Derivative):
         if text_ids:
             head = "前半 " if ctx.op in SPLIT_OPS else ""
             why = "吹き出しが短くなる" if ctx.op in SPLIT_OPS else "吹き出しの文字が変わる"
-            out.append(item("later", f"{head}{names(text_ids)} は{why} → 再合成が要る"))
+            out.append(item("later", f"{head}{names(text_ids)} は{why} → 要合成"))
         if speaker_ids:
-            out.append(item("later", f"{names(speaker_ids)} は吹き出しの形・向きの既定が変わる → 再合成が要る"))
+            out.append(item("later", f"{names(speaker_ids)} は吹き出しの形・向きの既定が変わる → 要合成"))
         if d["new_ids"]:
             label = "後半 " if ctx.op in SPLIT_OPS else "新しい行 "
-            out.append(item("later", f"{label}{names(d['new_ids'])} は未合成"))
+            out.append(item("later", f"{label}{names(d['new_ids'])} は要合成"))
         if [i for i in d["moved_ids"] if i in psd]:
             out.append(item("later", "背景の続き・吹き出しの向き（左右）が変わりうる → 仕上がりを確認"))
         gone = [i for i in d["removed_ids"] if i in psd]

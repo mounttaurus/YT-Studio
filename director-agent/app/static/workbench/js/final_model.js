@@ -1,11 +1,11 @@
-// 仕上がりタブ（合成チェックと再合成）の純粋なロジック（DOMを触らない・Nodeで単体テストできる）。
+// 仕上がりタブ（合成チェックと合成）の純粋なロジック（DOMを触らない・Nodeで単体テストできる）。
 // Docs/LINE_WORKBENCH_PLAN.md §5-4-1（W4b-2）・§6-2。状態は director の GET .../workbench の `lines[].final` と `psassist`。
 
 import { needsReview } from './aroll_model.js';
 export const SEV_ORDER = ['blocking', 'advisory', 'restale', 'unbuilt', 'ungenerated', 'clean'];
-export const SEV_LABEL = { blocking: '要対応', advisory: '助言', clean: '問題なし', unbuilt: '未合成', ungenerated: '未生成', restale: '要組み直し' };
-export const SEV_MARK = { blocking: '🔴', advisory: '🟡', clean: '✓', unbuilt: '🔧', ungenerated: '○', restale: '♻️' };
-export const SEV_CLASS = { blocking: 'bad', advisory: 'warn', clean: 'ok', unbuilt: 'info', ungenerated: '', restale: 'purple' };
+export const SEV_LABEL = { blocking: '要対応', advisory: '助言', clean: '問題なし', unbuilt: '要合成', ungenerated: '未生成', restale: '要合成' };
+export const SEV_MARK = { blocking: '🔴', advisory: '🟡', clean: '✓', unbuilt: '🔧', ungenerated: '○', restale: '🔧', needbuild: '🔧' };
+export const SEV_CLASS = { blocking: 'bad', advisory: 'warn', clean: 'ok', unbuilt: 'info', ungenerated: '', restale: 'purple', needbuild: 'purple' };
 
 export const CODE_LABEL = {
   BUBBLE_OVERLAP: '吹き出し重なり', TEXT_OVERFLOW: '文字はみ出し', TEXT_OFF_CANVAS: '文字が画面外', BUBBLE_ON_FACE: '顔に被る',
@@ -21,7 +21,7 @@ const F = (l) => l.final || {};
 
 /**
  * 行の合成の状態（サーバーが導出した build_state と検査の重さから）。
- * 検査していない行は build_state だけ（未合成・未生成・要組み直し）。古い合成は指摘を出さない（絵が変わっている）。
+ * 検査していない行は build_state だけ（未合成・未生成・要合成）。古い合成は指摘を出さない（絵が変わっている）。
  */
 export function severity(l) {
   const f = F(l);
@@ -39,10 +39,16 @@ export function mainIssue(l) {
 }
 export const hasCode = (l, code) => (F(l).issues || []).some((i) => i.code === code);
 
+/** 要合成＝まだ合成していない（PSD が無い）か、合成したが今の絵・セリフと食い違っている。どちらも「合成」の1操作で解消するので、画面では1つの状態にまとめる（内部では unbuilt／restale を区別したまま）。 */
+export const needsBuild = (l) => ['unbuilt', 'restale'].includes(severity(l));
+/** 要合成の理由（チップのホバー・注意書き用）。 */
+export const buildReason = (l) => (severity(l) === 'restale' ? '合成したあとに、絵を選び直したか、セリフが変わりました' : severity(l) === 'unbuilt' ? 'まだ合成していません' : '');
+
 export function counts(lines) {
-  const c = { total: lines.length, blocking: 0, advisory: 0, clean: 0, unbuilt: 0, ungenerated: 0, restale: 0, edited: 0, unapproved: 0 };
+  const c = { total: lines.length, blocking: 0, advisory: 0, clean: 0, unbuilt: 0, ungenerated: 0, restale: 0, needbuild: 0, edited: 0, unapproved: 0 };
   for (const l of lines) {
     c[severity(l)] = (c[severity(l)] || 0) + 1;
+    if (needsBuild(l)) c.needbuild++;
     if (F(l).edited) c.edited++;
     const a = l.aroll || {};
     if (a.panel && needsReview(a)) c.unapproved++;
@@ -51,13 +57,14 @@ export function counts(lines) {
 }
 
 /** 絞り込み。code:XXX で指摘コード別。 */
-export const FILTERS = [['all', 'すべて'], ['blocking', '🔴要対応'], ['advisory', '🟡助言'], ['restale', '♻️要組み直し'], ['unbuilt', '🔧未合成'],
+export const FILTERS = [['all', 'すべて'], ['blocking', '🔴要対応'], ['advisory', '🟡助言'], ['needbuild', '🔧要合成'],
   ['ungenerated', '○未生成'], ['unapproved', '絵が未確認'], ['edited', '✋手直し済み']];
 
 export function rowsFor(lines, f) {
   if (f === 'all' || !f) return lines;
   if (f.startsWith('code:')) return lines.filter((l) => hasCode(l, f.slice(5)));
   if (f === 'edited') return lines.filter((l) => F(l).edited);
+  if (f === 'needbuild') return lines.filter(needsBuild);
   if (f === 'unapproved') return lines.filter((l) => { const a = l.aroll || {}; return a.panel && needsReview(a); });
   return lines.filter((l) => severity(l) === f);
 }
@@ -69,7 +76,7 @@ export function codeFacets(lines) {
   return [...m.entries()].sort((a, b) => b[1] - a[1]);
 }
 
-/** 一覧のサムネ。合成サムネ → 無ければ切り抜き／生成画像。古い合成（要組み直し）は出さない。 */
+/** 一覧のサムネ。合成サムネ → 無ければ切り抜き／生成画像。古い合成（要合成）は出さない。 */
 export function thumbOf(l) {
   const f = F(l);
   if (f.thumb && f.build_state !== 'restale' && f.build_state !== 'ungenerated') return { url: f.thumb, composed: true };
@@ -81,7 +88,7 @@ export function thumbOf(l) {
 export const exportTargets = (lines) => lines.filter((l) => hasCode(l, 'EXPORT_STALE') || hasCode(l, 'EXPORT_MISSING')).map((l) => l.id);
 
 /**
- * 再合成の計画。確定の運用が始まっている話数は確定済みの行だけ（サーバーも同じ規則）。
+ * 合成の計画。確定の運用が始まっている話数は確定済みの行だけ（サーバーも同じ規則）。
  * 手直し済みは既定で飛ばし、includeEdited の時だけ対象（退避してから上書き）。
  * `ids` が空の時は何も走らない（`lines: []` を「全件」にしない）。
  */
@@ -96,7 +103,7 @@ export function planResync(lines, ids, enabled, includeEdited) {
   return { run, unconfirmed, edited, skippedEdited: includeEdited ? [] : edited.filter((id) => !noPicture.includes(id)), includeEdited, noPicture, total: targets.length };
 }
 
-/** 1行の再合成ができない理由（空文字＝できる）。 */
+/** 1行の合成ができない理由（空文字＝できる）。 */
 export function resyncBlock(l, { enabled, alive, busy }) {
   if (!hasPanel(l)) return 'コマが無い行です';
   if (enabled && l.confirm !== 'confirmed') return '未確定の行です（先に「✓ 確定」）';
@@ -106,7 +113,7 @@ export function resyncBlock(l, { enabled, alive, busy }) {
   return '';
 }
 
-/** 選び直した直後に自動で再合成してよいか（D25＝確定済み ∧ 手直し無し ∧ 要組み直し ∧ ホスト工程が動いている）。 */
+/** 選び直した直後に自動で合成してよいか（D25＝確定済み ∧ 手直し無し ∧ 要合成 ∧ ホスト工程が動いている）。 */
 export function canAutoResync(l, { enabled, alive, busy }) {
   if (!hasPanel(l) || !alive || busy) return false;
   if (enabled && l.confirm !== 'confirmed') return false;
@@ -114,11 +121,11 @@ export function canAutoResync(l, { enabled, alive, busy }) {
   return !f.edited && f.build_state === 'restale';
 }
 
-/** 「✋ 手直し済み」「♻️」などの状態チップ [クラス, 文言][]。 */
+/** 「✋ 手直し済み」「🔧」などの状態チップ [クラス, 文言][]。 */
 export function chips(l) {
   const f = F(l), out = [];
   const s = severity(l);
-  out.push([SEV_CLASS[s], `${SEV_MARK[s]} ${SEV_LABEL[s]}`]);
+  out.push([SEV_CLASS[s], `${SEV_MARK[s]} ${SEV_LABEL[s]}`, buildReason(l)]);
   if (f.edited) out.push(['edit', '✋ 手直し済み']);
   if (hasCode(l, 'EXPORT_STALE') || hasCode(l, 'EXPORT_MISSING')) out.push(['info', '📤 納品PNGが古い/無い']);
   return out;
@@ -181,7 +188,7 @@ export const STEPS = [
   { kind: 'qa_check', label: '④ 検査する', ps: false, hint: '合成結果を検査してサムネと指摘を作ります（Photoshop不要・196枚で約1分）' },
 ];
 
-export const JOB_LABEL = { build_plan: '① プラン', cutout: '② 背景抜き', build_panel: '③ 組版', qa_check: '④ 検査', export_png: '⑤ 納品PNG', resync: '再合成' };
+export const JOB_LABEL = { build_plan: '① プラン', cutout: '② 背景抜き', build_panel: '③ 組版', qa_check: '④ 検査', export_png: '⑤ 納品PNG', resync: '合成' };
 export const JOB_STATUS = { running: '⏳ 実行中', done: '✔ 完了', failed: '✘ 失敗', cancelled: '⏸ 中断', queued: '待機中' };
 
 /** ジョブの見守り。running でなくなったら done。 */

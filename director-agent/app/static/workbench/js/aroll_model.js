@@ -3,7 +3,7 @@
 // ここは「絞り込み・選択・課金の枚数・行モーダルの選択肢」を返す整形だけ。
 
 export const AROLL_FILTERS = [['all', 'すべて'], ['ungenerated', '未生成'], ['unapproved', '未確認'],
-  ['restale', '♻️要組み直し'], ['narration', 'ナレーション'], ['drift', '台本とズレ']];
+  ['restale', '🔧要合成'], ['narration', 'ナレーション'], ['drift', '台本とズレ']];
 
 export const hasPanel = (l) => !!(l.aroll && l.aroll.panel);
 
@@ -102,7 +102,7 @@ export const hasPicture = (a) => !!a && ((a.status === 'done' && !!a.has_image) 
  *  承認そのもの（「この絵でOK」）は在庫の絵にも押せる。何かの条件になってはいない（書き出し・組版・確定は見ない）。 */
 export const needsReview = (a) => hasPicture(a) && !a.approved && ((a.status === 'done' && !!a.has_image) || a.sync === 'stale');
 
-/** 一覧の状態バッジ [クラス, 文言][]（生成・確定・同期・要組み直し・在庫・背景）。 */
+/** 一覧の状態バッジ [クラス, 文言][]（生成・確定・同期・要合成・在庫・背景）。 */
 export function statusChips(l) {
   const a = l.aroll;
   if (!a || !a.has_manifest) return [];
@@ -111,7 +111,7 @@ export function statusChips(l) {
   const out = a.status === 'done' ? [['ok', '✔ 生成済']] : a.status === 'failed' ? [['bad', '✘ 失敗']] : a.cutout_slot_id ? [] : [['', '未生成']];
   if (hasPicture(a)) { if (a.approved) out.push(['ok', '✓ OK済']); else if (needsReview(a)) out.push(['warn', '未確認']); }
   if (a.sync && a.sync !== 'ok' && a.sync !== 'missing') out.push([SYNC_CLASS[a.sync] || '', SYNC_LABEL[a.sync] || a.sync]);
-  if (a.restale) out.push(['purple', '♻️ 再合成が要る']);
+  if (a.restale) out.push(['purple', '🔧 要合成']);
   if (a.cutout_slot_id) out.push(['cyan', '✂️ 在庫']);
   if (a.background_id) out.push(['', '🏞️ 背景あり']);
   return out;

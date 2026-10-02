@@ -48,9 +48,9 @@ export function segments(l, enabled) {
   const f = l.final || {};
   // 合成チェックの結果（サーバーが導出した build_state と検査の重さ）があればそれを使う。無ければプランの印だけ
   const sev = f.build_state && f.build_state !== 'unknown' ? severity(l) : null;
-  const final = sev ? ({ blocking: ['bad', '要対応'], advisory: ['warn', '助言'], restale: ['warn', '再合成が要る'], clean: ['ok', '問題なし'],
-      unbuilt: ['', '未合成'], ungenerated: ['', '絵なし'] })[sev]
-    : f.status === 'needs_attention' ? ['warn', '合成を要確認'] : f.status ? ['info', '合成済み'] : ['', '未合成'];
+  const final = sev ? ({ blocking: ['bad', '要対応'], advisory: ['warn', '助言'], restale: ['warn', '要合成'], clean: ['ok', '問題なし'],
+      unbuilt: ['', '要合成'], ungenerated: ['', '絵なし'] })[sev]
+    : f.status === 'needs_attention' ? ['warn', '合成を要確認'] : f.status ? ['info', '合成済み'] : ['', '要合成'];
   return { script, tts, aroll, final };
 }
 
