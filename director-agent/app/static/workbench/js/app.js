@@ -107,7 +107,7 @@ const uiCtx = {
   redrawModal: () => { if (S.modal && !S.drawer) drawModal(); },
 };
 const FI = createFinalUi(uiCtx);
-const AR = createArollUi({ ...uiCtx, autoResync: (id) => FI.autoResync(id) });
+const AR = createArollUi({ ...uiCtx, autoResync: (id) => FI.autoResync(id), resyncShortcut: (l) => FI.resyncShortcutHtml(l) });
 const pills = (o, map) => map.map(([k, cls, lbl]) => (o[k] ? pill(cls, `${o[k]} ${lbl}`) : '')).join('') || pill('none', '—');
 
 function renderHealth() {

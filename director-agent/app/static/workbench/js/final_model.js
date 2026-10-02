@@ -1,7 +1,6 @@
 // 仕上がりタブ（合成チェックと合成）の純粋なロジック（DOMを触らない・Nodeで単体テストできる）。
 // Docs/LINE_WORKBENCH_PLAN.md §5-4-1（W4b-2）・§6-2。状態は director の GET .../workbench の `lines[].final` と `psassist`。
 
-import { needsReview } from './aroll_model.js';
 export const SEV_ORDER = ['blocking', 'advisory', 'restale', 'unbuilt', 'ungenerated', 'clean'];
 export const SEV_LABEL = { blocking: '要対応', advisory: '助言', clean: '問題なし', unbuilt: '要合成', ungenerated: '未生成', restale: '要合成' };
 export const SEV_MARK = { blocking: '🔴', advisory: '🟡', clean: '✓', unbuilt: '🔧', ungenerated: '○', restale: '🔧', needbuild: '🔧' };
@@ -45,27 +44,24 @@ export const needsBuild = (l) => ['unbuilt', 'restale'].includes(severity(l));
 export const buildReason = (l) => (severity(l) === 'restale' ? '合成したあとに、絵を選び直したか、セリフが変わりました' : severity(l) === 'unbuilt' ? 'まだ合成していません' : '');
 
 export function counts(lines) {
-  const c = { total: lines.length, blocking: 0, advisory: 0, clean: 0, unbuilt: 0, ungenerated: 0, restale: 0, needbuild: 0, edited: 0, unapproved: 0 };
+  const c = { total: lines.length, blocking: 0, advisory: 0, clean: 0, unbuilt: 0, ungenerated: 0, restale: 0, needbuild: 0, edited: 0 };
   for (const l of lines) {
     c[severity(l)] = (c[severity(l)] || 0) + 1;
     if (needsBuild(l)) c.needbuild++;
     if (F(l).edited) c.edited++;
-    const a = l.aroll || {};
-    if (a.panel && needsReview(a)) c.unapproved++;
   }
   return c;
 }
 
 /** 絞り込み。code:XXX で指摘コード別。 */
 export const FILTERS = [['all', 'すべて'], ['blocking', '🔴要対応'], ['advisory', '🟡助言'], ['needbuild', '🔧要合成'],
-  ['ungenerated', '○未生成'], ['unapproved', '絵が未確認'], ['edited', '✋手直し済み']];
+  ['ungenerated', '○未生成'], ['edited', '✋手直し済み']];
 
 export function rowsFor(lines, f) {
   if (f === 'all' || !f) return lines;
   if (f.startsWith('code:')) return lines.filter((l) => hasCode(l, f.slice(5)));
   if (f === 'edited') return lines.filter((l) => F(l).edited);
   if (f === 'needbuild') return lines.filter(needsBuild);
-  if (f === 'unapproved') return lines.filter((l) => { const a = l.aroll || {}; return a.panel && needsReview(a); });
   return lines.filter((l) => severity(l) === f);
 }
 

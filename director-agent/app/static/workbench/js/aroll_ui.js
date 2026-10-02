@@ -251,7 +251,8 @@ export function createArollUi(ctx) {
           ${R.hasPicture(a) ? approveCtl(l, a, off) : '<span class="hint">まだ絵がありません。絵を選ぶか生成すると「この絵でOK」を押せます</span>'}
           ${a.sync === 'stale' ? staleHtml(l, a) : ''}
           ${a.speaker_changed ? '<div class="note warn">話者を変えた行です。在庫から絵を選び直してください。</div>' : ''}
-          ${a.restale ? '<div class="note warn">🔧 要合成: 選び直した絵が、まだ合成（PSD）に反映されていません。「仕上がり」区画の「この行を合成」で組みます（確定済み・手直し無しの行は、選び直した直後に自動で合成されます）。</div>' : ''}</div></div></div>
+          ${a.restale ? '<div class="note warn">🔧 要合成: 選び直した絵が、まだ合成（PSD）に反映されていません。「✓ この絵でOK」は承認だけで、合成は走りません（確定済み・手直し無しの行は、選び直した直後に自動で合成されます）。</div>' : ''}
+          ${a.restale && ctx.resyncShortcut ? ctx.resyncShortcut(l) : ''}</div></div></div>
       ${prepBox}
       <div class="pair">
         <div class="box"><span class="flabel">声の感情（台本）</span><span>${esc(l.emotion || 'neutral')}</span></div>

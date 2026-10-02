@@ -200,6 +200,12 @@ export function createFinalUi(ctx) {
       ${issue ? `<div class="hint">${esc(issue)}${(f.issues || []).length > 1 ? ` ほか${f.issues.length - 1}` : ''}</div>` : ''}</div>`;
   }
 
+  /** 絵区画の「要合成」注意書きに置くショートカット。押すと仕上がり区画へ移り、合成の確認欄を開く（承認とは別の操作）。 */
+  function resyncShortcutHtml(l) {
+    const block = R.resyncBlock(l, { enabled: S.enabled, alive: meta().alive, busy: busy() || S.working });
+    return `<div class="inline"><button class="btn primary" data-a="f-goto-resync" ${block ? 'disabled' : ''} title="${esc(block || '仕上がり区画へ移り、この行の合成の確認を開きます')}">🔧 この行を合成</button>${block ? `<span class="hint warnt">${esc(block)}</span>` : ''}</div>`;
+  }
+
   // ── Photoshop で開く（host_worker の open_psd・2026-09-30） ──────────
   // ワーカーが開くのは psd_final/panel_{line_id}.psd だけ。古いワーカー（capabilities に無い）は再起動を案内する
   function openHtml(l, m) {
@@ -323,6 +329,7 @@ export function createFinalUi(ctx) {
       'f-resync': () => openConfirm('resync', selectedIds(lines(), S.sel), 'toolbar'),
       'f-export': () => openConfirm('export', R.exportTargets(lines()), 'toolbar'),
       'f-m-resync': () => openConfirm('resync', [S.modal.id], 'modal'),
+      'f-goto-resync': async () => { S.modal.section = 'final'; S.modal.pending = null; await enter(); openConfirm('resync', [S.modal.id], 'modal'); },
       'f-m-export': () => openConfirm('export', [S.modal.id], 'modal'),
       'f-cancel': () => { F.confirm = null; F.psPending = null; ctx.rerender(); redrawModal(); },
       'f-run': () => runConfirm(false),
@@ -346,5 +353,5 @@ export function createFinalUi(ctx) {
   }
   const toggle = (el) => { if (el.dataset.a === 'f-hostopen') F.hostOpen = el.open; };
 
-  return { F, enter, toolbarHtml, gridHtml, modalHtml, click, change, toggle, autoResync, stopTimer, busy };
+  return { F, enter, resyncShortcutHtml, toolbarHtml, gridHtml, modalHtml, click, change, toggle, autoResync, stopTimer, busy };
 }
