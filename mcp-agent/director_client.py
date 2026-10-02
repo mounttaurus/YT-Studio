@@ -12,10 +12,10 @@ class DirectorError(RuntimeError):
     """director もしくは中継先コンテナからのエラーを包む。"""
 
 
-async def get(path: str, params: dict | None = None) -> dict | list:
-    """director の読み取りエンドポイントを叩いてJSONを返す。"""
+async def get(path: str, params: dict | None = None, timeout: float | None = None) -> dict | list:
+    """director の読み取りエンドポイントを叩いてJSONを返す。timeout 省略は既定（読み取り用）。"""
     url = f"{DIRECTOR_URL}/{path.lstrip('/')}"
-    async with httpx.AsyncClient(timeout=HTTP_TIMEOUT_READ) as client:
+    async with httpx.AsyncClient(timeout=timeout or HTTP_TIMEOUT_READ) as client:
         try:
             res = await client.get(url, params=params)
         except httpx.RequestError as e:

@@ -412,7 +412,7 @@ async def start_confirmations(project_id: str, episode_number: int, baseline: bo
                             json={"baseline": baseline})
 
 
-async def audit_episode(project_id: str, episode_number: int) -> dict:
+async def audit_episode(project_id: str, episode_number: int, full: bool = False) -> dict:
     """1話の整合検査（READ・何も書かない）。台本→確定→音声→絵→仕上がりの**どこまで最新か**と、
     **次にやること**（ツール名・引数・費用の種類つき）を順に返す。
 
@@ -422,8 +422,11 @@ async def audit_episode(project_id: str, episode_number: int) -> dict:
     info=知っておく）・line_ids。next_actions[] は上から順に実行する想定で、cost は free/gpu（無料・ローカル）/
     paid（課金）/photoshop（Photoshop占有）/user（ユーザー作業）、confirm=true は**実行前にユーザーへ一文で確認**。
     headline は「台本 150行 ／ 確定 150/150 ／ 音声 150/150 ／ 絵 148/150 ／ 仕上がり 112/150」の1行要約。
+    既定は短い出力（issue の行IDは先頭8件＋more。実行に要る全IDは next_actions[].args にある）。全IDが要る時は full=True。
+    他コンテナが重い時は数十秒かかることがある（待つ）。
     """
-    return await dc.get(f"projects/{project_id}/episodes/{episode_number}/audit")
+    return await dc.get(f"projects/{project_id}/episodes/{episode_number}/audit",
+                        params={"full": "true"} if full else None, timeout=120)
 
 
 async def get_line_states(project_id: str, episode_number: int) -> dict:

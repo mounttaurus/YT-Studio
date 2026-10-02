@@ -290,6 +290,27 @@ def _actions(layers: dict, view_lines: list[dict]) -> list[dict]:
     return acts
 
 
+_HEAD_IDS = 8   # 既定（compact）で issue に残す行IDの数。全部は ?full=true
+
+
+def _compact(layers: dict, actions: list[dict]) -> None:
+    """出力を短くする（MCP の文脈を食うため）。issue の行IDは先頭数件＋`more`、アクションは args に全IDがあるので
+    `line_ids` の重複を落とす。アクションは先に全IDで作ってあるので、実行に必要な情報は減らない。"""
+    for ly in layers.values():
+        for i in ly.get("issues", []):
+            ids = i.get("line_ids")
+            if ids is not None and len(ids) > _HEAD_IDS:
+                i["line_ids"] = ids[:_HEAD_IDS]
+                i["more"] = len(ids) - _HEAD_IDS
+        if isinstance(ly.get("line_ids"), list) and len(ly["line_ids"]) > _HEAD_IDS:
+            ly["more"] = len(ly["line_ids"]) - _HEAD_IDS
+            ly["line_ids"] = ly["line_ids"][:_HEAD_IDS]
+    for a in actions:
+        if a.get("line_ids") is not None and any(isinstance(v, list) for v in a["args"].values()):
+            a["count"] = len(a["line_ids"])
+            del a["line_ids"]
+
+
 def _headline(view: dict, layers: dict) -> str:
     n = len(view["lines"])
     L = view["lines"]
@@ -308,7 +329,7 @@ def _headline(view: dict, layers: dict) -> str:
 
 # ── 本体 ───────────────────────────────────────────────────────────────────
 
-def compute(view: dict, raw: dict) -> dict:
+def compute(view: dict, raw: dict, full: bool = False) -> dict:
     """検査の本体（純粋関数）。`view`＝workbench_view.build_view の結果、`raw`＝生のファイル内容。
     raw: {script, tts_doc, aroll_panels(孤立コマを含む), plan_ids, qa_ids, missing_files}"""
     script = raw.get("script") or {}
@@ -336,11 +357,14 @@ def compute(view: dict, raw: dict) -> dict:
         for i in ly["issues"]:
             sev[i["severity"]] += 1
     in_sync = all(ly["state"] in ("ok", "na") for ly in layers.values())
+    actions = _actions(layers, lines)
+    if not full:
+        _compact(layers, actions)
     return {
         "project_id": view["project"]["id"], "episode": view["episode"]["number"],
         "generated_at": datetime.now(timezone.utc).isoformat(),
         "in_sync": in_sync, "headline": _headline(view, layers), "severity_counts": sev,
-        "layers": layers, "next_actions": _actions(layers, lines),
+        "layers": layers, "next_actions": actions,
     }
 
 
@@ -365,6 +389,6 @@ def _raw(project_id: str, episode: int) -> dict:
             "qa_ids": [p.get("line_id") for p in qa.get("panels", [])], "missing_files": missing}
 
 
-async def build_audit(project_id: str, episode: int) -> dict:
+async def build_audit(project_id: str, episode: int, full: bool = False) -> dict:
     view = await workbench_view.build_view(project_id, episode)
-    return compute(view, _raw(project_id, episode))
+    return compute(view, _raw(project_id, episode), full=full)

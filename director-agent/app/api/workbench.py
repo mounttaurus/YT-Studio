@@ -21,9 +21,9 @@ async def workbench(project_id: str, episode_number: int):
 
 
 @router.get("/projects/{project_id}/episodes/{episode_number}/audit")
-async def audit(project_id: str, episode_number: int):
+async def audit(project_id: str, episode_number: int, full: bool = False):
     """台本→確定→音声→絵→仕上がりの整合検査と、次にやること（ツール名つき）。何も書かない。"""
     try:
-        return await episode_audit.build_audit(project_id, episode_number)
+        return await episode_audit.build_audit(project_id, episode_number, full=full)
     except line_ops.OpError as e:
         raise HTTPException(status_code=e.status, detail=e.message)
