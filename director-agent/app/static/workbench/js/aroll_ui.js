@@ -177,7 +177,7 @@ export function createArollUi(ctx) {
       <div class="acol"><div class="ach">${cast}${R.statusChips(l).map(([c, x]) => chip(c, x)).join('')}</div>
       ${used ? `<div class="hint">${esc(used)}</div>` : ''}
       ${!a.matched && (a.characters || []).length && !a.cutout_slot_id ? '<div class="hint warnt" title="表情・ショット・アングルが揃うと在庫と照合できます">未照合（必ず課金生成）</div>' : ''}
-      ${a.sync === 'stale' && a.source_text ? `<div class="hint warnt" title="${esc(a.source_text)}">生成時: ${esc(a.source_text)}</div>` : ''}</div>
+      ${a.sync === 'stale' && a.source_text ? oldLineHtml(l, a) : ''}</div>
       ${cutBtn}</div>`;
   }
 
@@ -228,6 +228,10 @@ export function createArollUi(ctx) {
     return `<div class="note warn sdiff"><b>セリフが変わっています</b>（絵はそのままでも使えます）
       <div><span class="flabel">絵を作った時</span> ${esc(d.pre)}${mark(d.before, 'del')}${esc(d.suf)}</div>
       <div><span class="flabel">今</span> ${esc(d.pre)}${mark(d.after, 'ins')}${esc(d.suf)}</div></div>`;
+  }
+  /** 一覧の「生成時」の行（旧セリフ）。ラベルを水色・旧セリフを灰青色にして、本文（白）と見分ける。差分の色付けは一覧では行わない（モーダルで見る）。 */
+  function oldLineHtml(l, a) {
+    return `<div class="hint warnt oldline" title="${esc(a.source_text)}"><b class="oldlbl">生成時</b> ${esc(a.source_text)}</div>`;
   }
   function modalHtml(l) {
     const a = l.aroll || {};
