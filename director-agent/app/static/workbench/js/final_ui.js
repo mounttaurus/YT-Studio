@@ -239,6 +239,12 @@ export function createFinalUi(ctx) {
           ${f.build_state === 'unbuilt' ? '<div class="note">まだ合成していない行です。絵を決めたら「この行を再合成」で組みます。</div>' : ''}
           ${issues.map((it) => `<div class="issue ${it.severity}">${it.severity === 'blocking' ? '🔴' : '🟡'} ${esc(it.label)} <small class="mono">${esc(it.code)}</small></div>`).join('')}
           ${!issues.length && !stale && ['clean', 'advisory'].includes(s) && f.severity ? '<div class="note ok">✔ 機械検査では問題なし（光源の違和感・手の乱れなどは目視で確認してください）</div>' : ''}</div></div></div>
+      <div class="box"><span class="flabel">使っている素材（決める場所は絵区画。ここからも入れます）</span>
+        <div class="inline">${a.background_id ? `<img class="bgthumb" src="${esc(api.backgroundUrl(a.background_id))}" alt="">` : ''}
+          <span class="hint mono">背景: ${esc(a.background_id || '（未割当）')}</span>
+          <button class="btn" data-a="goto-bg" ${S.working ? 'disabled' : ''} title="絵区画の背景ピッカーを開きます。選び直すと「再合成が要る」になります">🔀 背景を変える</button></div>
+        <div class="inline"><span class="hint mono">キャラ絵: ${esc(a.cutout_slot_id || (a.has_image ? '生成した絵' : '（未割当）'))}</span>
+          <button class="btn" data-a="goto-pick" ${S.working ? 'disabled' : ''} title="絵区画の在庫ピッカーを開きます（無料）。選び直すと「再合成が要る」になります">🔀 キャラ絵を選び直す</button></div></div>
       <div class="inline">
         <button class="btn primary" data-a="f-m-resync" ${block ? 'disabled' : ''} title="${esc(block || 'Photoshop で1行分を最初から合成し直します')}">🔧 この行を再合成</button>
         ${block ? `<span class="hint warnt">${esc(block)}</span>` : ''}

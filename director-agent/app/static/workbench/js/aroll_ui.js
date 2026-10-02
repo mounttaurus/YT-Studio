@@ -438,6 +438,15 @@ export function createArollUi(ctx) {
     });
   }
 
+  /** 仕上がり区画の「背景を変える／キャラ絵を選び直す」: 絵区画へ移り、該当のピッカーを開いた状態にする。 */
+  async function gotoPicker(kind) {
+    const id = S.modal && S.modal.id; if (!id) return;
+    S.modal.section = 'aroll'; S.modal.pending = null;
+    A.bg = null; A.picker = null;                        // 開いたままだと「閉じる」側に倒れる
+    await Promise.all([enter(), loadChars()]);
+    return kind === 'bg' ? openBg(id) : openPicker(id);
+  }
+
   async function openBg(lineId) {
     if (A.bg && A.bg.lineId === lineId) { A.bg = null; redrawModal(); return; }
     A.bg = { lineId, items: [], cat: 'all', busy: true };
@@ -533,6 +542,8 @@ export function createArollUi(ctx) {
       'm-regen': () => genLine(S.modal.id, { fresh: false }),
       'm-fresh': () => genLine(S.modal.id, { fresh: true }),
       'm-picker': () => openPicker(S.modal.id),
+      'goto-pick': () => gotoPicker('pick'),     // 仕上がり区画から: 絵区画へ移ってピッカーを開く（決める場所は絵・確かめる場所は仕上がり）
+      'goto-bg': () => gotoPicker('bg'),
       pick: () => pick(S.modal.id, el.dataset.slot),
       'm-unset': () => working(busyMsg('外しています'), async () => { await api.aroll.setCutout(pid(), ep(), S.modal.id, null); await refresh(); }),
       'm-reject': async () => {
