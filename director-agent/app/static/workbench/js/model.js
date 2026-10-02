@@ -43,7 +43,7 @@ export function segments(l, enabled) {
   const a = l.aroll || {};
   const aroll = !a.has_manifest ? ['', '未着手']
     : !a.panel ? ['bad', 'コマが無い']
-    : a.picture ? (a.sync === 'stale' ? ['warn', '絵が古い'] : a.sync === 'unknown' ? ['info', '記録なし'] : ['ok', '絵あり'])
+    : a.picture ? (a.sync === 'stale' ? ['warn', '台本とズレ'] : a.sync === 'unknown' ? ['info', '記録なし'] : ['ok', '絵あり'])
     : ['', '絵なし'];
   const f = l.final || {};
   // 合成チェックの結果（サーバーが導出した build_state と検査の重さ）があればそれを使う。無ければプランの印だけ

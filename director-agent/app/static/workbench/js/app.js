@@ -126,7 +126,7 @@ function renderHealth() {
   $('health').innerHTML = `
     <div class="hcard"><div class="lbl">台本（すべての本籍）</div><div class="val">${script} ${proposal}</div></div>
     <div class="hcard"><div class="lbl">音声</div><div class="val">${pills(c.tts, [['ok', 'ok', '生成済み'], ['warn', 'warn', '要再生成'], ['info', 'info', '作り直し中'], ['bad', 'bad', '声未割当'], ['none', 'none', '未生成']])}${prog}</div></div>
-    <div class="hcard"><div class="lbl">絵</div><div class="val">${hasAroll ? pills(c.aroll, [['bad', 'bad', 'コマ無し'], ['warn', 'warn', '絵が古い'], ['info', 'info', '記録なし'], ['ok', 'ok', '絵あり'], ['none', 'none', '絵なし']]) : pill('none', 'Aロール未着手')}</div></div>
+    <div class="hcard"><div class="lbl">絵</div><div class="val">${hasAroll ? pills(c.aroll, [['bad', 'bad', 'コマ無し'], ['warn', 'warn', '台本とズレ'], ['info', 'info', '記録なし'], ['ok', 'ok', '絵あり'], ['none', 'none', '絵なし']]) : pill('none', 'Aロール未着手')}</div></div>
     <div class="hcard"><div class="lbl">仕上がり（合成）</div><div class="val">${pills(c.final, [['bad', 'bad', '要対応'], ['warn', 'warn', '助言・要組み直し'], ['ok', 'ok', '問題なし'], ['info', 'info', '合成済み'], ['none', 'none', '未合成']])}</div></div>`;
 }
 
@@ -209,7 +209,7 @@ function detailHtml(l) {
   const st = { done: '<span class="chip ok">✓ 生成済み</span>', stale: '<span class="chip warn">⚠ 要再生成</span>',
     queued: '<span class="chip">⏳ 作り直し中</span>', unassigned: '<span class="chip bad">声が未割当</span>' }[l.tts.state] || '<span class="chip none">未生成</span>';
   return `<div class="detail">${st}${l.tts.duration_sec ? `<span class="mono">${l.tts.duration_sec}s</span>` : ''}
-    ${l.tts.duration_sec ? `<button class="btn ghost" data-act="play" data-id="${esc(l.id)}" title="この行から再生">▶</button>` : ''}</div>`;
+    ${l.tts.duration_sec ? playBtn(l, false) : ''}</div>`;
 }
 
 const stripHtml = (seg) => `<div class="strip">${Object.keys(seg).map((k) => `<div class="seg ${seg[k][0]} ${S.tab === k ? 'cur' : ''}" title="${M.SEG_NAMES[k]}: ${esc(seg[k][1])}"><i></i><span>${M.SEG_NAMES[k]}</span></div>`).join('')}</div>`;
@@ -298,18 +298,11 @@ function drawModal() {
       <div class="field"><label for="m-text">本文</label><textarea id="m-text">${esc(draftText(l))}</textarea>
         <div class="inline"><button class="btn" data-op="text">本文を保存</button><span class="hint mono">${(l.text || '').length}字・推定${M.estSec(l.text)}秒</span>
           <span class="hint">Enter で保存 ／ Ctrl+Enter でカーソルの位置で分ける</span></div></div>
-      <div class="pair">
+      <div class="field">
         <div class="box"><span class="flabel">話者（まれな操作）</span><div class="inline"><select id="m-spk">
           ${l.speaker_id ? '' : '<option value="">（未選択）</option>'}${castOpts.map((c) => `<option value="${esc(c.id)}" ${c.id === l.speaker_id ? 'selected' : ''}>${esc(c.name)}</option>`).join('')}</select>
           <button class="btn" data-op="speaker">変更</button></div>
           ${M.groupOf(l, S.lines).length > 1 ? `<span class="hint">サブ行のグループ ${M.groupOf(l, S.lines).length} 行すべてが変わります</span>` : ''}</div>
-        <div class="box"><span class="flabel">声の感情（TTSの演技にだけ効く）</span><div class="inline"><select id="m-emo">
-          ${M.EMOTIONS.map((e) => `<option ${e === (l.emotion || 'neutral') ? 'selected' : ''}>${e}</option>`).join('')}</select>
-          <button class="btn" data-op="emotion">変更</button></div></div></div>
-      <div class="field"><span class="flabel">速度・間（TTSの読み上げ速度と、次の行までの間）</span><div class="inline">
-        <label class="hint" for="m-speed">速度</label><input id="m-speed" type="number" step="0.05" min="0.5" max="2" value="${esc(l.speed ?? 1)}" style="width:80px">
-        <label class="hint" for="m-pause">間（秒）</label><input id="m-pause" type="number" step="0.1" min="0" max="10" value="${esc(l.pause_after_sec ?? 0.4)}" style="width:80px">
-        <button class="btn" data-op="timing">保存</button><span class="hint">間だけ変えた行は、音声を作り直さずタイムラインを作り直すと反映</span></div></div>
       <div class="field"><span class="flabel">行の構造</span><div class="ops">
         ${opBtn('split', l, '✂ ここで分ける', '後半を新しいサブ行に')}${opBtn('merge', l, '⤓ 次の行と結合', '次の行の本文をつなぐ')}
         ${opBtn('split-apply', l, '✂ 自動で区切る', '句点・読点で最少分割')}
@@ -318,10 +311,17 @@ function drawModal() {
         ${opBtn('delete', l, '🗑 削除', '音声とコマは保管（元に戻せる）', 'danger')}</div></div>`,
     tts: () => `<div class="box"><div class="inline">${pill(seg.tts[0], seg.tts[1])}${l.tts.duration_sec ? `<span class="mono">${l.tts.duration_sec}s</span>` : ''}
         <span class="hint">声の感情: ${M.EMOJI[l.emotion] || ''} ${esc(l.emotion || 'neutral')}</span></div>
-        <div class="inline">${l.tts.duration_sec ? `<button class="btn" data-act="play" data-id="${esc(l.id)}">▶ 再生</button>` : ''}
+        <div class="inline">${l.tts.duration_sec ? playBtn(l, true) : ''}
         <button class="btn" data-act="regen" data-id="${esc(l.id)}" ${l.text && (l.tts.state === 'none' || l.tts.state === 'stale') ? '' : 'disabled'}>🎙 この行を生成</button>
         <button class="btn" data-act="retake" data-id="${esc(l.id)}" ${l.text && l.tts.state === 'done' ? '' : 'disabled'} title="最新の音声を、キャッシュを使わずもう一度作ります（TTSは生成ごとに読み方が変わることがあります）">🎲 もう一度作る（テイクやり直し）</button></div>
-        <span class="note">変更した行は「✓ 確定」を押すと、音声が自動で作り直されます（ローカルGPU・無料）。エンジンが止まっている時は「作り直し待ち」のまま残り、起動後に「未生成・要再生成を生成」で作れます。</span></div>`,
+        <span class="note">変更した行は「✓ 確定」を押すと、音声が自動で作り直されます（ローカルGPU・無料）。エンジンが止まっている時は「作り直し待ち」のまま残り、起動後に「未生成・要再生成を生成」で作れます。</span></div>
+      <div class="box"><span class="flabel">声の感情（TTSの演技にだけ効く）</span><div class="inline"><select id="m-emo">
+        ${M.EMOTIONS.map((e) => `<option ${e === (l.emotion || 'neutral') ? 'selected' : ''}>${e}</option>`).join('')}</select>
+        <button class="btn" data-op="emotion">変更</button></div></div>
+      <div class="box"><span class="flabel">速度・間（TTSの読み上げ速度と、次の行までの間）</span><div class="inline">
+        <label class="hint" for="m-speed">速度</label><input id="m-speed" type="number" step="0.05" min="0.5" max="2" value="${esc(l.speed ?? 1)}" style="width:80px">
+        <label class="hint" for="m-pause">間（秒）</label><input id="m-pause" type="number" step="0.1" min="0" max="10" value="${esc(l.pause_after_sec ?? 0.4)}" style="width:80px">
+        <button class="btn" data-op="timing">保存</button><span class="hint">間だけ変えた行は、音声を作り直さずタイムラインを作り直すと反映</span></div></div>`,
     aroll: () => AR.modalHtml(l),
     final: () => FI.modalHtml(l),
   };
@@ -336,6 +336,7 @@ function drawModal() {
       <button class="btn ghost" data-act="nav" data-d="1" ${i < S.lines.length - 1 ? '' : 'disabled'} title="次の行（→）">→</button>
       <button class="btn ok" data-act="confirm" data-id="${esc(l.id)}" ${rc ? `disabled title="${esc(rc)}"` : ''}>✓ この行を確定</button>
       <button class="btn ghost" data-act="close" aria-label="閉じる">✕</button></div>
+    ${M_.section === 'script' ? '' : ctxHtml(l)}
     <div class="mtabs" role="tablist">${MSEC.map(([k, n]) => `<button role="tab" data-sec="${k}" aria-selected="${M_.section === k}"><span class="dot ${seg[k][0]}"></span>${n}</button>`).join('')}</div>
     <div class="mbody">${conf}${secBody[M_.section]()}</div>
     <div class="mfoot"><span class="hint">← → で前後の行 ／ Esc で閉じる ／ Ctrl+Z で元に戻す</span></div>`;
@@ -358,6 +359,7 @@ function drawModal() {
       M_.draft = { id: l.id, text: ta.value };
     });
     ta.addEventListener('keydown', (e) => textKey(e, ta, l));
+    if (M_.focusText) { M_.focusText = false; ta.focus(); ta.setSelectionRange(ta.value.length, ta.value.length); }
   }
   if (M_.pending) {
     const c = modal.querySelector('#m-confirm'); if (c && c.scrollIntoView) c.scrollIntoView({ block: 'nearest' });
@@ -365,6 +367,29 @@ function drawModal() {
     const run = modal.querySelector('[data-act=runop]');
     if (run && !run.disabled && run.focus) run.focus();
   }
+}
+
+/** 行の文脈の帯（台本区画以外の全区画の上に出す）。セリフ全文を読み取りで見せ、「✏ 本文を直す」でその場で編集欄にする。
+ *  区画を移らずに「聞いて/見て直す」ための口。編集欄の #m-text は台本区画のものと同じ（保存・分割のキー操作は共通）。 */
+function ctxHtml(l) {
+  const M_ = S.modal, d = M_.draft;
+  const editing = M_.editId === l.id || (d && d.id === l.id && d.text !== l.text);
+  const emo = l.emotion || 'neutral';
+  const nb = (dir) => {
+    const n = S.lines[idx(l) + dir];
+    return n ? `<button class="ctxnb" data-act="nav" data-d="${dir}" title="${dir < 0 ? '前' : '次'}の行へ（${dir < 0 ? '←' : '→'}）"><span class="ctxnbl">${dir < 0 ? '前' : '次'}</span><span class="spk ${M.speakerClass(n, S.cast)}">${esc(speakerName(n))}</span> ${esc(n.text || '')}</button>` : '';
+  };
+  const open = store.get('wb-ctx') === '1';
+  return `<div class="ctx">
+    <div class="ctxhead"><span class="flabel">セリフ</span>
+      <span class="hint">${M.EMOJI[emo] || ''} ${esc(emo)}</span><span class="hint mono">${(l.text || '').length}字・推定${M.estSec(l.text)}秒</span><span class="spacer"></span>
+      ${editing ? '' : '<button class="btn ghost" data-act="textedit" title="この場で本文を直します（台本区画へ移らずに）">✏ 本文を直す</button>'}
+      <button class="btn ghost" data-act="ctxtoggle" title="前後の行のセリフを見る（絵の表情・背景の連続性を見る時に）">前後の行 ${open ? '▴' : '▾'}</button></div>
+    ${editing ? `<textarea id="m-text">${esc(draftText(l))}</textarea>
+      <div class="inline"><button class="btn" data-op="text">本文を保存</button><button class="btn ghost" data-act="textcancel">やめる</button>
+        <span class="hint">Enter で保存 ／ Ctrl+Enter でカーソルの位置で分ける</span></div>`
+    : `<div class="ctxtext">${l.text ? esc(l.text) : '<span class="hint">（本文が空です）</span>'}</div>`}
+    ${open ? `<div class="ctxnbs">${nb(-1)}${nb(1)}</div>` : ''}</div>`;
 }
 
 /** 本文欄に出す文字。描き直し（確認欄を開く・閉じる・区画の切り替え）で書きかけを失わない。 */
@@ -425,7 +450,7 @@ async function runOp(andConfirm = false) {
     const res = await api.lineOp(S.pid, S.ep, p.api.apiOp, p.api.body);
     const target = focus(res);           // 再読込の前に、モーダルを合わせる先を決める（削除で行が消えても落ちない）
     ids = M.confirmTargets(res.state);
-    M_.pending = null; M_.edited = false; M_.draft = null;
+    M_.pending = null; M_.edited = false; M_.draft = null; M_.editId = null;
     if (target) M_.id = target;
     await load();
     if (!res.changed) { toast('変更はありませんでした'); if (S.modal) drawModal(); return; }
@@ -541,6 +566,22 @@ const player = new Player({
 function markPlaying() {
   document.querySelectorAll('.row.playing').forEach((el) => el.classList.remove('playing'));
   if (player.id) { const el = $(`r-${player.id}`); if (el) el.classList.add('playing'); }
+  document.querySelectorAll('[data-pl]').forEach((el) => setPlayBtn(el));       // 行・モーダルの ▶ ⇄ ⏹（描き直さずに文字だけ替える）
+}
+
+/** 行の再生ボタン。その行を鳴らしている間は ⏹ 停止に替わる（押すと全体が止まる＝再生は後続の行へ続くため）。 */
+function playBtn(l, long) {
+  const el = document.createElement('button');
+  el.className = `btn${long ? '' : ' ghost'}`;
+  el.dataset.pl = l.id; el.dataset.id = l.id; if (long) el.dataset.long = '1';
+  setPlayBtn(el);
+  return el.outerHTML;
+}
+function setPlayBtn(el) {
+  const on = player.id === el.dataset.pl && player.status !== 'idle', long = !!el.dataset.long;
+  el.dataset.act = on ? 'pstop' : 'play';
+  el.textContent = on ? (long ? '⏹ 停止' : '⏹') : (long ? '▶ 再生' : '▶');
+  el.title = on ? '停止' : 'この行から再生';
 }
 
 function renderFloat() {
@@ -667,6 +708,9 @@ document.addEventListener('click', (e) => {
     close: closeModal,
     nav: () => { const l = byId(S.modal.id), n = S.lines[idx(l) + +b.dataset.d]; if (n) { S.modal.id = n.id; S.modal.pending = null; S.modal.edited = false; drawModal(); flash(n.id); } },
     cancelop: () => { S.modal.pending = null; drawModal(); },
+    textedit: () => { Object.assign(S.modal, { editId: S.modal.id, edited: true, focusText: true }); drawModal(); },   // edited＝ポーリングの再描画で入力中の欄を失わない
+    textcancel: () => { Object.assign(S.modal, { editId: null, draft: null, pending: null, edited: false }); drawModal(); },
+    ctxtoggle: () => { store.set('wb-ctx', store.get('wb-ctx') === '1' ? '0' : '1'); drawModal(); },
     runop: () => runOp(),
     runopconfirm: () => runOp(true),
     confirm: () => confirmLines([id]),

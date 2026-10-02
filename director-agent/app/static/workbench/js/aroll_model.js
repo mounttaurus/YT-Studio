@@ -13,7 +13,7 @@ export const needsPrep = (l) => !!l.aroll && l.aroll.has_manifest && (!l.aroll.p
 const PRED = {
   ungenerated: (l) => hasPanel(l) && l.aroll.status !== 'done' && !l.aroll.cutout_slot_id,
   // 生成済み・絵はあるが人がまだ「この絵でOK」を押していない
-  unapproved: (l) => hasPanel(l) && l.aroll.status === 'done' && l.aroll.has_image && !l.aroll.approved,
+  unapproved: (l) => hasPanel(l) && hasPicture(l.aroll) && !l.aroll.approved,
   restale: (l) => hasPanel(l) && !!l.aroll.restale,
   narration: (l) => hasPanel(l) && !(l.aroll.characters || []).length,
   // コマが無い行も「台本とズレ」で見つけられるようにする（台本にあって絵の側に無い）
@@ -91,16 +91,20 @@ export const COST_PER_IMAGE = 0.04;
 export const usd = (n) => (n * COST_PER_IMAGE).toFixed(2);
 
 // ── 表示の整形 ───────────────────────────────────────────────────
-export const SYNC_LABEL = { ok: '✔ 一致', stale: '⚠ 絵が古い', missing: '✘ 画像なし', orphan: '🗑 行が消えた', unknown: '? 記録なし' };
+export const SYNC_LABEL = { ok: '✔ 一致', stale: '⚠ 台本とズレ', missing: '✘ 画像なし', orphan: '🗑 行が消えた', unknown: '? 記録なし' };
 export const SYNC_CLASS = { ok: 'ok', stale: 'warn', missing: 'bad', orphan: '', unknown: 'info' };
+
+/** 絵がある行（自前の画像ができた、または在庫の絵を指している）。「この絵でOK」の対象になる。 */
+export const hasPicture = (a) => !!a && ((a.status === 'done' && !!a.has_image) || !!a.cutout_slot_id);
 
 /** 一覧の状態バッジ [クラス, 文言][]（生成・確定・同期・要組み直し・在庫・背景）。 */
 export function statusChips(l) {
   const a = l.aroll;
   if (!a || !a.has_manifest) return [];
   if (!a.panel) return [['bad', 'コマが無い']];
-  const out = [a.status === 'done' ? ['ok', '✔ 生成済'] : a.status === 'failed' ? ['bad', '✘ 失敗'] : ['', '未生成']];
-  if (a.status === 'done' && a.has_image) out.push(a.approved ? ['ok', '✓ OK済'] : ['warn', '未OK']);
+  // 在庫の絵を指している行は、自前の画像が無くても絵はある（「未生成」とは言わない。下の「✂️ 在庫」が出る）
+  const out = a.status === 'done' ? [['ok', '✔ 生成済']] : a.status === 'failed' ? [['bad', '✘ 失敗']] : a.cutout_slot_id ? [] : [['', '未生成']];
+  if (hasPicture(a)) out.push(a.approved ? ['ok', '✓ OK済'] : ['warn', '未OK']);
   if (a.sync && a.sync !== 'ok' && a.sync !== 'missing') out.push([SYNC_CLASS[a.sync] || '', SYNC_LABEL[a.sync] || a.sync]);
   if (a.restale) out.push(['purple', '♻️ 再合成が要る']);
   if (a.cutout_slot_id) out.push(['cyan', '✂️ 在庫']);
@@ -165,4 +169,14 @@ export const jobPercent = (job) => (job && job.total ? Math.round(((job.done + j
 export function arollPollDecision({ running, wasRunning }) {
   if (running) return 'continue';
   return wasRunning ? 'finished' : 'idle';
+}
+
+/** 2つのセリフの違い（共通の頭・尻を除いた真ん中）。変わった語句を強調するための単純な比較。 */
+export function diffParts(before, after) {
+  const a = before || '', b = after || '';
+  let i = 0;
+  while (i < a.length && i < b.length && a[i] === b[i]) i++;
+  let j = 0;
+  while (j < a.length - i && j < b.length - i && a[a.length - 1 - j] === b[b.length - 1 - j]) j++;
+  return { pre: a.slice(0, i), before: a.slice(i, a.length - j), after: b.slice(i, b.length - j), suf: a.slice(a.length - j) };
 }

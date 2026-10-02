@@ -95,6 +95,17 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-
 .mhead { padding: 12px 16px; border-bottom: 1px solid var(--line); display: flex; flex-wrap: wrap; gap: 8px 12px; align-items: center; }
 .mhead .who { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; min-width: 0; }
 .mhead .id { color: var(--faint); font-size: 11px; }
+/* 行の文脈の帯（台本区画以外で、セリフをいつも見える所に出す） */
+.ctx { padding: 9px 16px 10px; border-bottom: 1px solid var(--line); background: rgba(255,255,255,.025); display: flex; flex-direction: column; gap: 6px; }
+.ctxhead { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.ctxhead .btn { padding: 2px 8px; font-size: 11.5px; }
+.ctxtext { font-size: 14.5px; line-height: 1.55; max-height: 4.7em; overflow-y: auto; }
+.ctx textarea { min-height: 56px; }
+.ctxnbs { display: flex; flex-direction: column; gap: 1px; border-top: 1px dashed var(--line); padding-top: 5px; }
+.ctxnb { display: flex; gap: 6px; align-items: center; background: none; border: 0; padding: 2px 0; color: var(--muted); font-size: 12px; text-align: left;
+         white-space: nowrap; overflow: hidden; text-overflow: ellipsis; cursor: pointer; }
+.ctxnb:hover { color: var(--text); }
+.ctxnbl { font-size: 10px; color: var(--faint); flex-shrink: 0; }
 .mtabs { display: flex; gap: 2px; padding: 0 12px; border-bottom: 1px solid var(--line); overflow-x: auto; }
 .mtabs button { background: none; border: 0; border-bottom: 2px solid transparent; padding: 7px 12px; color: var(--muted); font-size: 12.5px; font-weight: 600; white-space: nowrap; }
 .mtabs button[aria-selected="true"] { color: var(--text); border-bottom-color: var(--accent); }
@@ -221,3 +232,8 @@ input[type=text] { background: #0b0d12; color: var(--text); border: 1px solid va
 .issue { font-size: 12px; padding: 5px 8px; background: var(--panel-3); border-left: 3px solid #f59e0b; border-radius: 5px; } .issue.blocking { border-left-color: #ef4444; }
 .cmd { margin: 2px 0; padding: 6px 8px; background: #0b0d12; border: 1px solid var(--line); border-radius: 6px; font-family: var(--mono); font-size: 11px; color: var(--muted); white-space: pre-wrap; word-break: break-all; cursor: copy; }
 .joblog { margin: 4px 0; padding: 6px 8px; background: #0b0d12; border: 1px solid var(--line); border-radius: 6px; font-family: var(--mono); font-size: 10.5px; color: var(--muted); max-height: 160px; overflow: auto; white-space: pre-wrap; }
+.sdiff { display: flex; flex-direction: column; gap: 3px; color: var(--text); }
+.sdiff b { color: var(--warn); font-weight: 600; }
+.sdiff .flabel { display: inline-block; min-width: 5.5em; }
+.sdiff del { background: rgba(239,68,68,.22); color: #fca5a5; text-decoration: line-through; border-radius: 3px; padding: 0 1px; }
+.sdiff ins { background: rgba(52,211,153,.22); color: #6ee7b7; text-decoration: none; border-radius: 3px; padding: 0 1px; }

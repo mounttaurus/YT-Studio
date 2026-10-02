@@ -294,11 +294,11 @@ class ArollDerivative(Derivative):
                 speaker_stale.append(lid)
         if kept_front:
             out.append(item("auto", f"前半 {names(kept_front)} の絵は今のまま"
-                                    "（分割は絵の内容を変えないので『絵が古い』印は付けない）"))
+                                    "（分割は絵の内容を変えないので『台本とズレ』印は付けない）"))
         if text_stale:
-            out.append(item("later", f"{names(text_stale)} は『絵が古い』印が付く（本文が変わった）→ 確認して確定"))
+            out.append(item("later", f"{names(text_stale)} は『台本とズレ』印が付く（本文が変わった）→ 確認して確定"))
         if speaker_stale:
-            out.append(item("later", f"{names(speaker_stale)} は絵が別人になる → 『絵が古い』印を付け、"
+            out.append(item("later", f"{names(speaker_stale)} は絵が別人になる → 『台本とズレ』印を付け、"
                                      "描くキャラを新しい話者に合わせる。在庫から選び直す"))
         emotion_only = [l for l, f in d["changed"].items() if f == ["emotion"]]
         if emotion_only and not (text_stale or speaker_stale):

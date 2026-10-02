@@ -101,7 +101,7 @@ export function createArollUi(ctx) {
     const genLabel = A.running ? '生成中…'
       : bill === null ? `🎬 残りを生成（${total}枚 ≈ $${R.usd(total)}）`
       : `🎬 残りを生成（${total}枚中 課金 ${bill}枚 ≈ $${R.usd(bill)}）`;
-    const okTargets = sel.filter((id) => { const a = byId(id).aroll; return a.status === 'done' && a.has_image; });
+    const okTargets = sel.filter((id) => R.hasPicture(byId(id).aroll));
     const newLines = lines().filter(R.needsPrep);
     const job = A.job || {};
     const pct = R.jobPercent(job);
@@ -213,6 +213,22 @@ export function createArollUi(ctx) {
       <div class="pgrid bg">${list.map((b) => `<button class="pitemx ${b.bg_id === l.aroll.background_id ? 'cur' : ''}" data-a="bgpick" data-bg="${esc(b.bg_id)}"><img src="${esc(bgUrl(b.bg_id))}" loading="lazy" alt=""><small>${esc(b.bg_id)}</small></button>`).join('')}</div></div>`;
   }
 
+  /** 「この絵でOK」。承認済みでも、セリフが変わって「台本とズレ」の行には出す（承認は絵の記録＝セリフを直しても外れない。押すと古い印も解消する）。 */
+  function approveCtl(l, a, off) {
+    const stale = a.sync === 'stale';
+    if (a.approved && !stale) return '<span class="pill ok">✓ この絵でOK（確定済み）</span>';
+    return `<button class="btn ok" data-a="m-approve" ${off ? 'disabled' : ''} title="${stale ? '絵はこのまま使う、と確定します（無料・画像は変わりません）。「台本とズレ」の印も解消します' : 'この行の絵はこれでいい、と確定します（無料）'}">${stale ? '✓ この絵のまま使う（セリフの変更を受け入れる）' : '✓ この絵でOK'}</button>`
+      + (a.approved && stale ? '<span class="hint">承認済みの絵ですが、セリフが変わっています</span>' : '');
+  }
+  /** セリフが変わった行: 生成時と今を並べ、変わった語句を強調する（絵を変えるか、このまま使うかの判断材料）。 */
+  function staleHtml(l, a) {
+    if (!a.source_text) return '<div class="note warn">セリフが変わっています。</div>';
+    const d = R.diffParts(a.source_text, l.text);
+    const mark = (t, tag) => (t ? `<${tag}>${esc(t)}</${tag}>` : '');
+    return `<div class="note warn sdiff"><b>セリフが変わっています</b>（絵はそのままでも使えます）
+      <div><span class="flabel">絵を作った時</span> ${esc(d.pre)}${mark(d.before, 'del')}${esc(d.suf)}</div>
+      <div><span class="flabel">今</span> ${esc(d.pre)}${mark(d.after, 'ins')}${esc(d.suf)}</div></div>`;
+  }
   function modalHtml(l) {
     const a = l.aroll || {};
     if (!a.has_manifest) return `<div class="box"><span class="note">この話数のAロールはまだ始まっていません。絵タブの「プロンプトを作る」から始めます。</span></div>`;
@@ -228,9 +244,8 @@ export function createArollUi(ctx) {
     return `
       <div class="box"><div class="apic">${t ? `<img class="bigthumb" src="${esc(t)}" alt="">` : '<div class="bigthumb none">まだ絵がありません</div>'}
         <div class="acol"><div class="ach">${R.statusChips(l).map(([c, x]) => chip(c, x)).join('')}</div>
-          ${a.status === 'done' && a.has_image ? (a.approved ? '<span class="pill ok">✓ この絵でOK（確定済み）</span>'
-            : `<button class="btn ok" data-a="m-approve" ${off ? 'disabled' : ''} title="この行の絵はこれでいい、と確定します（無料）">✓ この絵でOK</button>`) : '<span class="hint">絵ができたら「この絵でOK」を押せます</span>'}
-          ${a.sync === 'stale' && a.source_text ? `<div class="note warn">セリフが変わっています。生成時: ${esc(a.source_text)}</div>` : ''}
+          ${R.hasPicture(a) ? approveCtl(l, a, off) : '<span class="hint">まだ絵がありません。絵を選ぶか生成すると「この絵でOK」を押せます</span>'}
+          ${a.sync === 'stale' ? staleHtml(l, a) : ''}
           ${a.speaker_changed ? '<div class="note warn">話者を変えた行です。在庫から絵を選び直してください。</div>' : ''}
           ${a.restale ? '<div class="note warn">♻️ 選び直した絵がまだ合成（PSD）に反映されていません。再合成が要ります（「仕上がり」区画の「この行を再合成」から。確定済み・手直し無しの行は選び直した直後に自動で再合成されます）。</div>' : ''}</div></div></div>
       ${prepBox}
@@ -502,7 +517,7 @@ export function createArollUi(ctx) {
     const act = {
       filter: () => { S.afilter = el.dataset.f; ctx.rerender(); },
       fill, gen, regen, stop: async () => { try { await api.aroll.stop(pid(), ep()); toast('中断を頼みました（今の1枚が終わったら止まります）'); } catch (e) { fail(e); } },
-      approve: () => approve(selected().filter((x) => { const g = byId(x).aroll; return g.status === 'done' && g.has_image; })),
+      approve: () => approve(selected().filter((x) => R.hasPicture(byId(x).aroll))),
       'bg-sel': () => assignBg(selected(), false),
       'bg-missing': () => assignBg(null, true),
       prep: () => prep(lines().filter(R.needsPrep)),

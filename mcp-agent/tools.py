@@ -304,7 +304,7 @@ async def get_script(project_id: str, episode_number: int = 1, draft: bool = Tru
 # 台本の行を変える操作は**すべて director の窓口 1 つを通る**（I1）。UI（ワークベンチ）も MCP も同じ窓口を呼ぶので、
 # どちらから直しても音声・コマ（Aロール）・確定の状態が同じように追随する。呼び出し側が後処理を書く必要は無い。
 #   - 操作の前に台本のスナップショットを履歴へ残す（`undo_line_op` で戻せる）
-#   - 台本の変更は確定点。後処理（音声の孤立扱い・コマの追加・絵が古い印）が失敗しても台本は戻らず、warnings に載る
+#   - 台本の変更は確定点。後処理（音声の孤立扱い・コマの追加・台本とズレ印）が失敗しても台本は戻らず、warnings に載る
 #   - 後処理はすべて無料（画像は生成しない）。外した音声・コマは消さず保管する（Undo で戻る）
 # 行は `line_id`（推奨・不変）か `order`（行番号・get_script で確認）で指す。`dry_run=True` は何も変えずに
 # 「この操作で起きること」（台本・音声・絵・仕上がりの4レーン）だけを返す。
@@ -1424,7 +1424,7 @@ async def aroll_export(project_id: str, episode_number: int) -> dict:
     "cutout"/"build_panel"/"qa_check"/"export_png") を使うこと。
 
     正本(a_roll/*.png)はリネームしない。export/フォルダは毎回全消去して作り直すため、
-    台本を編集した後はもう一度呼ぶだけで良い。stale(絵が古い)行と未生成行はコピーされず
+    台本を編集した後はもう一度呼ぶだけで良い。stale(台本とズレ)行と未生成行はコピーされず
     export/_README.txtに欠番として列挙される。課金なし・破壊的操作でもない（export/以外は触らない）。
     """
     return await dc.request(

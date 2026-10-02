@@ -44,7 +44,7 @@ export function counts(lines) {
     c[severity(l)] = (c[severity(l)] || 0) + 1;
     if (F(l).edited) c.edited++;
     const a = l.aroll || {};
-    if (a.panel && a.status === 'done' && a.has_image && !a.approved) c.unapproved++;
+    if (a.panel && ((a.status === 'done' && a.has_image) || a.cutout_slot_id) && !a.approved) c.unapproved++;
   }
   return c;
 }
@@ -57,7 +57,7 @@ export function rowsFor(lines, f) {
   if (f === 'all' || !f) return lines;
   if (f.startsWith('code:')) return lines.filter((l) => hasCode(l, f.slice(5)));
   if (f === 'edited') return lines.filter((l) => F(l).edited);
-  if (f === 'unapproved') return lines.filter((l) => { const a = l.aroll || {}; return a.panel && a.status === 'done' && a.has_image && !a.approved; });
+  if (f === 'unapproved') return lines.filter((l) => { const a = l.aroll || {}; return a.panel && ((a.status === 'done' && a.has_image) || a.cutout_slot_id) && !a.approved; });
   return lines.filter((l) => severity(l) === f);
 }
 

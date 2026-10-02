@@ -988,6 +988,16 @@ def clear_image_approval(project_id: str, episode: int, panel: dict,
         panel.get("characters") or [], project_id, episode, panel.get("line_id") or "")
 
 
+def _stock_picture_bytes(panel: dict) -> bytes | None:
+    """コマが指す在庫の切り抜きの中身（実在すれば）。自前の画像ファイルが無い行の「絵の実体」。"""
+    sid = panel.get("cutout_slot_id")
+    cid = panel.get("cutout_char_id") or next((c for c in (panel.get("characters") or []) if c), None)
+    if not sid or not cid:
+        return None
+    f = panel_library_manager.library_dir(cid) / "cutouts" / f"{sid}.png"
+    return f.read_bytes() if f.is_file() else None
+
+
 def approve_images(project_id: str, episode: int, line_ids: list[str] | None = None,
                    *, register: bool = True) -> dict:
     """行の絵を**確定**する（``image_approved_at`` を立てる）。「この行の絵はこれでいい」の答え。
@@ -1040,10 +1050,15 @@ def approve_images(project_id: str, episode: int, line_ids: list[str] | None = N
         if wanted is not None and lid not in wanted:
             continue
         img = p.get("image")
-        if p.get("status") != "done" or not img or not (out_dir / img).exists():
-            skipped.append({"line_id": lid, "reason": "画像が無い"})
-            continue
-        data = (out_dir / img).read_bytes()
+        if p.get("status") == "done" and img and (out_dir / img).exists():
+            data = (out_dir / img).read_bytes()
+        else:
+            # 在庫の絵を指しているだけの行（自前の画像ファイルは無い・status は pending のまま）。
+            # 絵は在庫の切り抜きで実在するので、人が見て「これでいい」と確定できる（本番の MK 回は 153 コマ中 146 がこの形だった）
+            data = _stock_picture_bytes(p)
+            if data is None:
+                skipped.append({"line_id": lid, "reason": "画像が無い"})
+                continue
         p["image_approved_at"] = _now()
         p["image_approved_hash"] = hashlib.sha256(data).hexdigest()[:16]
         line = lines_by_id.get(lid)
@@ -1217,7 +1232,7 @@ def export_for_manual_work(project_id: str, episode: int) -> dict:
             text_rows.append(f"{order}\t{dst_name}\t{speaker}\t{l['text']}")
         elif state == "stale":
             stale.append({"order": order, "line_id": lid})
-            text_rows.append(f"{order}\t★絵が古い(未書き出し・line_id={lid})\t{speaker}\t{l['text']}")
+            text_rows.append(f"{order}\t★台本とズレ(未書き出し・line_id={lid})\t{speaker}\t{l['text']}")
         else:
             missing.append({"order": order, "line_id": lid})
             text_rows.append(f"{order}\t★未生成(line_id={lid})\t{speaker}\t{l['text']}")
@@ -1236,7 +1251,7 @@ def export_for_manual_work(project_id: str, episode: int) -> dict:
         f"書き出し済み: {len(exported)}枚",
         f"欠番（画像未生成・番号を飛ばしています）: {len(missing)}行",
         (", ".join(str(m['order']) for m in missing) if missing else "なし"),
-        f"絵が古い（台本が変わったが未再生成・書き出していません）: {len(stale)}行",
+        f"台本とズレ（台本が変わったが未再生成・書き出していません）: {len(stale)}行",
         (", ".join(str(s['order']) for s in stale) if stale else "なし"),
     ]
     (export_dir / "_README.txt").write_text("\n".join(readme) + "\n", encoding="utf-8-sig")
