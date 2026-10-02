@@ -1,6 +1,7 @@
 // 仕上がりタブ（合成チェックと再合成）の純粋なロジック（DOMを触らない・Nodeで単体テストできる）。
 // Docs/LINE_WORKBENCH_PLAN.md §5-4-1（W4b-2）・§6-2。状態は director の GET .../workbench の `lines[].final` と `psassist`。
 
+import { needsReview } from './aroll_model.js';
 export const SEV_ORDER = ['blocking', 'advisory', 'restale', 'unbuilt', 'ungenerated', 'clean'];
 export const SEV_LABEL = { blocking: '要対応', advisory: '助言', clean: '問題なし', unbuilt: '未合成', ungenerated: '未生成', restale: '要組み直し' };
 export const SEV_MARK = { blocking: '🔴', advisory: '🟡', clean: '✓', unbuilt: '🔧', ungenerated: '○', restale: '♻️' };
@@ -44,20 +45,20 @@ export function counts(lines) {
     c[severity(l)] = (c[severity(l)] || 0) + 1;
     if (F(l).edited) c.edited++;
     const a = l.aroll || {};
-    if (a.panel && ((a.status === 'done' && a.has_image) || a.cutout_slot_id) && !a.approved) c.unapproved++;
+    if (a.panel && needsReview(a)) c.unapproved++;
   }
   return c;
 }
 
 /** 絞り込み。code:XXX で指摘コード別。 */
 export const FILTERS = [['all', 'すべて'], ['blocking', '🔴要対応'], ['advisory', '🟡助言'], ['restale', '♻️要組み直し'], ['unbuilt', '🔧未合成'],
-  ['ungenerated', '○未生成'], ['unapproved', '絵が未OK'], ['edited', '✋手直し済み']];
+  ['ungenerated', '○未生成'], ['unapproved', '絵が未確認'], ['edited', '✋手直し済み']];
 
 export function rowsFor(lines, f) {
   if (f === 'all' || !f) return lines;
   if (f.startsWith('code:')) return lines.filter((l) => hasCode(l, f.slice(5)));
   if (f === 'edited') return lines.filter((l) => F(l).edited);
-  if (f === 'unapproved') return lines.filter((l) => { const a = l.aroll || {}; return a.panel && ((a.status === 'done' && a.has_image) || a.cutout_slot_id) && !a.approved; });
+  if (f === 'unapproved') return lines.filter((l) => { const a = l.aroll || {}; return a.panel && needsReview(a); });
   return lines.filter((l) => severity(l) === f);
 }
 

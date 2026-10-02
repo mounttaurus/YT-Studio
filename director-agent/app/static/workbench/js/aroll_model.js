@@ -2,7 +2,7 @@
 // Docs/LINE_WORKBENCH_PLAN.md §5-4-1（W4b-1）。状態は director の GET .../workbench の `lines[].aroll` が持つ。
 // ここは「絞り込み・選択・課金の枚数・行モーダルの選択肢」を返す整形だけ。
 
-export const AROLL_FILTERS = [['all', 'すべて'], ['ungenerated', '未生成'], ['unapproved', '未OK'],
+export const AROLL_FILTERS = [['all', 'すべて'], ['ungenerated', '未生成'], ['unapproved', '未確認'],
   ['restale', '♻️要組み直し'], ['narration', 'ナレーション'], ['drift', '台本とズレ']];
 
 export const hasPanel = (l) => !!(l.aroll && l.aroll.panel);
@@ -13,7 +13,7 @@ export const needsPrep = (l) => !!l.aroll && l.aroll.has_manifest && (!l.aroll.p
 const PRED = {
   ungenerated: (l) => hasPanel(l) && l.aroll.status !== 'done' && !l.aroll.cutout_slot_id,
   // 生成済み・絵はあるが人がまだ「この絵でOK」を押していない
-  unapproved: (l) => hasPanel(l) && hasPicture(l.aroll) && !l.aroll.approved,
+  unapproved: (l) => hasPanel(l) && needsReview(l.aroll),
   restale: (l) => hasPanel(l) && !!l.aroll.restale,
   narration: (l) => hasPanel(l) && !(l.aroll.characters || []).length,
   // コマが無い行も「台本とズレ」で見つけられるようにする（台本にあって絵の側に無い）
@@ -97,6 +97,11 @@ export const SYNC_CLASS = { ok: 'ok', stale: 'warn', missing: 'bad', orphan: '',
 /** 絵がある行（自前の画像ができた、または在庫の絵を指している）。「この絵でOK」の対象になる。 */
 export const hasPicture = (a) => !!a && ((a.status === 'done' && !!a.has_image) || !!a.cutout_slot_id);
 
+/** 人が見て確認するべき絵（未確認）。生成した絵（自前の画像）と、台本とズレた行。
+ *  在庫の絵はシステムがルールで選んだ時点で採用済みとみなし、印を出さない（150行ほぼ全部に付くと意味が無いため）。
+ *  承認そのもの（「この絵でOK」）は在庫の絵にも押せる。何かの条件になってはいない（書き出し・組版・確定は見ない）。 */
+export const needsReview = (a) => hasPicture(a) && !a.approved && ((a.status === 'done' && !!a.has_image) || a.sync === 'stale');
+
 /** 一覧の状態バッジ [クラス, 文言][]（生成・確定・同期・要組み直し・在庫・背景）。 */
 export function statusChips(l) {
   const a = l.aroll;
@@ -104,7 +109,7 @@ export function statusChips(l) {
   if (!a.panel) return [['bad', 'コマが無い']];
   // 在庫の絵を指している行は、自前の画像が無くても絵はある（「未生成」とは言わない。下の「✂️ 在庫」が出る）
   const out = a.status === 'done' ? [['ok', '✔ 生成済']] : a.status === 'failed' ? [['bad', '✘ 失敗']] : a.cutout_slot_id ? [] : [['', '未生成']];
-  if (hasPicture(a)) out.push(a.approved ? ['ok', '✓ OK済'] : ['warn', '未OK']);
+  if (hasPicture(a)) { if (a.approved) out.push(['ok', '✓ OK済']); else if (needsReview(a)) out.push(['warn', '未確認']); }
   if (a.sync && a.sync !== 'ok' && a.sync !== 'missing') out.push([SYNC_CLASS[a.sync] || '', SYNC_LABEL[a.sync] || a.sync]);
   if (a.restale) out.push(['purple', '♻️ 再合成が要る']);
   if (a.cutout_slot_id) out.push(['cyan', '✂️ 在庫']);

@@ -304,7 +304,7 @@ export function createArollUi(ctx) {
       await working(busyMsg('在庫で埋めています'), async () => {
         const d = await api.aroll.fillMissing(pid(), ep(), missing);
         const filled = (d.filled || []).length, need = d.need_generation || [];
-        say(`${filled}行を無料で埋めました（未OKのまま。絵を見て「この絵でOK」を押してください）${need.length ? `／在庫でも埋まらない ${need.length}行は新規生成が必要です` : ''}`);
+        say(`${filled}行を無料で埋めました（承認はしていません。絵を見て「この絵でOK」を押せます）${need.length ? `／在庫でも埋まらない ${need.length}行は新規生成が必要です` : ''}`);
         await refresh();
         if (need.length) await offerGenerate(need);
       });
