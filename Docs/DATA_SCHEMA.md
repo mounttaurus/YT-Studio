@@ -956,6 +956,7 @@ NanoBanana（参照画像同梱）でパネルを生成する。吹き出しは�
       "image_source": "generated | copied | library",
       "library_slot_id": null,
       "background_id": null,
+      "bubble_key": null,
       "provider": "nanobanana",
       "error": null,
       "generated_at": "...",
@@ -1085,6 +1086,10 @@ $概算を確認できる。`GET .../aroll/status` の `job.total` は実生成�
 `times_used`最小優先ローテーション＋直近使用回避（既定6行）を適用し、キャラ画像と同じ
 考え方で反復感を機械側が抑える。手動での上書きは`PUT .../aroll/lines/{line_id}`に
 `background_id`を渡す（空文字で未割当に戻せる）。
+
+### 吹き出しの形の行ごと上書き（2026-10-03・`Docs/BUBBLE_CHOICE_PLAN.md`）
+
+各パネルに任意の `bubble_key`（無ければ自動）。値は `rect_a`/`rect_b`/`round_a`/`cloud_a`/`cloud_b`/`spike_a`/`spike_b` の横7種だけ（縦の `rect_v`/`round_v` は縦書き不採用のため選べない・未知のキーは 400）。書く口は `PUT .../aroll/lines/{line_id}` の `bubble_key`（空文字か null で自動へ戻す・省略は変更しない）。組版プラン（`psassist/panel_plan.json`）は合成のたびに `aroll.json` から作り直されるので、上書きはここに持つ。`plan_builder` が最優先で読み、プランの `bubble.key_source` が `"user"` になる。自動の割り当て（話者の既定＋「！」でトゲ・「？」で雲）は `bubble_key` が無い行だけに働く。サブ行のグループでも揃えない（行ごと）。
 
 ⚠️ ここでの実体（`a_roll/panel_{line_id}.png`）はキャラ単体のまま合成しない。背景は別ファイル
 （`shared/backgrounds/images/{bg_id}.png`）として存在する。

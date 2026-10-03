@@ -240,7 +240,7 @@ export function createFinalUi(ctx) {
         <div class="viewwrap">${view ? `<img class="bigthumb" src="${esc(url(view))}" alt="">` : '<div class="bigthumb none">まだ合成していません</div>'}
           ${regions.map((it) => { const b = R.regionBox(f, it); return `<i class="rbox ${it.severity}" style="left:${b.left}%;top:${b.top}%;width:${b.width}%;height:${b.height}%"></i>`; }).join('')}</div>
         <div class="acol"><div class="ach">${R.chips(l).map(([c, x, t]) => chip(c, x, t)).join('')}${f.built_at ? `<span class="hint">組んだ日時 ${esc(new Date(f.built_at).toLocaleString('ja-JP', { month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit' }))}</span>` : ''}</div>
-          ${stale ? '<div class="note warn">🔧 絵を選び直した（または台本の文面が変わった）後に合成していません。上のプレビューは差し替え後の素材で、合成結果ではありません。「この行を合成」で反映します。</div>' : ''}
+          ${stale ? '<div class="note warn">🔧 絵を選び直した（または台本の文面・吹き出しの形が変わった）後に合成していません。上のプレビューは差し替え後の素材で、合成結果ではありません。「この行を合成」で反映します。</div>' : ''}
           ${f.edited ? '<div class="note warn">✋ Photoshop で手直しした合成です。合成すると手直しが消えます（確認して、元のPSDを退避してから上書きします）。</div>' : ''}
           ${f.build_state === 'unbuilt' ? '<div class="note">まだ合成していない行です。絵を決めたら「この行を合成」で組みます。</div>' : ''}
           ${issues.map((it) => `<div class="issue ${it.severity}">${it.severity === 'blocking' ? '🔴' : '🟡'} ${esc(it.label)} <small class="mono">${esc(it.code)}</small></div>`).join('')}
@@ -250,7 +250,9 @@ export function createFinalUi(ctx) {
           <span class="hint mono">背景: ${esc(a.background_id || '（未割当）')}</span>
           <button class="btn" data-a="goto-bg" ${S.working ? 'disabled' : ''} title="絵区画の背景ピッカーを開きます。選び直すと「要合成」になります">🔀 背景を変える</button></div>
         <div class="inline"><span class="hint mono">キャラ絵: ${esc(a.cutout_slot_id || (a.has_image ? '生成した絵' : '（未割当）'))}</span>
-          <button class="btn" data-a="goto-pick" ${S.working ? 'disabled' : ''} title="絵区画の在庫ピッカーを開きます（無料）。選び直すと「要合成」になります">🔀 キャラ絵を選び直す</button></div></div>
+          <button class="btn" data-a="goto-pick" ${S.working ? 'disabled' : ''} title="絵区画の在庫ピッカーを開きます（無料）。選び直すと「要合成」になります">🔀 キャラ絵を選び直す</button></div>
+        <div class="inline"><span class="hint mono">吹き出し: ${esc(R.bubbleLabelOf(l))}</span>
+          <button class="btn" data-a="goto-bubble" ${S.working ? 'disabled' : ''} title="絵区画の吹き出しの枠を開きます（無料）。形を選ぶと「要合成」になります">🔀 吹き出しを変える</button></div></div>
       <div class="inline">
         <button class="btn primary" data-a="f-m-resync" ${block ? 'disabled' : ''} title="${esc(block || 'Photoshop で1行分を最初から合成し直します')}">🔧 この行を合成</button>
         ${block ? `<span class="hint warnt">${esc(block)}</span>` : ''}

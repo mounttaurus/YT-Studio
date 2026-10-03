@@ -114,11 +114,26 @@ def _lib_versions(chars_dir: Path, cid: str, cache: dict) -> dict:
     return cache[cid]
 
 
+def _bubble_stale(p: dict | None, plan_p: dict | None) -> bool:
+    """吹き出しの形が、プラン作成時点と今で食い違うか（Docs/BUBBLE_CHOICE_PLAN.md B2）。
+
+    望む形は行（aroll.json）の `bubble_key`。プランの `bubble.key` がそれと違う、または上書きを外したのに
+    プランが「ユーザー指定」のまま（自動へ戻した直後）なら要組み直し。上書きが無くプランも自動なら対象外。
+    """
+    if p is None or plan_p is None:
+        return False
+    plan_b = plan_p.get("bubble") or {}
+    want = p.get("bubble_key")
+    if want:
+        return plan_b.get("key") != want
+    return plan_b.get("key_source") == "user"
+
+
 def _build_state(p: dict | None, plan_p: dict | None, qa_p: dict | None, versions: dict) -> str:
     """行の合成の状態（director の旧 `arollBuildState` の移し替え・判定をサーバーへ）。
 
     ungenerated＝絵がまだ無い／unplanned＝プラン未作成／unbuilt＝PSD 未合成／
-    restale＝PSD はあるが、プラン作成時点の切り抜き・その版・吹き出しの文字が今と違う（要組み直し）／built＝最新。
+    restale＝PSD はあるが、プラン作成時点の切り抜き・その版・吹き出しの文字・吹き出しの形が今と違う（要組み直し）／built＝最新。
     ⚠️ 旧 `qa.checked_at` と時刻を比べる方式は、1行だけ再検査すると他行の判定が狂った。ここはプランとの比較だけ。
     """
     if p is None:
@@ -139,6 +154,8 @@ def _build_state(p: dict | None, plan_p: dict | None, qa_p: dict | None, version
         if pv and cv and pv != cv:
             return "restale"
     if qa_p.get("text_stale"):          # 絵は同じでも、台本の文面が変わって吹き出しの文字が古い
+        return "restale"
+    if _bubble_stale(p, plan_p):        # 吹き出しの形を選び直した（上書きを足した・変えた・外した）
         return "restale"
     return "built"
 
@@ -170,6 +187,9 @@ def _aroll_view(a: dict, lid: str, ctx: dict) -> dict:
             "slot": p.get("slot") or {}, "slot_source": p.get("slot_source"), "matched": bool(p.get("slot_key")),
             "used_slot": p.get("used_slot") or None,
             "approved": bool(p.get("image_approved_at")), "source_text": p.get("source_text") or "",
+            # 吹き出しの形の上書き（無ければ自動）と、プランが今の上書きに追いついていない印
+            "bubble_key": p.get("bubble_key") or None,
+            "bubble_stale": _bubble_stale(p, ctx["plan"].get(lid)),
             "cut": a["cuts"].get(lid),
             # 選び直した絵・台本の文面がまだ合成に反映されていない印（判定は `_build_state`）
             "restale": ctx["build_state"](lid) == "restale"}
@@ -200,7 +220,8 @@ def _psassist_meta(qa_doc: dict, plan: dict, worker: dict | None) -> dict:
             "summary": qa_doc.get("summary") or {}}
 
 
-def _final_view(plan_p: dict | None, qa_p: dict | None, state: str, psd: dict, *, pid: str, ep: int) -> dict:
+def _final_view(plan_p: dict | None, qa_p: dict | None, state: str, psd: dict, *, pid: str, ep: int,
+                bubble_stale: bool = False) -> dict:
     """1行の仕上がり。プランの印（`status`・`warnings`・`bubble`）に、合成チェックの結果（重さ・指摘・画像）と
     ✋手直し済みを足す。検査していない行は QA の項目を持たない。"""
     out = {"status": (plan_p or {}).get("status"), "warnings": (plan_p or {}).get("warnings") or [],
@@ -213,6 +234,9 @@ def _final_view(plan_p: dict | None, qa_p: dict | None, state: str, psd: dict, *
             "thumb": base + qa_p["thumb"] if qa_p.get("thumb") else None,
             "view": base + qa_p["view"] if qa_p.get("view") else None,
             "export": base + qa_p["export"] if qa_p.get("export") else None})
+    # プランが選んだ形（key）とその根拠（key_source: speaker_default / question / exclaim / user）。UIの「今の形」用
+    pb = (plan_p or {}).get("bubble") or {}
+    out.update({"bubble_key": pb.get("key"), "bubble_source": pb.get("key_source"), "bubble_stale": bubble_stale})
     out.update({"build_state": state, "has_psd": psd["has_psd"], "edited": psd["edited"], "built_at": psd["built_at"]})
     return out
 
@@ -272,7 +296,8 @@ async def build_view(project_id: str, episode: int) -> dict:
             "confirm": states.get(lid) if conf_doc is not None else None,
             "tts": _tts_view(tts, entries, lid),
             "aroll": _aroll_view(aroll, lid, actx),
-            "final": _final_view(pl, qa.get(lid), build_state(lid), psd_records.psd_state(psa_dir, records, lid), pid=project_id, ep=episode),
+            "final": _final_view(pl, qa.get(lid), build_state(lid), psd_records.psd_state(psa_dir, records, lid), pid=project_id, ep=episode,
+                                bubble_stale=_bubble_stale(aroll["panels"].get(lid), pl)),
         })
 
     return {

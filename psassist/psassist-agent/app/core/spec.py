@@ -64,8 +64,9 @@ BUBBLES: tuple[BubbleShape, ...] = (
     BubbleShape("cloud_a", "Talk 3 1", "cloud", "horizontal", 16, (648, 468), -0.067),
     BubbleShape("cloud_b", "Talk 4 1", "cloud", "horizontal", 4, (616, 438), -0.151),
     # スパイク＝激しい反応
-    BubbleShape("spike_a", "Talk 8 1", "spike", "horizontal", 9, (565, 459), +0.021),
-    BubbleShape("spike_b", "Talk 7 1", "spike", "horizontal", 0, (645, 404), +0.074),
+    # 符号は 2026-09-27 修正（下の「⚠️ スパイクも符号（というより閾値未満の誤判定）だった」を参照）。
+    BubbleShape("spike_a", "Talk 8 1", "spike", "horizontal", 9, (565, 459), -0.10),
+    BubbleShape("spike_b", "Talk 7 1", "spike", "horizontal", 0, (645, 404), -0.10),
 )
 
 # ⚠️ tail_dx は**尻尾の先端**で測ること（2026-08-23 修正）。
@@ -85,9 +86,27 @@ BUBBLES: tuple[BubbleShape, ...] = (
 #    「本体行＝幅が最大の70%以上」の判定に尻尾側の膨らみが混ざり、先端を右と誤検出する
 #    （今回書いた検証スクリプトも +0.044 と出して「登録値と一致」と誤判定した）。
 #    **シェイプは目視で確かめること**（[[eyeball-the-input-before-measuring]]）。
+#
+# ⚠️ **スパイクも同じ穴に落ちていた**（2026-09-27・`20260927_002_mk_cia50` ep01で発覚）。
+#    line_064（spike_a・bubble.side=left）と line_066（spike_a・side=right、逆サイド）が
+#    実際のPSDで**尻尾の向きが同一**になっていた（ユーザーが実物比較で発見）。
+#    原因は cloud とは別種: spike_a の tail_dx は元々 +0.021（TAIL_NEUTRAL=0.03未満）で
+#    「本当に無指向」に分類され、default_flip_h が side を見ずに常時無反転を返していた。
+#    だが実測（行ごとのアルファ値を辿ると）尻尾の先端は自分の付け根から見て明確に左に
+#    寄っており、round_a/cloud と同じ「付け根が右下・先端が左下」の形。閾値未満に
+#    見えたのは、**スパイクの外周全体が終始ギザギザで尻尾以外の歯が bbox 中心を
+#    引っ張るため**、「先端 - bbox中心」という物差し自体が雲の時とは違う理由で壊れて
+#    いたため（雲＝計測が先端を誤検出／スパイク＝物差しの基準点＝bbox中心が信用できない）。
+#    ここでも**シェイプは目視で確かめること**。正確な尻尾長を測り直せていないため
+#    tail_dx は暫定値 -0.10（方向のみ確定・大きさは要再較正）。
 TAIL_NEUTRAL = 0.03
 
 BUBBLE_BY_KEY = {b.key: b for b in BUBBLES}
+
+# UIの行ごと選択で許す形（横書きのみ。縦の rect_v/round_v は縦書き不採用のため出さない・
+# 2026-10-03 決定 Docs/BUBBLE_CHOICE_PLAN.md Q1）。scrapping-agent の
+# `aroll_manager.BUBBLE_CHOICE_KEYS` と同じ集合（コンテナが別なので両方に持つ。テストで突き合わせる）。
+BUBBLE_CHOICE_KEYS = tuple(b.key for b in BUBBLES if b.direction == "horizontal")
 BUBBLE_BY_LAYER = {b.layer: b for b in BUBBLES}
 
 # 縦書きは不採用（2026-08-22 決定）。台本の 46/196 行（23%）に英数字が
@@ -509,7 +528,7 @@ def default_flip_h(bubble_key: str, side: str) -> bool:
     """
     shape = BUBBLE_BY_KEY[bubble_key]
     if abs(shape.tail_dx) <= TAIL_NEUTRAL:
-        return False  # 本当に無指向なシェイプだけ（現状 Talk 8 のみ）
+        return False  # 本当に無指向なシェイプだけ（2026-09-27時点で該当なし。spike_aも誤判定と判明）
     want_right = side == "left"
     has_right = shape.tail_dx > 0
     return want_right != has_right

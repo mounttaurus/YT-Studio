@@ -1392,13 +1392,18 @@ async def aroll_update_line(project_id: str, episode_number: int, line_id: str,
                             prompt: Optional[str] = None,
                             slot: Optional[dict] = None,
                             characters: Optional[list[str]] = None,
-                            background_id: Optional[str] = None) -> dict:
-    """Aロール1行のプロンプト/演技スロット/登場キャラ/背景を手直しする(可逆WRITE・課金なし)。
+                            background_id: Optional[str] = None,
+                            bubble_key: Optional[str] = None) -> dict:
+    """Aロール1行のプロンプト/演技スロット/登場キャラ/背景/吹き出しの形を手直しする(可逆WRITE・課金なし)。
 
     prompt を書くと prompt_source="user" になる(以後の一括上書きから保護される)。
     slot={emotion,shot,angle,pose?} を渡すと slot_source="user" になり、演技スロットに
     紐づく在庫/背景の照合キーだけを画像生成LLMの散文と独立に差し替えられる。
     background_id は空文字""で未割当に戻す(Noneは「変更しない」の意味＝他の引数と同じ)。
+    bubble_key は吹き出しの形の上書き(rect_a/rect_b/round_a/cloud_a/cloud_b/spike_a/spike_b の横7種。
+    縦型は不可・未知のキーはエラー)。空文字""で自動(話者の既定＋「！」でトゲ・「？」で雲)へ戻す。
+    変えると、その行は「要合成」になる(組版プランは合成のたびに作り直される＝次の合成で反映。
+    合成は psassist_run(kind="resync") か director の仕上がりタブ)。
     line_id は get_script/aroll_sync の行id。この編集だけでは画像は再生成されない
     (絵を作り直したい時は run_aroll_batch や1行再生成の別口を使う)。
     """
@@ -1411,6 +1416,8 @@ async def aroll_update_line(project_id: str, episode_number: int, line_id: str,
         body["characters"] = characters
     if background_id is not None:
         body["background_id"] = background_id
+    if bubble_key is not None:
+        body["bubble_key"] = bubble_key
     return await dc.request(
         "PUT", f"api/scrapping/projects/{project_id}/episodes/{episode_number}/aroll/lines/{line_id}",
         json=body)

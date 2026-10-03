@@ -2212,6 +2212,9 @@ class ArollLineUpdateRequest(BaseModel):
     characters: Optional[list[str]] = None
     slot: Optional[dict] = None   # {emotion, shot, angle, pose?}。指定するとslot_source="user"になる
     background_id: Optional[str] = None   # 空文字で未割当に戻す。Noneは「変更しない」
+    # 吹き出しの形の上書き（rect_a/rect_b/round_a/cloud_a/cloud_b/spike_a/spike_b）。
+    # 空文字 または 明示的な null で自動へ戻す。省略は「変更しない」。
+    bubble_key: Optional[str] = None
 
 
 class ArollSetLibraryImageRequest(BaseModel):
@@ -2411,11 +2414,18 @@ async def aroll_export(project_id: str, episode_number: int):
 async def aroll_update_line(project_id: str, episode_number: int, line_id: str, req: ArollLineUpdateRequest):
     """プロンプト/登場キャラ/演技スロット/背景のユーザー編集（promptを書くと prompt_source="user"、
     slotを指定すると slot_source="user"）。"""
-    panel = aroll_manager.update_line(
-        project_id, episode_number, line_id,
-        prompt=req.prompt, characters=req.characters, slot=req.slot,
-        background_id=req.background_id,
-    )
+    # bubble_key は「省略＝変更しない」と「null＝自動へ戻す」を区別する（pydantic では同じ None になる）
+    bubble_key = req.bubble_key
+    if "bubble_key" in req.model_fields_set and bubble_key is None:
+        bubble_key = ""
+    try:
+        panel = aroll_manager.update_line(
+            project_id, episode_number, line_id,
+            prompt=req.prompt, characters=req.characters, slot=req.slot,
+            background_id=req.background_id, bubble_key=bubble_key,
+        )
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
     if panel is None:
         raise HTTPException(status_code=404, detail=f"line not found: {line_id}")
     return panel

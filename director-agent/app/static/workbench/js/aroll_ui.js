@@ -200,6 +200,18 @@ export function createArollUi(ctx) {
       ${P.busy ? '<div class="hint">読み込み中…</div>' : ''}${P.note ? `<div class="note warn">${esc(P.note)}</div>` : ''}<div class="pgrid">${items}</div></div>`;
   }
 
+  /** 吹き出しの形（行ごとの上書き）。今の形と、系統ごとのボタン。自動に戻せる。 */
+  function bubbleBoxHtml(l, off) {
+    const v = R.bubbleView(l);
+    const btn = (k) => `<button class="btn bubblebtn ${v.override && v.key === k ? 'on' : ''}" data-a="bubble-pick" data-key="${esc(k)}" ${off ? 'disabled' : ''} title="${esc(R.bubbleLabel(k))}にする">${R.bubbleSvg(k)}<span>${esc(R.bubbleLabel(k))}</span></button>`;
+    return `<div class="box"><span class="flabel">吹き出し（この行の形）</span>
+      <div class="inline">${v.key ? `<span class="bcur">${R.bubbleSvg(v.key)}</span><b>${esc(R.bubbleLabel(v.key))}</b>` : ''}
+        <span class="hint">${esc(v.note)}</span>
+        ${v.override ? `<button class="btn ghost" data-a="bubble-auto" ${off ? 'disabled' : ''} title="話者の既定＋「！」でトゲ・「？」で雲、の自動の割り当てに戻します">↺ 自動に戻す</button>` : ''}</div>
+      <div class="inline bubblerow">${R.BUBBLE_GROUPS.map(([name, ks]) => `<span class="bgroup"><small>${esc(name)}</small>${ks.map(btn).join('')}</span>`).join('')}</div>
+      <span class="hint">選ぶと「要合成」になります（確定済み・手直し無しの行は自動で合成されます）。左右・尻尾の向きは顔の位置から自動で決まります。</span></div>`;
+  }
+
   function bgPickerHtml(l) {
     const B = A.bg;
     if (!B || B.lineId !== l.id) return '';
@@ -251,7 +263,7 @@ export function createArollUi(ctx) {
           ${R.hasPicture(a) ? approveCtl(l, a, off) : '<span class="hint">まだ絵がありません。絵を選ぶか生成すると「この絵でOK」を押せます</span>'}
           ${a.sync === 'stale' ? staleHtml(l, a) : ''}
           ${a.speaker_changed ? '<div class="note warn">話者を変えた行です。在庫から絵を選び直してください。</div>' : ''}
-          ${a.restale ? '<div class="note warn">🔧 要合成: 選び直した絵が、まだ合成（PSD）に反映されていません。「✓ この絵でOK」は承認だけで、合成は走りません（確定済み・手直し無しの行は、選び直した直後に自動で合成されます）。</div>' : ''}
+          ${a.restale ? '<div class="note warn">🔧 要合成: 選び直した絵が、まだ合成（PSD）に反映されていません（吹き出しの形を変えた場合も同じ）。「✓ この絵でOK」は承認だけで、合成は走りません（確定済み・手直し無しの行は、選び直した直後に自動で合成されます）。</div>' : ''}
           ${a.restale && ctx.resyncShortcut ? ctx.resyncShortcut(l) : ''}</div></div></div>
       ${prepBox}
       <div class="pair">
@@ -278,6 +290,7 @@ export function createArollUi(ctx) {
         ${a.background_id ? `<img class="bgthumb" src="${esc(bgUrl(a.background_id))}" alt="">` : ''}
         <span class="hint mono">${esc(a.background_id || '（背景未割当）')}</span>
         <button class="btn" data-a="m-bgpicker" ${off ? 'disabled' : ''}>🔀 背景</button></div>${bgPickerHtml(l)}</div>
+      ${bubbleBoxHtml(l, off)}
       <details class="aset"><summary>映すキャラ・プロンプト（詳細）</summary>
         <div class="inline">${(a.characters || []).length ? a.characters.map((c, i) =>
           `<span class="chip cast">${esc(c.name)}${i === 0 ? ' 🔒' : ` <button class="x" data-a="m-rmchar" data-cid="${esc(c.id)}" title="外す" ${off ? 'disabled' : ''}>×</button>`}</span>`).join('') : '<span class="chip info">🎙 ナレーション（背景のみ）</span>'}
@@ -445,6 +458,7 @@ export function createArollUi(ctx) {
     S.modal.section = 'aroll'; S.modal.pending = null;
     A.bg = null; A.picker = null;                        // 開いたままだと「閉じる」側に倒れる
     await Promise.all([enter(), loadChars()]);
+    if (kind === 'bubble') { ctx.rerender(); return redrawModal(); }     // 吹き出しの枠は絵区画に常に出ている
     return kind === 'bg' ? openBg(id) : openPicker(id);
   }
 
@@ -504,6 +518,18 @@ export function createArollUi(ctx) {
     });
   }
 
+  /** 吹き出しの形を選ぶ／自動へ戻す（key=null）。確定済み ∧ 手直し無しの行は、そのまま自動で合成する（D25と同じ条件）。 */
+  async function setBubble(lineId, key) {
+    await working(busyMsg('吹き出しの形を変更しています'), async () => {
+      await api.aroll.updateLine(pid(), ep(), lineId, { bubble_key: key || '' });
+      await refresh({ plan: false });
+      const ran = ctx.autoResync ? await ctx.autoResync(lineId) : false;
+      const what = key ? `吹き出しを「${R.bubbleLabel(key)}」にしました` : '吹き出しを自動に戻しました';
+      say(ran ? `${what}。合成を頼みました（Photoshop を使います）` : `${what}。合成にはまだ反映されていません＝要合成です（確定済み・手直し無しの行は自動で合成されます）`);
+      ctx.rerender();
+    });
+  }
+
   async function setCut(lineId, mode) {
     await working(busyMsg('絵の共有を変更しています'), async () => {
       const body = mode === 'reset' ? { reset: true } : { boundary: mode };
@@ -545,6 +571,7 @@ export function createArollUi(ctx) {
       'm-picker': () => openPicker(S.modal.id),
       'goto-pick': () => gotoPicker('pick'),     // 仕上がり区画から: 絵区画へ移ってピッカーを開く（決める場所は絵・確かめる場所は仕上がり）
       'goto-bg': () => gotoPicker('bg'),
+      'goto-bubble': () => gotoPicker('bubble'),
       pick: () => pick(S.modal.id, el.dataset.slot),
       'm-unset': () => working(busyMsg('外しています'), async () => { await api.aroll.setCutout(pid(), ep(), S.modal.id, null); await refresh(); }),
       'm-reject': async () => {
@@ -552,6 +579,8 @@ export function createArollUi(ctx) {
         await working(busyMsg('削除しています'), async () => { const d = await api.aroll.rejectCutout(pid(), ep(), S.modal.id); say(`🗑 ${d.slot_id} を在庫から削除しました`); await refresh(); });
       },
       'm-bgpicker': () => openBg(S.modal.id),
+      'bubble-pick': () => setBubble(S.modal.id, el.dataset.key),
+      'bubble-auto': () => setBubble(S.modal.id, null),
       bgcat: () => { A.bg.cat = A.bg.cat === el.dataset.cat && el.dataset.cat !== 'all' ? 'all' : el.dataset.cat; redrawModal(); },
       bgpick: () => working(busyMsg('背景を差し替えています'), async () => {
         await api.aroll.updateLine(pid(), ep(), S.modal.id, { background_id: el.dataset.bg });

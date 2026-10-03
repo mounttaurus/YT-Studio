@@ -185,3 +185,54 @@ export function diffParts(before, after) {
   while (j < a.length - i && j < b.length - i && a[a.length - 1 - j] === b[b.length - 1 - j]) j++;
   return { pre: a.slice(0, i), before: a.slice(i, a.length - j), after: b.slice(i, b.length - j), suf: a.slice(a.length - j) };
 }
+
+// ── 吹き出しの形（行ごとの上書き・Docs/BUBBLE_CHOICE_PLAN.md B3）──────────────
+// 選べるのは横の7種だけ（縦の rect_v/round_v は縦書き不採用のため出さない＝Q1）。
+// 本籍は aroll.json の行の `bubble_key`（無ければ自動＝話者の既定＋「！」でトゲ・「？」で雲）。
+export const BUBBLE_GROUPS = [['丸', ['round_a']], ['角', ['rect_a', 'rect_b']], ['雲', ['cloud_a', 'cloud_b']], ['トゲ', ['spike_a', 'spike_b']]];
+export const BUBBLE_KEYS = BUBBLE_GROUPS.flatMap(([, ks]) => ks);
+const BUBBLE_KIND_LABEL = { round: '丸', rect: '角', cloud: '雲', spike: 'トゲ' };
+const BUBBLE_AUTO_NOTE = { speaker_default: '話者の既定', question: '「？」があるので雲', exclaim: '「！」があるのでトゲ' };
+
+/** 形キーの表示名（例: cloud_b → 雲B）。系統に1種だけ（丸）の時は系統名のみ。 */
+export function bubbleLabel(key) {
+  if (!key) return '';
+  const [kind, v] = key.split('_');
+  const same = BUBBLE_GROUPS.find(([, ks]) => ks.includes(key));
+  return (BUBBLE_KIND_LABEL[kind] || kind) + (same && same[1].length > 1 && v ? v.toUpperCase() : '');
+}
+
+/**
+ * 吹き出しの枠に出す状態。`key`＝今の形（自動なら合成プランが選んだ形・まだ無ければ null）、
+ * `override`＝人が選んだか、`note`＝理由、`pending`＝選んだ形が合成にまだ反映されていない。
+ */
+export function bubbleView(l) {
+  const a = l.aroll || {}, f = l.final || {};
+  if (a.bubble_key) {
+    return { key: a.bubble_key, override: true, pending: !!a.bubble_stale,
+      note: a.bubble_stale ? '選んだ形（まだ合成に反映されていません）' : '選んだ形' };
+  }
+  if (a.bubble_stale) {       // 自動へ戻した直後（プランは前に選んだ形のまま）
+    return { key: null, override: false, pending: true, note: '自動に戻しました（まだ合成に反映されていません）' };
+  }
+  if (f.bubble_key) {
+    return { key: f.bubble_key, override: false, pending: false, note: `自動: ${BUBBLE_AUTO_NOTE[f.bubble_source] || '話者の既定'}` };
+  }
+  return { key: null, override: false, pending: false, note: '自動（合成すると決まります）' };
+}
+
+/** 形の簡単な図（SVG文字列）。bubbles.psd は非公開資産なので持ち出さず、系統の特徴だけを描く。 */
+export function bubbleSvg(key) {
+  const kind = (key || '').split('_')[0];
+  const tail = key === 'rect_b' ? '<path d="M34 27 L40 35 L26 27 Z"/>' : '<path d="M14 27 L8 35 L22 27 Z"/>';
+  let body;
+  if (kind === 'round') body = '<ellipse cx="24" cy="15" rx="20" ry="13"/>';
+  else if (kind === 'rect') body = '<rect x="4" y="3" width="40" height="24" rx="3"/>';
+  else if (kind === 'cloud') body = '<path d="M13 27 C4 27 2 16 10 15 C9 6 21 3 25 9 C30 4 42 8 40 15 C47 17 45 27 36 27 Z"/>';
+  else if (kind === 'spike') {
+    const pts = [];
+    for (let i = 0; i < 20; i++) { const r = i % 2 ? 11 : 17, t = (Math.PI * 2 * i) / 20; pts.push(`${(24 + Math.cos(t) * r * 1.2).toFixed(1)},${(15 + Math.sin(t) * r * 0.85).toFixed(1)}`); }
+    body = `<polygon points="${pts.join(' ')}"/>`;
+  } else return '';
+  return `<svg class="bsvg" viewBox="0 0 48 36" aria-hidden="true" fill="currentColor">${body}${tail}</svg>`;
+}

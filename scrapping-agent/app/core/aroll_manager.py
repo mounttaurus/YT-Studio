@@ -404,10 +404,19 @@ def build_or_update_manifest(
     return manifest
 
 
+# UIの行ごと選択で許す吹き出しの形（横書きのみ＝縦の rect_v/round_v は出さない・
+# Docs/BUBBLE_CHOICE_PLAN.md Q1）。psassist の `spec.BUBBLE_CHOICE_KEYS` と同じ集合
+#（コンテナが別なので両方に持つ）。
+BUBBLE_CHOICE_KEYS = (
+    "rect_a", "rect_b", "round_a", "cloud_a", "cloud_b", "spike_a", "spike_b",
+)
+
+
 def update_line(
     project_id: str, episode: int, line_id: str,
     prompt: str | None = None, characters: list[str] | None = None,
     slot: dict | None = None, background_id: str | None = None,
+    bubble_key: str | None = None,
 ) -> dict | None:
     """ユーザーによる行編集。promptを書き換えたら prompt_source="user" にする。
 
@@ -416,7 +425,13 @@ def update_line(
     照合キーだけを差し替えられる。Docs/AROLL_ASSET_PLAN.md §18）。
 
     background_idは空文字を渡すと明示的にnull（未割当）へ戻せる（Noneは「変更しない」の意味）。
+
+    bubble_keyは吹き出しの形の上書き（`BUBBLE_CHOICE_KEYS` のどれか）。空文字で自動
+    （話者の既定＋！/？）へ戻す。Noneは「変更しない」。未知のキーは ValueError。
+    組版プランは合成のたびに aroll.json から作り直されるので、上書きはここに持つ。
     """
+    if bubble_key and bubble_key not in BUBBLE_CHOICE_KEYS:
+        raise ValueError(f"未知の bubble_key: {bubble_key}（許可: {', '.join(BUBBLE_CHOICE_KEYS)}）")
     manifest = load_manifest(project_id, episode)
     if manifest is None:
         return None
@@ -424,6 +439,11 @@ def update_line(
         if p.get("line_id") == line_id:
             if background_id is not None:
                 p["background_id"] = background_id or None
+            if bubble_key is not None:
+                if bubble_key:
+                    p["bubble_key"] = bubble_key
+                else:
+                    p.pop("bubble_key", None)
             if prompt is not None:
                 p["prompt"] = prompt.strip()
                 p["prompt_source"] = "user"

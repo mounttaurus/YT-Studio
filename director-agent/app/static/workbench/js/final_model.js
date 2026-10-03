@@ -1,6 +1,8 @@
 // 仕上がりタブ（合成チェックと合成）の純粋なロジック（DOMを触らない・Nodeで単体テストできる）。
 // Docs/LINE_WORKBENCH_PLAN.md §5-4-1（W4b-2）・§6-2。状態は director の GET .../workbench の `lines[].final` と `psassist`。
 
+import { bubbleView, bubbleLabel } from './aroll_model.js';
+
 export const SEV_ORDER = ['blocking', 'advisory', 'restale', 'unbuilt', 'ungenerated', 'clean'];
 export const SEV_LABEL = { blocking: '要対応', advisory: '助言', clean: '問題なし', unbuilt: '要合成', ungenerated: '未生成', restale: '要合成' };
 export const SEV_MARK = { blocking: '🔴', advisory: '🟡', clean: '✓', unbuilt: '🔧', ungenerated: '○', restale: '🔧', needbuild: '🔧' };
@@ -40,8 +42,10 @@ export const hasCode = (l, code) => (F(l).issues || []).some((i) => i.code === c
 
 /** 要合成＝まだ合成していない（PSD が無い）か、合成したが今の絵・セリフと食い違っている。どちらも「合成」の1操作で解消するので、画面では1つの状態にまとめる（内部では unbuilt／restale を区別したまま）。 */
 export const needsBuild = (l) => ['unbuilt', 'restale'].includes(severity(l));
+/** 「使っている素材」の吹き出しの行（今の形と、自動か選んだ形か）。 */
+export const bubbleLabelOf = (l) => { const v = bubbleView(l); return v.key ? `${bubbleLabel(v.key)}（${v.note}）` : v.note; };
 /** 要合成の理由（チップのホバー・注意書き用）。 */
-export const buildReason = (l) => (severity(l) === 'restale' ? '合成したあとに、絵を選び直したか、セリフが変わりました' : severity(l) === 'unbuilt' ? 'まだ合成していません' : '');
+export const buildReason = (l) => (severity(l) === 'restale' ? `合成したあとに、絵を選び直したか、セリフ${F(l).bubble_stale ? '・吹き出しの形' : ''}が変わりました` : severity(l) === 'unbuilt' ? 'まだ合成していません' : '');
 
 export function counts(lines) {
   const c = { total: lines.length, blocking: 0, advisory: 0, clean: 0, unbuilt: 0, ungenerated: 0, restale: 0, needbuild: 0, edited: 0 };

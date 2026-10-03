@@ -569,7 +569,13 @@ def build(paths: Paths | None = None) -> dict[str, Any]:
             warnings.append("UNKNOWN_SPEAKER")
 
         # 形状は文中記号（！/？）で行ごとに上書きできる（未設定の話者は既定のまま＝後方互換）。
+        # ⚠️ 行の `bubble_key`（aroll.json・UIで選んだ形）が最優先。panel_plan.json は
+        # 合成のたびに作り直されるので、上書きは必ず上流の aroll.json に持たせる
+        # （Docs/BUBBLE_CHOICE_PLAN.md）。未知のキーは黙って自動へ戻す（壊れたデータで落とさない）。
         bubble_key, bubble_key_source = spec.bubble_key_for(default, text)
+        user_key = p.get("bubble_key")
+        if user_key in spec.BUBBLE_BY_KEY:
+            bubble_key, bubble_key_source = user_key, "user"
         shape = spec.BUBBLE_BY_KEY[bubble_key]
         # 左右はマスク（顔の位置）から決めるのが最良（82%）。マスクが無ければ
         # 話者別の最頻値へフォールバック（64%）。
