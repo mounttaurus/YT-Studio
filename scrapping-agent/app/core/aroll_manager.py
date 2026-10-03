@@ -1124,6 +1124,7 @@ def approve_images(project_id: str, episode: int, line_ids: list[str] | None = N
                 style_name=manifest.get("style", "kamishibai"),
                 model=p.get("model") or "", provider=p.get("provider") or "nanobanana",
                 source={"project_id": project_id, "episode": episode, "line_id": lid},
+                emotion_tag=slot.get("emotion_tag") or "",
             )
         except Exception as e:  # noqa: BLE001 — 1行の失敗で承認全体を落とさない
             skipped.append({"line_id": lid, "reason": f"取り込み失敗: {type(e).__name__}: {e}"})
@@ -1627,7 +1628,7 @@ async def generate_line_image(
                     pose=slot.get("pose") or "", prompt=full_prompt,
                     style_name=manifest.get("style", "kamishibai"), provider="nanobanana",
                     source={"project_id": project_id, "episode": episode, "line_id": line_id},
-                    review_status="pending",
+                    review_status="pending", emotion_tag=slot.get("emotion_tag") or "",
                 )
                 if reg.get("slot_id"):
                     # set_cutout_selection() は review_status="approved" を要求するため使えない
@@ -2258,6 +2259,7 @@ def cutout_candidates(project_id: str, episode: int, line_id: str, limit: int = 
     chars = p.get("characters") or []
     char_id = chars[0] if len(chars) == 1 else None
     emotion = (p.get("slot") or {}).get("emotion")
+    tag = (p.get("slot") or {}).get("emotion_tag")
     th = cutout_selector.thresholds()
     if not char_id:
         return {"line_id": line_id, "char_id": None, "emotion": emotion,
@@ -2284,7 +2286,7 @@ def cutout_candidates(project_id: str, episode: int, line_id: str, limit: int = 
 
     items = []
     # 手動ピッカーなので感情未指定でも全候補を出す（人が見て選ぶなら制約は要らない）
-    for e in cutout_selector.candidates(char_id, emotion, allow_unknown_emotion=True):
+    for e in cutout_selector.candidates(char_id, emotion, allow_unknown_emotion=True, tag=tag):
         d = min((cutout_selector.distance(e.get("fingerprint"), r.get("fingerprint")) for r in recent),
                 default=1.0)
         items.append({
@@ -2293,6 +2295,10 @@ def cutout_candidates(project_id: str, episode: int, line_id: str, limit: int = 
             "times_used": e.get("times_used", 0), "distance": round(d, 3),
             "too_close": d < th["repetitive_below"],
             "current": e["slot_id"] == p.get("library_slot_id"),
+            # 当たり方（0 主タグ／1 副タグ／2 同じ系統／3 副タグの系統・§14）と絵のタグ（UIの表示用）
+            "match": cutout_selector.match_level(e, emotion, tag),
+            "emotion": e.get("emotion"), "emotion_tag": cutout_selector.entry_tag(e),
+            "emotion_sub_tags": e.get("emotion_sub_tags") or [],
         })
     items.sort(key=lambda x: (-x["distance"], x["times_used"], x["slot_id"]))
     return {"line_id": line_id, "char_id": char_id, "emotion": emotion,

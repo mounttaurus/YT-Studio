@@ -16,7 +16,7 @@ import os
 import re
 from typing import Optional
 
-from app.core import llm_client, panel_presets
+from app.core import cutout_selector, emotion_rubric, llm_client, panel_presets
 from app.core.query_generator import _parse_llm_json, group_lines_by_section
 
 # 演技スロット（2026-08-19新規）: 画像再利用の照合キーに使う4軸。
@@ -75,6 +75,12 @@ PROMPT_TEMPLATE = """以下はYouTube動画の台本の1章分です。各セリ
 - 連続する行で同じ構図を繰り返さない（ショット/アングルを切り替える）。
 - "slot" は下記の語彙のidだけを使って分類すること（判定できない軸はキー自体を省略してよい。無理に埋めない）:
 {slot_vocab_block}
+- "slot" の "emotion_tag" は、下の**感情タグ辞書**から、その行で話者が見せる表情に最も合うタグを1つ選ぶこと。
+  辞書の各タグには、そのキャラの**在庫の枚数**が付いている。合うタグが複数あるなら在庫の多い方を選んでよいが、
+  **表情に合わないタグを在庫の都合で選んではいけない**（在庫0のタグも選んでよい＝その時は新しく描く）。
+  "emotion" には選んだタグの系統（辞書の「系統」）を書くこと。
+感情タグ辞書（タグ（日本語・系統）: 見た目の手がかり ｜在庫）:
+{emotion_tag_block}
 {extra}
 台本（章: {section}）:
 {lines_text}
@@ -84,7 +90,7 @@ PROMPT_TEMPLATE = """以下はYouTube動画の台本の1章分です。各セリ
 {{
   "panels": [
     {{"line_id": "line_001", "characters": ["002", "001"],
-      "slot": {{"emotion": "serious", "pose": "talking", "shot": "bust", "angle": "low_angle"}},
+      "slot": {{"emotion_tag": "certainty", "emotion": "serious", "pose": "talking", "shot": "bust", "angle": "low_angle"}},
       "prompt": "[002], serious expression, leaning forward and looking at [001]. [001] is listening intently. Bust shot, low-angle."}}
   ]
 }}
@@ -105,6 +111,28 @@ FALLBACK_MODEL = os.getenv("AROLL_PROMPT_LLM_FALLBACK", "openrouter/openrouter/f
 def _slot_vocab() -> dict[str, list[str]]:
     presets = panel_presets.load_presets()
     return {axis: [item["id"] for item in presets.get(axis, [])] for axis in SLOT_AXES}
+
+
+def _emotion_tag_block(char_ids: list[str]) -> str:
+    """感情タグ辞書（§14）を、行の感情を選ぶ LLM 向けに1タグ1行で並べる。キャラごとの在庫枚数つき。
+
+    顔が見えない（face_hidden）は行の感情にならないので出さない。在庫を読めないキャラは数を省く。
+    """
+    counts = {}
+    for cid in char_ids:
+        try:
+            counts[cid] = cutout_selector.stock_tag_counts(cid)
+        except Exception:  # noqa: BLE001 — 在庫が無い・読めないキャラでも辞書は渡す
+            counts[cid] = {}
+    rows = []
+    for tag, spec in emotion_rubric.tags().items():
+        if tag == emotion_rubric.FACE_HIDDEN:
+            continue
+        stock = " ".join("[%s]%d" % (cid, counts[cid].get(tag, 0)) for cid in char_ids)
+        rows.append("  - %s（%s・系統 %s）: %s%s" % (
+            tag, spec.get("label_ja", tag), spec["family"], spec.get("cues", ""),
+            (" ｜在庫 " + stock) if stock else ""))
+    return "\n".join(rows)
 
 
 def _slot_vocab_block(vocab: dict[str, list[str]]) -> str:
@@ -216,6 +244,12 @@ def resolve_slot(
     pose = raw.get("pose")   # 正規表現は pose を出せないので LLM だけが供給源
     out = {"emotion": slot["emotion"], "pose": pose if pose in vocab.get("pose", []) else None,
            "shot": slot["shot"], "angle": slot["angle"]}
+    # 細かい感情タグ（§14）。辞書にあれば採り、**系統はタグから決める**（LLM が書いた emotion より優先＝
+    # タグと系統が食い違う出力を残さない）。辞書外・face_hidden は捨てる（系統の語だけで選ぶ従来の動き）。
+    tag = raw.get("emotion_tag")
+    fam = emotion_rubric.family_of(tag) if isinstance(tag, str) else None
+    if fam:
+        out["emotion_tag"], out["emotion"] = tag, fam
     if sources == {"llm"}:
         return out, "llm"
     if sources == {"derived"}:
@@ -364,6 +398,7 @@ async def generate_section_prompts(
     prompt = PROMPT_TEMPLATE.format(
         characters_block=characters_block, section=section,
         lines_text=lines_text, extra=extra, slot_vocab_block=_slot_vocab_block(vocab),
+        emotion_tag_block=_emotion_tag_block(list(known_chars)),
     )
 
     warnings: list[str] = []

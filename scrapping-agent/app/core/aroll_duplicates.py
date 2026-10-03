@@ -59,6 +59,7 @@ def collect_picture_cuts(cuts: list[dict], panels_by_id: dict[str, dict],
             "head_line_id": head["line_id"], "char_id": head["cutout_char_id"],
             "slot_id": head["cutout_slot_id"], "emotion": (head.get("slot") or {}).get("emotion"),
             "pose": (head.get("slot") or {}).get("pose"),
+            "emotion_tag": (head.get("slot") or {}).get("emotion_tag"),
             "protection": protection_reason(members, protected_line_ids),
         })
     return out
@@ -177,8 +178,10 @@ def plan_fixes(picture_cuts: list[dict], items: list[dict], entry_of, select_fn,
         recent = [entry_of(*holder[j]) for j, p in mates if abs(p["pos"] - c["pos"]) <= recent_window]
         prev = entry_of(*holder[i - 1]) if i > 0 else None     # 直前の絵（同じ画角が隣り合うのを後回しにする用）
         cur_entry = entry_of(*holder[i])
+        # 細かいタグ（§14）は持っている行だけ渡す（タグを知らない選び方の差し替えも受けられる）
+        kw = {"tag": c["emotion_tag"]} if c.get("emotion_tag") else {}
         entry, why = select_fn(c["char_id"], c["emotion"], c["pose"], used,
-                               [e for e in near if e], [e for e in recent if e], prev, cur_entry)
+                               [e for e in near if e], [e for e in recent if e], prev, cur_entry, **kw)
         row = {"line_id": it["line_id"], "line_ids": it["line_ids"], "cut_id": it["cut_id"],
                "kind": it["kind"], "char_id": c["char_id"], "from_slot": c["slot_id"],
                "to_slot": None, "reason": why}

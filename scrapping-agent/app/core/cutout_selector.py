@@ -19,7 +19,7 @@ import json
 import os
 from pathlib import Path
 
-from app.core import character_manager, panel_library_manager, panel_presets, shot_meter
+from app.core import character_manager, emotion_rubric, panel_library_manager, panel_presets, shot_meter
 
 OVERRIDES_NAME = "character_overrides.json"
 
@@ -32,6 +32,10 @@ DEFAULT_THRESHOLDS = {
     # ユーザーが「似すぎ」と指摘した実データの shape_rel 実測が 0.070 / 0.165 / 0.187 だったので、
     # 「0.20未満は人の目に同じポーズ」と読む。本番64行での実測は下の plan_episode に記録。
     "pose_near": 0.20,
+    # 依頼のままの（人も視覚の観察も確かめていない）感情ラベルの絵を自動選定から外すか。
+    # 既存在庫の確認（`Docs/STOCK_LABEL_ACCURACY_PLAN.md` §5）が終わるまでは false（全部が依頼のまま）。
+    # 終わったら true にする（不変条件 I1）。手動ピッカーは対象外（人が見て選ぶ）。
+    "require_verified_label": False,
 }
 
 
@@ -176,6 +180,9 @@ def _looks_same(a: dict, b: dict, fn, threshold: float) -> bool:
 
 # --------------------------------------------------------------------- 選択
 
+# 体のポーズではない pose 値（食い違いの判定から外す）。理由は `_pose_conflicts` の docstring。
+NEUTRAL_POSES = frozenset({"talking"})
+
 
 def _pose_conflicts(want: str | None, have: str | None) -> bool:
     """アクション（pose）が**両側に値がある時だけ**制約になる。
@@ -197,8 +204,19 @@ def _pose_conflicts(want: str | None, have: str | None) -> bool:
     ⚠️ 2026-09-23、向き系4値は pose の語彙から削除したが、**この判定自体は残す**。
     移行前に分類済みの `aroll.json` 行（要求側 want）が旧値をまだ持っている間の
     後方互換のため（`panel_presets.LEGACY_FACING` に載っている pose 値かどうかで判定）。
+
+    ⚠️ **`talking`（`NEUTRAL_POSES`）はどちらの側にあっても食い違いにしない**（2026-10-03・
+    ユーザー承認・`Docs/STOCK_LABEL_ACCURACY_PLAN.md` L1）。`talking` は「口を開けて話している」＝
+    **口の動作**であって体のポーズではない。台本の行は 57% が `talking` を答える（既定の答え）一方、
+    在庫の pose は腕組み・提示・立ち・考える等の**体のポーズ**で、両者は別の軸なので「食い違い」は
+    実質の食い違いではない。実測（本番 MK 回 ep01・両側に pose がある 2,138 組）: 1,623 組（76%）が
+    食い違い扱いで、**その 82%（1,324 組）は片側が `talking`**。薄いプール（アオイ thoughtful 14枚→8枚・
+    troubled 5枚→3枚）をさらに半分に削っていた。ポーズの食い違い自体（pointing と arms_crossed 等）は
+    従来どおり弾く＝緩和ではなく「別の軸を比べていた」定義の誤りの修正。
     """
     if ("pose", want or "") in panel_presets.LEGACY_FACING or ("pose", have or "") in panel_presets.LEGACY_FACING:
+        return False
+    if want in NEUTRAL_POSES or have in NEUTRAL_POSES:
         return False
     return bool(want and have and want != have)
 
@@ -213,11 +231,79 @@ def effective_max_uses(o: dict, th: dict) -> int | None:
     return o.get("max_uses", th["max_uses"])
 
 
+def label_verified(e: dict) -> bool:
+    """主感情が確かめられているか（人が確認した／視覚の観察と一致した）。保存はしない派生値。"""
+    return e.get("emotion_source") == "user" or (e.get("emotion_check") or {}).get("status") == "agree"
+
+
+def entry_tag(e: dict) -> str | None:
+    """その絵の主タグ（細かいタグ）。2層の辞書より前の在庫は系統（`emotion`）がそのまま主タグ。"""
+    return e.get("emotion_tag") or e.get("emotion")
+
+
+def match_level(e: dict, emotion: str | None, tag: str | None = None) -> int | None:
+    """行の感情（系統 `emotion`＋細かいタグ `tag`）に対する当たり方。小さいほど良い。None＝当たらない。
+
+    0 主タグが一致 → 1 副タグが一致 → 2 主タグが同じ系統 → 3 副タグの系統が一致
+    （`Docs/STOCK_LABEL_ACCURACY_PLAN.md` §14・D2＝同じ系統での受けをユーザーが承認）。
+    行にタグが無い（2層の前の行・ルールで決めた行）時は系統の語をタグとして扱う＝
+    在庫も2層の前なら全部が 0 になり、選択は以前と同じ。顔が見えない絵（face_hidden）は系統を
+    持たないので、感情を指定した行にはどの段でも当たらない（§14 D3＝自動選択に出さない）。
+    """
+    if not emotion:
+        return 0
+    want = tag or emotion
+    subs = e.get("emotion_sub_tags") or ()
+    if entry_tag(e) == want:
+        return 0
+    if want in subs:
+        return 1
+    if e.get("emotion") == emotion:
+        return 2
+    if any(emotion_rubric.family_of(s) == emotion for s in subs):
+        return 3
+    return None
+
+
+def stock_tag_counts(char_id: str) -> dict[str, int]:
+    """自動選択に出うる在庫の主タグごとの枚数（行の感情を選ぶ LLM に渡す・§14）。
+
+    数えるのは「切り抜き＋指紋あり・現世代・承認済み・系統あり（face_hidden 以外）」。
+    上限・話内使用は数えない（選べる母集団の大きさの目安であって、この話で空いている枚数ではない）。
+    """
+    current = panel_library_manager.appearance_version(char_id)
+    out: dict[str, int] = {}
+    for e in panel_library_manager.load_index(char_id).get("entries", []):
+        if not panel_library_manager.usable_as(e)["cutout"] or e.get("appearance_version") != current:
+            continue
+        if e.get("review_status", "approved") != "approved" or not e.get("emotion"):
+            continue
+        t = entry_tag(e)
+        out[t] = out.get(t, 0) + 1
+    return out
+
+
+def _tag_kw(tag: str | None) -> dict:
+    """タグがある時だけ渡す（タグを知らない candidates の差し替え・テストの偽物も受けられる）。"""
+    return {"tag": tag} if tag else {}
+
+
+MATCH_NOTES = {0: "", 1: "・副タグの在庫", 2: "・同じ系統の在庫", 3: "・副タグの系統の在庫"}
+
+
+def _upto(pool: list[dict], emotion: str | None, tag: str | None, level: int) -> list[dict]:
+    """当たり方が level 以下の候補（段を1つずつ広げるため）。"""
+    return [e for e in pool if (match_level(e, emotion, tag) or 0) <= level]
+
+
 def candidates(char_id: str, emotion: str | None, ov: dict | None = None,
                extra_uses: dict[str, int] | None = None,
                allow_unknown_emotion: bool = False,
-               pose: str | None = None) -> list[dict]:
+               pose: str | None = None, tag: str | None = None) -> list[dict]:
     """適格な在庫を返す（適格性＝キャラ・世代・承認・感情・banned・使用回数上限）。
+
+    tag: 行の細かいタグ（§14）。主タグ・副タグ・系統のどれかで当たる絵を返す（段の順は呼び出し側が
+      `match_level` で決める）。無ければ系統の語をタグとして扱う。
 
     extra_uses: `char_id/slot_id` → 試算中に消費した回数。**上限判定に必ず含める**。
     含め忘れると、試算の中で同じ絵を無限に使い回せてしまう（実際に一度そのバグを出した）。
@@ -251,11 +337,11 @@ def candidates(char_id: str, emotion: str | None, ov: dict | None = None,
         o = ov.get(_ref(char_id, e["slot_id"])) or {}
         if o.get("banned"):
             continue
-        allowed = o.get("allowed_emotions")
-        if allowed and emotion and emotion not in allowed:
-            continue  # ラベルが実際の表情とずれている分の人手補正
-        elif not allowed and emotion and e.get("emotion") != emotion:
+        # 主タグ・副タグ・系統のどれかで当たること（段の順は呼び出し側が match_level で決める）
+        if emotion and match_level(e, emotion, tag) is None:
             continue
+        if th.get("require_verified_label") and not allow_unknown_emotion and not label_verified(e):
+            continue  # 依頼のままのラベル（不変条件 I1・自動選定のみ。手動ピッカーは人が見て選ぶ）
         if _pose_conflicts(pose, e.get("pose")):
             continue  # 分かっていて食い違う時だけ弾く（詳細は _pose_conflicts）
         cap = effective_max_uses(o, th)
@@ -267,7 +353,7 @@ def candidates(char_id: str, emotion: str | None, ov: dict | None = None,
 
 
 def select(char_id: str, emotion: str | None, recent: list[dict],
-           ov: dict | None = None) -> tuple[dict | None, str]:
+           ov: dict | None = None, tag: str | None = None) -> tuple[dict | None, str]:
     """1行分を選ぶ。(entry, 理由) を返す。**選べなければ (None, 理由)＝新規生成の合図**。
 
     recent: 直近に割り当てた entry のリスト（新しい順でも古い順でもよい。窓は呼び出し側で切る）。
@@ -278,10 +364,15 @@ def select(char_id: str, emotion: str | None, recent: list[dict],
     """
     if emotion is None:
         return None, "感情が未指定の行（自動割当はしない。手動ピッカーからは選べる）"
-    cands = candidates(char_id, emotion, ov)
+    cands = candidates(char_id, emotion, ov, **_tag_kw(tag))
     if not cands:
         return None, "適格な在庫が無い（感情=%s・世代/承認/上限/banned で全て除外）" % emotion
-    return _select_from(cands, recent, thresholds())
+    why = ""
+    for level, mnote in MATCH_NOTES.items():   # 主タグ → 副タグ → 同じ系統 → 副タグの系統
+        entry, why = _select_from(_upto(cands, emotion, tag, level), recent, thresholds())
+        if entry:
+            return entry, why + mnote
+    return None, why
 
 
 def plan_episode(char_of_line: list[tuple[str | None, dict | None]],
@@ -326,6 +417,7 @@ def plan_episode(char_of_line: list[tuple[str | None, dict | None]],
         want_shot = want.get("shot") if isinstance(want, dict) else want
         want_facing = want.get("facing") if isinstance(want, dict) else None
         emotion, pose = slot.get("emotion"), slot.get("pose")
+        tag = slot.get("emotion_tag")   # 細かいタグ（§14）。無ければ系統の語として扱う
         if not char_id:
             plan.append({"entry": None, "reason": "キャラ未確定（2人写り等）"})
             assigned.append({})
@@ -345,7 +437,7 @@ def plan_episode(char_of_line: list[tuple[str | None, dict | None]],
         recent = [a for a in assigned[-th["recent_window"]:] if a]
         prev = assigned[-1] if assigned and assigned[-1] else None
         # 試算中の消費を上限判定ごと反映する（含めないと同じ絵を無限に使えてしまう）
-        cands = candidates(char_id, emotion, ov, used, pose=pose)
+        cands = candidates(char_id, emotion, ov, used, pose=pose, **_tag_kw(tag))
         # ⚠️ **1話の中では同じ絵を二度使わない**（2026-09-06・ユーザー判断）。
         # max_uses は「生涯の」上限（既定3）なので、17行離れた再使用を素通りさせていた
         # （本番 line_009 と line_026 に同一 slot_id。recent_window=5 の窓の外だった）。
@@ -356,10 +448,25 @@ def plan_episode(char_of_line: list[tuple[str | None, dict | None]],
         # 芋づる式に併合され、3枚を同群にできる閾値ではルカ142枚中119枚が1グループへ
         # 崩壊して「別グループから選ぶ」が機能しなくなる（実測）。代わりに
         # **選ぶ瞬間に直近と pose_distance で比べる**ことで同じ意図を崩壊なしに実現する。
-        tiers = [(fresh, False, ""),
-                 (fresh, True, "・⚠️直近とポーズが近い（他に候補が無い）"),
-                 (cands, False, "・⚠️この話で再使用（未使用の在庫では選べなかった）"),
-                 (cands, True, "・⚠️再使用かつポーズも近い（在庫が尽きた）")]
+        #
+        # ⚠️ **当たり方の良い順に段を広げる**（2026-10-03・不変条件 I4・§14）。未使用の中で
+        # 主タグ → 副タグ → 同じ系統 → 副タグの系統、それでも無ければ同じ順で「この話で再使用」。
+        # 再使用や生成に落ちる**前**に、人が確認した副タグ・同じ系統を使う。
+        # 2層の前の在庫・行（タグ無し）は全部が「主タグ一致」になる＝選択は以前と完全に同じ（A/B で確認）。
+        # ⚠️ **ポーズが近すぎない絵を、当たり方の段を全部見てから**、ポーズが近い絵へ進む（2026-10-03 A/B）。
+        # 「主タグでポーズが近い絵」を「副タグでポーズの離れた絵」より先にすると、確認後のラベルで
+        # 本番8話の「直近とポーズが近い」が 29→76 に増えた（副タグ・同じ系統は人が認めた許容なので、
+        # 見た目の繰り返しを避ける方を優先する）。
+        tiers = []
+        for pool, reuse in ((fresh, False), (cands, True)):
+            for allow in (False, True):
+                for level, mnote in MATCH_NOTES.items():
+                    sub = _upto(pool, emotion, tag, level)
+                    if reuse:
+                        tiers.append((sub, allow, mnote + ("・⚠️再使用かつポーズも近い（在庫が尽きた）" if allow
+                                                           else "・⚠️この話で再使用（未使用の在庫では選べなかった）")))
+                    else:
+                        tiers.append((sub, allow, mnote + ("・⚠️直近とポーズが近い（他に候補が無い）" if allow else "")))
         entry, why, note = None, "", ""
         for pool, allow, tier_note in tiers:
             entry, why = _select_from(pool, recent, th, prev, allow_pose_near=allow,
@@ -485,7 +592,7 @@ def _select_from(cands: list[dict], recent: list[dict], th: dict,
 
 def select_replacement(char_id: str, emotion: str | None, pose: str | None, used_refs: set[str],
                        window_entries: list[dict], recent: list[dict], prev: dict | None,
-                       current: dict | None) -> tuple[dict | None, str]:
+                       current: dict | None, tag: str | None = None) -> tuple[dict | None, str]:
     """**選んだ後の直し**用の再選択（`Docs/AROLL_DUPLICATE_CHECK_PLAN.md` D2）。選び方は変えない。
 
     候補は `candidates()`（適格性・生涯上限）のうち、**この話数で使用中の絵（used_refs）を除いたもの**
@@ -499,7 +606,7 @@ def select_replacement(char_id: str, emotion: str | None, pose: str | None, used
     if emotion is None:
         return None, "感情が未指定（自動では選べない）"
     th = thresholds()
-    fresh = [e for e in candidates(char_id, emotion, load_overrides()["overrides"], None, pose=pose)
+    fresh = [e for e in candidates(char_id, emotion, load_overrides()["overrides"], None, pose=pose, **_tag_kw(tag))
              if _ref(char_id, e["slot_id"]) not in used_refs]
     if not fresh:
         return None, "この話数で未使用の適格な在庫が無い"
@@ -511,11 +618,15 @@ def select_replacement(char_id: str, emotion: str | None, pose: str | None, used
         return None, "未使用の在庫はどれも近い行の絵とよく似ている"
     want_shot = shot_meter.effective_shot(current) if current else None
     want_facing = orientation(current) if current else None
-    for allow in (False, True):
-        entry, why = _select_from(hard, recent, th, prev, allow_pose_near=allow,
-                                  want_shot=want_shot, want_facing=want_facing)
-        if entry:
-            return entry, why
+    # 主タグ → 副タグ → 同じ系統 → 副タグの系統（plan_episode と同じ段の順・不変条件 I4）
+    why = ""
+    for level, note in MATCH_NOTES.items():
+        pool = _upto(hard, emotion, tag, level)
+        for allow in (False, True):
+            entry, why = _select_from(pool, recent, th, prev, allow_pose_near=allow,
+                                      want_shot=want_shot, want_facing=want_facing)
+            if entry:
+                return entry, why + note
     return None, why
 
 

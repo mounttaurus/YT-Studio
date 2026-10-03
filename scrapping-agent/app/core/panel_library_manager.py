@@ -24,17 +24,24 @@ appearance_prompt・reference/の内容ハッシュを**毎回計算するのを
 **キャラを分けて行う**（Voice版と同じ運用）ため、世代を機械が自動で上げる必要が無くなった。
 ハッシュ計算自体（_compute_appearance_hash）は初回固定時と互換フォールバックのために残す。
 """
+import contextlib
 import hashlib
 import io
 import json
 import os
+import threading
 from datetime import datetime, timezone
+
+try:
+    import fcntl  # コンテナ（Linux）。Windows で直接 import した時は無い
+except ImportError:  # pragma: no cover
+    fcntl = None
 from pathlib import Path
 
 from PIL import Image
 
 from app.core import (
-    background_manager, character_manager, cutout_engine, fingerprint, host_paths,
+    background_manager, character_manager, cutout_engine, emotion_rubric, fingerprint, host_paths,
     nanobanana_client, panel_presets, shot_meter, style_manager,
 )
 
@@ -116,7 +123,53 @@ def save_index(char_id: str, data: dict) -> None:
     # 以後このキャラの appearance_version はこの値のまま変わらない（上の docstring参照）。
     data.setdefault("appearance_version", _compute_appearance_hash(char_id))
     data["updated_at"] = _now()
-    index_file(char_id).write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+    atomic_write_text(index_file(char_id), json.dumps(data, ensure_ascii=False, indent=2))
+
+
+def atomic_write_text(path: Path, text: str) -> None:
+    """同じフォルダの一時ファイルに書いてから置き換える（書きかけの4MBのJSONを残さない）。
+
+    ⚠️ `write_text` で直接書くと、書き込み中に落ちたり別の処理が読んだりした時に**途中で切れた
+    JSON**が残る。`load_index` は壊れた索引を「空の在庫」として読むので、在庫が丸ごと消えたように
+    見える（`Docs/STOCK_LABEL_ACCURACY_PLAN.md` C8・T4）。`os.replace` は同じボリューム内なら原子的。
+    """
+    tmp = path.with_name(f".{path.name}.{os.getpid()}.tmp")
+    tmp.write_text(text, encoding="utf-8")
+    os.replace(tmp, path)
+
+
+@contextlib.contextmanager
+def index_lock(char_id: str):
+    """**読んで・直して・書く**一連を1キャラ単位で排他にする（一括書き換え用）。
+
+    ⚠️ 既存の呼び出し（1件ずつの承認・使用回数の記録等）はこのロックを取っていない。
+    このロックが守るのは「ロックを取る者どうし」だけ＝**一括の書き換え（ラベルの適用等）は必ず
+    ここを通し、さらに生成ジョブが走っていないことを確かめてから行う**（計画 §5-4）。
+    コンテナ（Linux）では fcntl のファイルロック、無い環境（Windows で直接 import した時）は
+    プロセス内のロックだけになる。
+    """
+    library_dir(char_id).mkdir(parents=True, exist_ok=True)
+    with _THREAD_LOCKS.setdefault(char_id, threading.RLock()):
+        # 同じスレッドの入れ子は素通し（flock を2本目の fd で取ると自分自身を待って固まる）
+        if fcntl is None or _LOCK_DEPTH.get(char_id, 0) > 0:
+            _LOCK_DEPTH[char_id] = _LOCK_DEPTH.get(char_id, 0) + 1
+            try:
+                yield
+            finally:
+                _LOCK_DEPTH[char_id] -= 1
+            return
+        with open(library_dir(char_id) / ".library.lock", "a+") as fh:
+            fcntl.flock(fh.fileno(), fcntl.LOCK_EX)
+            _LOCK_DEPTH[char_id] = 1
+            try:
+                yield
+            finally:
+                _LOCK_DEPTH[char_id] = 0
+                fcntl.flock(fh.fileno(), fcntl.LOCK_UN)
+
+
+_THREAD_LOCKS: dict[str, threading.RLock] = {}
+_LOCK_DEPTH: dict[str, int] = {}
 
 
 def rebless(char_id: str, *, dry_run: bool = True, note: str = "") -> dict:
@@ -581,6 +634,122 @@ def update_entry(char_id: str, slot_id: str, *,
     return None
 
 
+_EMOTION_KEYS = ("emotion", "emotion_tag", "emotion_sub_tags", "emotion_source",
+                 "emotion_requested", "emotion_reviewed_at", "label_source")
+EMOTION_LOG_KEEP = 10
+
+
+def set_emotion_tags(char_id: str, updates: dict[str, dict], *, source: str = "user",
+                     dry_run: bool = True, note: str = "", backup: bool = True) -> dict:
+    """感情タグ（主タグ＋副タグ・2層の辞書）の**唯一の書き手**（`Docs/STOCK_LABEL_ACCURACY_PLAN.md` §14）。
+
+    updates: `slot_id` → `{"tag": 主タグ, "subs": [副タグ…]}`（subs 省略＝副タグなし）。
+    書くもの: `emotion_tag`・`emotion_sub_tags`・`emotion`（＝主タグの系統。後方互換で残す軸。
+    face_hidden は系統なし＝None）・`emotion_source`・`emotion_reviewed_at`。系統が変わる時は
+    元の依頼ラベルを `emotion_requested` に一度だけ残す（レシピの的中率を後で測るため）。
+
+    - **全件を先に検査し、1件でも不正なら何も書かない**（`emotion_rubric.validate_tags`）。
+    - 既定は dry_run＝件数と系統ごとの増減だけ返す。書く時はキャラ単位のロック・自動バックアップ・
+      `emotion_review_log` に変更前の値を残す（`undo_emotion_tags` で戻せる）。
+    - ⚠️ `slot_id` は変えない（ラベル≠ID・CLAUDE.md の罠）。
+    """
+    errors: dict[str, list[str]] = {}
+    # dry-run は読むだけ＝ロック（ロックファイルを作る）を取らない（読み取り専用の場所でも試算できる）
+    with (index_lock(char_id) if not dry_run else contextlib.nullcontext()):
+        data = load_index(char_id)
+        by_id = {e.get("slot_id"): e for e in data.get("entries", [])}
+        plan = {}
+        for slot_id, u in updates.items():
+            if slot_id not in by_id:
+                errors[slot_id] = ["在庫にありません"]
+                continue
+            tag, subs = (u or {}).get("tag"), list((u or {}).get("subs") or [])
+            errs = emotion_rubric.validate_tags(tag, subs)
+            if errs:
+                errors[slot_id] = errs
+                continue
+            plan[slot_id] = (tag, subs, emotion_rubric.family_of(tag))
+        if errors:
+            raise ValueError("感情タグを書けません（何も書いていません）: " + json.dumps(errors, ensure_ascii=False))
+
+        now = _now()
+        changed, before = [], {}
+        fam_before, fam_after = {}, {}
+        for slot_id, (tag, subs, fam) in plan.items():
+            e = by_id[slot_id]
+            old = (e.get("emotion_tag") or e.get("emotion"), list(e.get("emotion_sub_tags") or []), e.get("emotion"))
+            if old == (tag, subs, fam) and e.get("emotion_source") == source:
+                continue
+            changed.append({"slot_id": slot_id, "from": {"tag": old[0], "subs": old[1], "family": old[2]},
+                            "to": {"tag": tag, "subs": subs, "family": fam}})
+            fam_before[old[2]] = fam_before.get(old[2], 0) + 1
+            fam_after[fam] = fam_after.get(fam, 0) + 1
+            before[slot_id] = {k: e.get(k) for k in _EMOTION_KEYS}
+        result = {"char_id": char_id, "dry_run": dry_run, "count": len(changed), "changed": changed,
+                  "family_before": fam_before, "family_after": fam_after, "backup": None, "log_id": None}
+        if dry_run or not changed:
+            return result
+
+        if backup and index_file(char_id).exists():
+            bak = index_file(char_id).with_name(
+                "library.json.bak-%s-emotion" % datetime.now().strftime("%Y%m%d-%H%M%S"))
+            bak.write_bytes(index_file(char_id).read_bytes())
+            result["backup"] = bak.name
+        for slot_id, (tag, subs, fam) in plan.items():
+            if slot_id not in before:
+                continue
+            e = by_id[slot_id]
+            if fam != e.get("emotion") and not e.get("emotion_requested") and e.get("emotion"):
+                e["emotion_requested"] = e.get("emotion")
+            if fam != e.get("emotion"):
+                e["label_source"] = "user"
+            e["emotion"] = fam
+            e["emotion_tag"] = tag
+            e["emotion_sub_tags"] = subs
+            e["emotion_source"] = source
+            e["emotion_reviewed_at"] = now
+        log_id = "emo_" + now.replace(":", "").replace("-", "")
+        log = data.setdefault("emotion_review_log", [])
+        log.append({"log_id": log_id, "at": now, "source": source, "note": note,
+                    "count": len(changed), "before": before})
+        del log[:-EMOTION_LOG_KEEP]
+        save_index(char_id, data)
+        result["log_id"] = log_id
+        return result
+
+
+def undo_emotion_tags(char_id: str, log_id: str | None = None) -> dict:
+    """`set_emotion_tags` の1回分を戻す（既定は直前の1回）。
+
+    ⚠️ その後に別の操作で感情タグが直された絵（`emotion_reviewed_at` が違う）は戻さない＝skipped に理由。
+    """
+    with index_lock(char_id):
+        data = load_index(char_id)
+        log = data.get("emotion_review_log") or []
+        rec = next((r for r in reversed(log) if not log_id or r.get("log_id") == log_id), None)
+        if rec is None:
+            raise ValueError("戻せる感情タグの変更がありません")
+        by_id = {e.get("slot_id"): e for e in data.get("entries", [])}
+        restored, skipped = [], []
+        for slot_id, snap in (rec.get("before") or {}).items():
+            e = by_id.get(slot_id)
+            if e is None:
+                skipped.append({"slot_id": slot_id, "reason": "在庫から無くなっている"})
+                continue
+            if e.get("emotion_reviewed_at") != rec.get("at"):
+                skipped.append({"slot_id": slot_id, "reason": "その後に別の変更がある"})
+                continue
+            for k in _EMOTION_KEYS:
+                if snap.get(k) is None:
+                    e.pop(k, None)
+                else:
+                    e[k] = snap[k]
+            restored.append(slot_id)
+        data["emotion_review_log"] = [r for r in log if r is not rec]
+        save_index(char_id, data)
+        return {"char_id": char_id, "log_id": rec.get("log_id"), "restored": restored, "skipped": skipped}
+
+
 def remeasure_entry(char_id: str, slot_id: str) -> dict | None:
     """今ディスク上にある✂️切り抜きファイルから fingerprint/mask/measured を測り直す。
 
@@ -1010,9 +1179,13 @@ def register_from_image(
     char_id: str, data: bytes, *, emotion: str, shot: str, angle: str,
     pose: str = "", facing: str = "", prompt: str = "", style_name: str = "kamishibai",
     model: str = "", provider: str = "nanobanana", source: dict | None = None,
-    review_status: str = "approved",
+    review_status: str = "approved", emotion_tag: str = "",
 ) -> dict:
     """**既にある画像**を切り抜いて在庫へ登録する（生成はしない）。
+
+    emotion_tag: 行の細かい感情タグ（§14）。系統（emotion）と食い違うタグは捨てる。
+    ⚠️ 入るのは**依頼**（emotion_source="request"）であって観察ではない＝確かめるのは人（承認・
+    感情チェック）か、将来の登録ゲート（`Docs/STOCK_LABEL_ACCURACY_PLAN.md` §4-5）。
 
     Aロールで作った絵を、人が承認した時点で資産化するための入口。
     ``generate_and_register`` との違いは「新しく描かない」ことだけで、
@@ -1098,7 +1271,10 @@ def register_from_image(
         "style": style_name, "model": model or None, "prompt": prompt,
         "provider": provider, "source": src, "created_at": _now(), "note": "",
         "review_status": review_status, "times_used": 0,
+        "emotion_source": "request",
     }
+    if emotion_tag and emotion_rubric.family_of(emotion_tag) == emotion:
+        entry["emotion_tag"] = emotion_tag
     idx["entries"].append(entry)
     save_index(char_id, idx)
     return {"registered": True, "reason": "", "slot_id": slot_id, "entry": entry}

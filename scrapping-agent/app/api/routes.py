@@ -28,6 +28,7 @@ from app.core import (
     cloudflare_client,
     comfy_client,
     cutout_selector,
+    emotion_rubric,
     grok_image_client,
     grok_video_client,
     lyria_client,
@@ -612,6 +613,56 @@ class PanelLibraryEntryUpdateRequest(BaseModel):
     pose: str | None = None
     facing: str | None = None   # 2026-09-23新設（panel_presets参照）
     note: str | None = None
+    # 2026-10-03 感情タグの2層の辞書（Docs/STOCK_LABEL_ACCURACY_PLAN.md §14）。
+    # どちらかを送ると emotion（系統）は主タグから決まる（emotion と同時には送らない）。
+    emotion_tag: str | None = None
+    emotion_sub_tags: list[str] | None = None
+
+
+@router.get("/emotion_tags")
+async def get_emotion_tags():
+    """感情タグの辞書（細かいタグ→系統・日本語名・見た目の手がかり）。編集画面と LLM が使う。"""
+    tags = emotion_rubric.tags()
+    families = list(emotion_rubric.vocab())
+    return {"version": emotion_rubric.TAGS_VERSION, "max_sub_tags": emotion_rubric.MAX_SECONDARY,
+            "families": [{"id": f, "label_ja": emotion_rubric.FAMILY_LABEL_JA.get(f, f),
+                          "adjacent": sorted(emotion_rubric.adjacent(f))} for f in families],
+            "tags": [{"id": t, **spec} for t, spec in tags.items()]}
+
+
+def _any_aroll_job_running() -> bool:
+    return any(j.get("running") for j in aroll_manager._JOBS.values())
+
+
+class EmotionTagsApplyRequest(BaseModel):
+    updates: dict[str, dict]      # slot_id → {"tag": 主タグ, "subs": [副タグ…]}
+    dry_run: bool = True          # 既定は試算（件数と系統ごとの増減）。書く時は明示的に false
+    note: str = ""
+
+
+@router.post("/characters/{char_id}/panel_library/emotion_tags/apply")
+async def apply_emotion_tags(char_id: str, req: EmotionTagsApplyRequest):
+    """感情タグ（主＋副）をまとめて書く（§5 の 5-4）。全件検査→バックアップ→Undo 可。"""
+    if character_manager.read_character(char_id) is None:
+        raise HTTPException(status_code=404, detail=f"character not found: {char_id}")
+    if not req.dry_run and _any_aroll_job_running():
+        raise HTTPException(status_code=409, detail="Aロールの生成ジョブが動いています。終わってから適用してください")
+    try:
+        return panel_library_manager.set_emotion_tags(char_id, req.updates, dry_run=req.dry_run, note=req.note)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+class EmotionTagsUndoRequest(BaseModel):
+    log_id: str | None = None
+
+
+@router.post("/characters/{char_id}/panel_library/emotion_tags/undo")
+async def undo_emotion_tags(char_id: str, req: EmotionTagsUndoRequest = EmotionTagsUndoRequest()):
+    try:
+        return panel_library_manager.undo_emotion_tags(char_id, req.log_id)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
 
 
 @router.patch("/characters/{char_id}/panel_library/{slot_id}")
@@ -622,7 +673,21 @@ async def update_panel_library_entry(char_id: str, slot_id: str,
     ⚠️ **slot_idは変わらない。** 実体ファイル名かつ aroll.json の参照先なので、
     ラベルを直すたびに改名すると話数をまたいだ参照が切れる。slot_idは識別子であって
     現在のラベルではない（UIでもそう見せること）。
+
+    感情タグ（emotion_tag/emotion_sub_tags）は `set_emotion_tags`（唯一の書き手）を通す。
     """
+    if req.emotion_tag is not None or req.emotion_sub_tags is not None:
+        cur = panel_library_manager.get_entry(char_id, slot_id)
+        if cur is None:
+            raise HTTPException(status_code=404, detail=f"panel library entry not found: {slot_id}")
+        tag = req.emotion_tag or cutout_selector.entry_tag(cur)
+        subs = req.emotion_sub_tags if req.emotion_sub_tags is not None else (cur.get("emotion_sub_tags") or [])
+        try:
+            panel_library_manager.set_emotion_tags(char_id, {slot_id: {"tag": tag, "subs": subs}},
+                                                   dry_run=False, backup=False, note="編集画面")
+        except ValueError as e:
+            raise HTTPException(status_code=400, detail=str(e))
+        req.emotion = None   # 系統は主タグから決まった
     try:
         entry = panel_library_manager.update_entry(
             char_id, slot_id, emotion=req.emotion, shot=req.shot,

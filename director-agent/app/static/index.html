@@ -3060,7 +3060,8 @@
                       <span style="font-size:10px" x-show="e.usable?.cutout" title="合成素材として使える">✂️</span>
                       <span style="font-size:10px;color:#a78bfa" :title="`向き: ${charLibFacingLabel(e)}`" x-text="charLibFacingGlyph(e)"></span>
                       <span style="font-size:9px;color:#94a3b8;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;flex:1"
-                            x-text="(charLib.charId === '*' ? (charaName(e.char_id) + ' / ') : '') + (e.emotion || '感情なし')"></span>
+                            :title="`感情タグ: ${charLibTagText(e)}（系統: ${e.emotion || 'なし'}）`"
+                            x-text="(charLib.charId === '*' ? (charaName(e.char_id) + ' / ') : '') + charLibTagText(e)"></span>
                       <span style="font-size:9px;color:#64748b" x-text="`${e.times_used || 0}回`"></span>
                     </div>
                   </div>
@@ -3722,8 +3723,53 @@
             ⚠️ <b>要目視</b>：facing軸の移行で向きが機械では決められませんでした。絵を見て「向き」を選び直してください
             （選ぶとこの表示は消えます）。
           </div>
+          <!-- 感情タグ（主＋副・2層の辞書 §14）。系統（emotion）は主タグから自動で決まる -->
+          <div x-show="emotionTags.tags.length"
+               style="display:grid;grid-template-columns:70px 1fr;gap:6px 8px;align-items:center;margin-bottom:6px">
+            <span style="font-size:10px;color:#64748b">主タグ</span>
+            <select style="font-size:11px;padding:2px;width:100%" :disabled="charLib.busy"
+                    x-effect="(v => $nextTick(() => { $el.value = v }))(charLibMainTag(charLib.detail))"
+                    @change="saveCharLibTags(charLib.detail, $event.target.value,
+                             (charLib.detail.emotion_sub_tags || []).filter(s => emotionSubTagOptions($event.target.value).some(t => t.id === s)))">
+              <option value="" disabled>（未設定）</option>
+              <template x-for="g in emotionTagGroups()" :key="g.id">
+                <optgroup :label="g.label">
+                  <template x-for="t in g.tags" :key="t.id">
+                    <option :value="t.id" x-text="t.label_ja + '（' + t.id + '）'" :title="t.cues"></option>
+                  </template>
+                </optgroup>
+              </template>
+            </select>
+            <template x-for="i in [0, 1]" :key="i">
+              <div style="display:contents">
+                <span style="font-size:10px;color:#64748b" x-text="'副タグ' + (i + 1)"></span>
+                <select style="font-size:11px;padding:2px;width:100%"
+                        :disabled="charLib.busy || !emotionSubTagOptions(charLibMainTag(charLib.detail)).length
+                                   || (i === 1 && !(charLib.detail.emotion_sub_tags || [])[0])"
+                        x-effect="(v => $nextTick(() => { $el.value = v }))((charLib.detail.emotion_sub_tags || [])[i] || '')"
+                        @change="(() => { const s = [...(charLib.detail.emotion_sub_tags || [])]; s[i] = $event.target.value;
+                                          saveCharLibTags(charLib.detail, charLibMainTag(charLib.detail), s.filter(Boolean)); })()">
+                  <option value="">（なし）</option>
+                  <template x-for="t in emotionSubTagOptions(charLibMainTag(charLib.detail))" :key="t.id">
+                    <option :value="t.id" x-text="t.label_ja + '（' + t.id + '）'" :title="t.cues"></option>
+                  </template>
+                </select>
+              </div>
+            </template>
+            <span style="font-size:10px;color:#64748b">系統</span>
+            <span style="font-size:11px;color:#94a3b8"
+                  x-text="charLib.detail.emotion ? emotionTagLabel(charLib.detail.emotion) + '（' + charLib.detail.emotion + '）'
+                          : 'なし（自動選択に出ない）'"></span>
+          </div>
+          <div x-show="emotionTags.tags.length && charLib.detail.emotion_requested
+                       && charLib.detail.emotion_requested !== charLib.detail.emotion"
+               style="font-size:10px;color:#64748b;margin-bottom:6px">
+            生成時の依頼: <span x-text="emotionTagLabel(charLib.detail.emotion_requested)"></span>
+          </div>
           <div style="display:grid;grid-template-columns:70px 1fr;gap:6px 8px;align-items:center">
-            <template x-for="axis in [['emotion','表情'],['shot','ショット'],['angle','アングル'],['facing','向き'],['pose','ポーズ']]" :key="axis[0]">
+            <template x-for="axis in (emotionTags.tags.length
+                                      ? [['shot','ショット'],['angle','アングル'],['facing','向き'],['pose','ポーズ']]
+                                      : [['emotion','表情'],['shot','ショット'],['angle','アングル'],['facing','向き'],['pose','ポーズ']])" :key="axis[0]">
               <div style="display:contents">
                 <span style="font-size:10px;color:#64748b" x-text="axis[1]"></span>
                 <select style="font-size:11px;padding:2px;width:100%" :disabled="charLib.busy"
@@ -4514,6 +4560,7 @@ function app() {
     // 演技スロットの語彙（表情/ポーズ/ショット/アングル/シーン）。本籍は panel_presets。
     // ⚠️ 🎬紙芝居タブは撤去したが、この語彙は 🖼️Aロール・✂️切り抜き・📚キャラ画像が使う
     studioPresets: { emotion: [], pose: [], shot: [], angle: [], facing: [], scene: [] },
+    emotionTags: { version: '', max_sub_tags: 2, families: [], tags: [] },   // 感情タグの2層の辞書（§14）
     modelInfo: { checkpoints: [], loras: [], vaes: [] },
     modelDl: { url: '', kind: 'lora', filename: '' },
     modelDownloads: [],
@@ -7378,6 +7425,62 @@ function app() {
         const d = await (await fetch(`${FAPI}/panel/presets`)).json();
         this.studioPresets = d.presets || this.studioPresets;
       } catch { /* 取得失敗時は空のまま */ }
+      await this.loadEmotionTags();
+    },
+    // 感情タグの2層の辞書（細かいタグ→系統。本籍は scrapping の emotion_rubric・Docs/STOCK_LABEL_ACCURACY_PLAN.md §14）
+    async loadEmotionTags() {
+      if (this.emotionTags.tags.length) return;
+      try {
+        const d = await (await fetch(`${FAPI}/emotion_tags`)).json();
+        if (Array.isArray(d.tags)) this.emotionTags = d;
+      } catch { /* 取得失敗時は従来の表情プルダウンだけ */ }
+    },
+    emotionTagLabel(id) {
+      const t = this.emotionTags.tags.find(x => x.id === id);
+      return t ? t.label_ja : (id || '');
+    },
+    // 主タグの選択肢を系統ごとにまとめる（顔が見えない＝後ろ姿は最後）
+    emotionTagGroups() {
+      const groups = this.emotionTags.families.map(f => ({
+        id: f.id, label: f.label_ja, tags: this.emotionTags.tags.filter(t => t.family === f.id) }));
+      const hidden = this.emotionTags.tags.filter(t => !t.family);
+      if (hidden.length) groups.push({ id: '_none', label: '系統なし（自動選択に出ない）', tags: hidden });
+      return groups;
+    },
+    // 副タグにできるタグ（主タグと同じ系統か、その隣接の系統。主タグ自身と系統なしは除く）。検査の本籍はバックエンド
+    emotionSubTagOptions(mainId) {
+      const main = this.emotionTags.tags.find(t => t.id === mainId);
+      if (!main || !main.family) return [];
+      const fam = this.emotionTags.families.find(f => f.id === main.family);
+      const ok = new Set([main.family, ...((fam && fam.adjacent) || [])]);
+      return this.emotionTags.tags.filter(t => t.family && ok.has(t.family) && t.id !== mainId);
+    },
+    charLibMainTag(e) { return e.emotion_tag || e.emotion || ''; },
+    charLibTagText(e) {
+      const main = this.charLibMainTag(e);
+      if (!main) return '感情なし';
+      const subs = (e.emotion_sub_tags || []).map(s => this.emotionTagLabel(s));
+      return this.emotionTagLabel(main) + (subs.length ? ' ＋' + subs.join('・') : '');
+    },
+    // 主タグ・副タグを保存（PATCH → scrapping の唯一の書き手 set_emotion_tags。系統は主タグから決まる）
+    async saveCharLibTags(e, main, subs) {
+      const charId = e.char_id || this.charLib.charId;
+      subs = (subs || []).filter(s => s && s !== main).slice(0, this.emotionTags.max_sub_tags || 2);
+      this.charLib.busy = true;
+      this.charLib.msg = '';
+      try {
+        const r = await fetch(`${FAPI}/characters/${charId}/panel_library/${e.slot_id}`, {
+          method: 'PATCH', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ emotion_tag: main, emotion_sub_tags: subs }),
+        });
+        const d = await r.json();
+        if (!r.ok) throw new Error(d.detail || '保存に失敗しました');
+        const { changed, ...entry } = d;
+        Object.assign(e, entry);
+        this.charLib.msg = `${e.slot_id} の感情タグを保存しました（${this.charLibTagText(e)}）`;
+      } catch (err) {
+        this.charLib.msg = `保存に失敗: ${err.message}`;
+      } finally { this.charLib.busy = false; }
     },
     // 🎭キャラタブの生成ギャラリーから1枚消す（紙芝居撤去後もキャラタブで使う）
     async deleteGeneratedFile(charId, filename) {
