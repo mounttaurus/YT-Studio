@@ -41,6 +41,7 @@ from app.core import (
     project_manager,
     query_generator,
     runware_client,
+    stock_health,
     veo_video_client,
     style_manager,
     vecteezy_client,
@@ -382,6 +383,23 @@ async def list_panel_library(char_id: str, emotion: str = "", shot: str = "", an
                                                      angle=angle, kind=kind),
         "appearance_version": panel_library_manager.appearance_version(char_id),
     }
+
+
+@router.get("/panel-library/health")
+async def panel_library_health_all():
+    """在庫を持つ全キャラの健全性監査（読み取りのみ・無料・Docs/STOCK_LABEL_ACCURACY_PLAN.md §4-7 L6）。
+    感情（系統）ごとの使える枚数と、過去の話数から見込んだ1話の要求行数。薄い＝使える枚数 < 要求。"""
+    return stock_health.all_health()
+
+
+@router.get("/characters/{char_id}/panel_library/health")
+async def panel_library_health(char_id: str):
+    """1キャラの在庫の健全性監査（読み取りのみ・無料）。感情（系統）ごとに 主タグ／タグ別内訳／副タグで受けられる枚数／
+    確認済み／使える枚数（上限・承認・世代・banned を除いた数）／上限到達／ポーズ付与率／要求の見込み／薄い。
+    全体では 感情なし・顔が見えない・未承認・世代違い・孤児になった overrides。"""
+    if character_manager.read_character(char_id) is None:
+        raise HTTPException(status_code=404, detail=f"character not found: {char_id}")
+    return stock_health.character_health(char_id)
 
 
 @router.get("/panel-library/{char_id}/ps-status")
@@ -2665,6 +2683,16 @@ async def aroll_cutout_plan(project_id: str, episode_number: int):
         return aroll_manager.cutout_plan(project_id, episode_number)
     except ValueError as e:
         raise HTTPException(status_code=404, detail=str(e))
+
+
+@router.get("/projects/{project_id}/episodes/{episode_number}/aroll/stock-health")
+async def aroll_stock_health(project_id: str, episode_number: int):
+    """この話の要求（aroll.json の行数）に対する在庫の健全性（読み取りのみ・無料・§4-7 L6）。
+    `thin[]` が薄いプール（例「アオイ thoughtful（物思い） 13行／在庫10枚」）。話数を回す前の事前警告。"""
+    manifest = aroll_manager.load_manifest(project_id, episode_number)
+    if manifest is None:
+        raise HTTPException(status_code=404, detail="aroll.json not found")
+    return stock_health.episode_health(manifest.get("panels", []))
 
 
 @router.get("/projects/{project_id}/episodes/{episode_number}/aroll/cutout-candidates")

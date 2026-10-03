@@ -975,6 +975,26 @@ async def list_panel_library(char_id: str, emotion: str = "", shot: str = "", an
     return await dc.get(f"api/scrapping/characters/{char_id}/panel_library", params=params)
 
 
+async def stock_health(char_id: str = "", project_id: str = "", episode_number: int = 0) -> dict:
+    """在庫の健全性監査(READ・無料・何も変えない)。**話数を回す前に**、感情ごとに足りない在庫(薄いプール)を知る。
+
+    - project_id+episode_number: その話の要求(aroll.json の行数)と比べる。thin[].message が
+      「アオイ thoughtful（物思い） 13行／在庫10枚」の形＝この話では重複なしに賄えず、再使用か新規生成(課金)に落ちる。
+    - char_id だけ: そのキャラ。要求は過去の全話の感情の割合×1話の行数の中央値(見込み)。
+    - 何も渡さない: 在庫を持つ全キャラ(見込み)。thin_messages に薄い感情の一覧。
+    families[] は感情(系統)ごとに primary(主タグの系統がその感情の絵)/by_tag(細かいタグの内訳)/verified/
+    usable(上限・承認・世代・banned を除いて自動選択に出る枚数)/capped(使用上限到達)/sub_usable(副タグでだけ受けられる・
+    薄いの判定には入れない)/pose_rate/demand/peak(過去の1話の最多)/thin/thin_at_peak。
+    totals は no_emotion(感情なし＝死蔵)/face_hidden/pending/stale/unverified 等、orphan_overrides は消えた絵を指す設定。
+    足りない時の補充(在庫の生成)は課金なのでユーザーに確認する(補充の計画は別)。
+    """
+    if project_id:
+        return await dc.get(f"api/scrapping/projects/{project_id}/episodes/{episode_number}/aroll/stock-health")
+    if char_id:
+        return await dc.get(f"api/scrapping/characters/{char_id}/panel_library/health")
+    return await dc.get("api/scrapping/panel-library/health")
+
+
 async def generate_panel_library_entry(char_id: str, emotion: str, shot: str, angle: str,
                                         pose: str = "", facing: str = "",
                                         style: str = "kamishibai",
@@ -1239,6 +1259,8 @@ async def aroll_cutout_plan(project_id: str, episode_number: int) -> dict:
     在庫で埋まる行を先に aroll_apply_cutout_plan で確定してから、残りだけ生成する。
     件数（from_stock / need_generation）は絵がまだ決まっていないカットだけを数える
     （lines[].decided=true の行は数えない）。
+    stock_warnings[] はこの話で在庫が薄い感情（例「アオイ thoughtful（物思い） 13行／在庫10枚」）＝
+    足りない分は再使用か新規生成になる。詳細は stock_health。
     """
     return await dc.get(f"api/scrapping/projects/{project_id}/episodes/{episode_number}/aroll/cutout-plan")
 
@@ -1653,6 +1675,7 @@ TOOLS = [
     {"fn": delete_background,    "side_effects": [S.WRITE]},
     # キャラ所有ライブラリ（Phase 3・Aロール演技スロットの作り置き）
     {"fn": list_panel_library,   "side_effects": [S.READ]},
+    {"fn": stock_health,         "side_effects": [S.READ]},
     {"fn": generate_panel_library_entry, "side_effects": [S.COST]},
     {"fn": generate_panel_library_variants, "side_effects": [S.COST]},
     {"fn": approve_panel_library_entry,  "side_effects": [S.WRITE]},

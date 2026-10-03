@@ -35,7 +35,7 @@ import httpx
 from app.core import (
     aroll_duplicates, aroll_prompt_generator, background_manager, camera_plan, character_manager,
     cut_planner, cutout_selector, nanobanana_client, panel_library_manager, panel_presets,
-    project_manager, shot_meter, slot_rules, style_manager,
+    project_manager, shot_meter, slot_rules, stock_health, style_manager,
 )
 
 SCHEMA_VERSION = "1.3.0"  # 1.3.0: panels[].parent_line_id を追加（サブ行・SUBLINE_PLAN §4-2）
@@ -2235,8 +2235,18 @@ def cutout_plan(project_id: str, episode: int, reselect_line_ids: set[str] | Non
         # ⚠️ 課金の見積りは**行数ではなくカット数**で見る（1カット＝1枚）
         "need_generation": len(open_lines) - from_stock,
         "need_generation_cuts": open_cuts - from_stock_cuts,
+        "stock_warnings": _stock_warnings(manifest),
         "lines": lines,
     }
+
+
+def _stock_warnings(manifest: dict) -> list[dict]:
+    """この話で薄い在庫の事前警告（`stock_health`・Docs/STOCK_LABEL_ACCURACY_PLAN.md §4-7 L6）。
+    例「アオイ thoughtful（物思い） 13行／在庫10枚」。監査の失敗で試算を止めない（空で返す）。"""
+    try:
+        return stock_health.episode_health(manifest.get("panels", []))["thin"]
+    except Exception:
+        return []
 
 
 def cutout_candidates(project_id: str, episode: int, line_id: str, limit: int = 12) -> dict:

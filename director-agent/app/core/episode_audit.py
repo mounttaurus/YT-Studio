@@ -18,7 +18,7 @@ import re
 from datetime import datetime, timezone
 from pathlib import Path
 
-from app.core import aroll_duplicates, workbench_view
+from app.core import aroll_duplicates, downstream, workbench_view
 from app.core.line_ops import _ep_dir
 
 LONG_LIMIT = 55   # 字。ワークベンチの「長い」と同じ（static/workbench/js/model.js LONG_LIMIT）
@@ -187,6 +187,18 @@ def _duplicate_issues(report: dict | None) -> list[dict]:
         out.append(_issue("AROLL_DUPLICATE_NEAR", "info",
                           f"近い行によく似た絵が使われている行（{report.get('window')}行以内）: {_short(near)}", near))
     return out
+
+
+def _stock_issues(report: dict | None) -> list[dict]:
+    """この話で薄い在庫（Docs/STOCK_LABEL_ACCURACY_PLAN.md §4-7 L6）。判定の本体は scrapping-agent の `stock_health`。
+    薄い＝その感情の絵（主タグの系統）で使える枚数 < この話の要求行数＝重複なしに賄えず、再使用か新規生成（課金）に落ちる。
+    直すのは在庫の補充（別計画 L7）なので info（この話の工程は止めない）。行IDは付けない（感情ごとの集計）。"""
+    thin = (report.get("thin") if isinstance(report, dict) else None) or []
+    if not thin:
+        return []
+    return [_issue("AROLL_THIN_STOCK", "info",
+                   "この話で在庫が薄い感情: " + "／".join(t["message"] for t in thin)
+                   + "（足りない分は再使用か新規生成になる）", thin=thin)]
 
 
 # ── 仕上がり（Photoshop 組版） ──────────────────────────────────────────────
@@ -370,7 +382,7 @@ def compute(view: dict, raw: dict, full: bool = False) -> dict:
                     if enabled else {"state": "na", "issues": [], "note": "確定の運用はまだ始まっていません（この話数は従来どおり）"}),
         "tts": _layer(_tts_issues(lines, raw.get("tts_doc") or {}, raw.get("missing_files") or [], view["services"]["tts"], enabled)),
         "aroll": _layer(_aroll_issues(lines, view["cast"], raw.get("aroll_panels") or [], view["services"]["aroll"])
-                        + _duplicate_issues(raw.get("duplicates"))),
+                        + _duplicate_issues(raw.get("duplicates")) + _stock_issues(raw.get("stock_health"))),
         "final": _layer(_final_issues(lines, view["psassist"], {l["id"] for l in lines}, raw.get("plan_ids") or [], raw.get("qa_ids") or [])),
     }
     if not view["services"]["tts"]:
@@ -416,6 +428,16 @@ def _raw(project_id: str, episode: int) -> dict:
             "qa_ids": [p.get("line_id") for p in qa.get("panels", [])], "missing_files": missing}
 
 
+async def _stock_health(project_id: str, episode: int) -> dict | None:
+    """この話の要求に対する在庫の健全性（scrapping-agent・無料・読み取り）。繋がらなければ None（audit を止めない）。"""
+    try:
+        res = await downstream.call("scrapping", "GET", f"/projects/{project_id}/episodes/{episode}/aroll/stock-health",
+                                    timeout=60.0)
+        return res.json() if res.status_code < 400 else None
+    except Exception:
+        return None
+
+
 async def build_audit(project_id: str, episode: int, full: bool = False) -> dict:
     view = await workbench_view.build_view(project_id, episode)
     raw = _raw(project_id, episode)
@@ -425,4 +447,5 @@ async def build_audit(project_id: str, episode: int, full: bool = False) -> dict
             raw["duplicates"] = await aroll_duplicates.duplicate_report(project_id, episode, view=view)
         except Exception:
             raw["duplicates"] = None
+        raw["stock_health"] = await _stock_health(project_id, episode)
     return compute(view, raw, full=full)
