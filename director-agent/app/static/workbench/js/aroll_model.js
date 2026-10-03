@@ -3,27 +3,76 @@
 // ここは「絞り込み・選択・課金の枚数・行モーダルの選択肢」を返す整形だけ。
 
 export const AROLL_FILTERS = [['all', 'すべて'], ['ungenerated', '未生成'], ['unapproved', '未確認'],
-  ['restale', '🔧要合成'], ['narration', 'ナレーション'], ['drift', '台本とズレ']];
+  ['restale', '🔧要合成'], ['dup', '🔁重複'], ['narration', 'ナレーション'], ['drift', '台本とズレ']];
 
 export const hasPanel = (l) => !!(l.aroll && l.aroll.panel);
 
 /** 絵の下ごしらえが要る行（プロンプト・コマが無い）。「プロンプトの無い行を下ごしらえ」の対象。 */
 export const needsPrep = (l) => !!l.aroll && l.aroll.has_manifest && (!l.aroll.panel || !l.aroll.has_prompt) && !!(l.text || '').trim();
 
+// 述語は (行, 重複の索引) を受ける。重複の索引は dupMap の結果（検査していなければ undefined＝該当なし）
 const PRED = {
   ungenerated: (l) => hasPanel(l) && l.aroll.status !== 'done' && !l.aroll.cutout_slot_id,
   // 生成済み・絵はあるが人がまだ「この絵でOK」を押していない
   unapproved: (l) => hasPanel(l) && needsReview(l.aroll),
   restale: (l) => hasPanel(l) && !!l.aroll.restale,
+  dup: (l, dups) => !!dups && dups.has(l.id),
   narration: (l) => hasPanel(l) && !(l.aroll.characters || []).length,
   // コマが無い行も「台本とズレ」で見つけられるようにする（台本にあって絵の側に無い）
   drift: (l) => !!l.aroll && l.aroll.has_manifest && (!l.aroll.panel || (!!l.aroll.sync && l.aroll.sync !== 'ok')),
 };
 
-export function rowsFor(lines, f) {
-  return f === 'all' || !PRED[f] ? lines : lines.filter(PRED[f]);
+export function rowsFor(lines, f, dups) {
+  return f === 'all' || !PRED[f] ? lines : lines.filter((l) => PRED[f](l, dups));
 }
-export const filterCount = (lines, f) => rowsFor(lines, f).length;
+export const filterCount = (lines, f, dups) => rowsFor(lines, f, dups).length;
+
+// ── 同じ絵の繰り返し（Docs/AROLL_DUPLICATE_CHECK_PLAN.md D3）──────────────────────
+// 検査の本体は scrapping-agent（director の GET .../aroll-duplicates が ✋手直し済みを除いて中継）。
+// items[] は「直す対象の行（のまとまり）」: {line_id, line_ids, kind: exact|near, with:[{line_id,kind,distance?}]}。
+
+/** 行ID → 指摘の索引（指摘の行のまとまりに含まれる行すべて）。検査前・指摘なしは null。 */
+export function dupMap(report) {
+  const items = (report && report.items) || [];
+  if (!items.length) return null;
+  const m = new Map();
+  for (const it of items) for (const id of it.line_ids || [it.line_id]) m.set(id, it);
+  return m;
+}
+
+/** 一覧の行のチップ [クラス, 文言, 説明]。同じ絵は黄・似た絵は青。指摘が無い行は null。 */
+export function dupChip(item) {
+  if (!item) return null;
+  const who = (item.with || []).map((w) => w.line_id).join('・');
+  return item.kind === 'exact'
+    ? ['warn', '🔁 重複', `この話数の中で同じ絵が ${who} にも使われています`]
+    : ['info', '🔁 似た絵', `近い行の絵（${who}）とよく似ています`];
+}
+
+/** 「同じ絵 N行・似た絵 M行」。 */
+export function dupSummaryText(report) {
+  const s = (report && report.summary) || {};
+  const parts = [];
+  if (s.exact) parts.push(`同じ絵 ${s.exact}行`);
+  if (s.near) parts.push(`似た絵 ${s.near}行`);
+  return parts.join('・');
+}
+
+/** 直しの案（POST .../fix の dry-run）から、ボタンに出す数と概算。 */
+export function dupFixCounts(plan) {
+  const s = (plan && plan.summary) || {};
+  return { reselect: s.reselect || 0, generate: s.generate || 0, skip: s.skip || 0, keep: s.keep || 0,
+    cost: s.estimated_cost_usd || 0 };
+}
+
+/** 直前の「重複を直した」で、まだ戻していないもの（戻すボタンの出し分け）。 */
+export const lastDupFix = (report) => {
+  const f = ((report && report.fixes) || []).slice(-1)[0];
+  return f && !f.undone ? f : null;
+};
+
+/** この行の案の1行（モーダルの「この行だけ直す」の可否に使う）。無ければ null。 */
+export const dupPlanFor = (plan, lineId) => ((plan && plan.plan) || []).find((a) => (a.line_ids || [a.line_id]).includes(lineId)) || null;
 
 // ── 行の選択（絵タブ・仕上がりタブ共通）─────────────────────────────
 // ⚠️ 一括操作は選択0件では押せない。`line_ids: []` を「全件」にしない（サーバーも空は対象ゼロ）。

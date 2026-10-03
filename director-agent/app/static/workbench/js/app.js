@@ -27,6 +27,7 @@ const S = {
   tab: TABS.includes(params.get('tab')) ? params.get('tab') : (TABS.includes(store.get('wb-tab')) ? store.get('wb-tab') : 'tts'),
   filter: 'all', afilter: 'all', ffilter: 'all', sel: new Set(), modal: null, drawer: null, notice: [], ver: 1, audioSig: '',
   queued: new Set(), poll: null, idle: 0, working: 0,
+  dupReport: null, dupMap: null,   // 同じ絵の繰り返しの検査結果（絵タブが読み込み、仕上がりタブも読む）
 };
 const byId = (id) => S.lines.find((l) => l.id === id);
 const idx = (l) => S.lines.indexOf(l);
@@ -225,7 +226,7 @@ function rowHtml(l) {
 
 function renderList() {
   if (S.tab === 'final') { $('list').className = ''; $('list').innerHTML = FI.gridHtml(); return; }
-  const rows = S.tab === 'aroll' ? R.rowsFor(S.lines, S.afilter) : S.lines.filter((l) => S.filter === 'all' || M.needsWork(S.tab, l, S.enabled));
+  const rows = S.tab === 'aroll' ? R.rowsFor(S.lines, S.afilter, S.dupMap) : S.lines.filter((l) => S.filter === 'all' || M.needsWork(S.tab, l, S.enabled));
   $('list').className = 'list';
   $('list').innerHTML = rows.map(rowHtml).join('') || `<div class="note">${S.lines.length ? 'この条件の行はありません' : '行がありません'}</div>`;
 }

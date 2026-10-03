@@ -18,7 +18,7 @@ import re
 from datetime import datetime, timezone
 from pathlib import Path
 
-from app.core import workbench_view
+from app.core import aroll_duplicates, workbench_view
 from app.core.line_ops import _ep_dir
 
 LONG_LIMIT = 55   # 字。ワークベンチの「長い」と同じ（static/workbench/js/model.js LONG_LIMIT）
@@ -172,6 +172,23 @@ def _aroll_issues(view_lines: list[dict], cast: list[dict], aroll_panels: list[d
     return out
 
 
+def _duplicate_issues(report: dict | None) -> list[dict]:
+    """同じ絵の繰り返し（Docs/AROLL_DUPLICATE_CHECK_PLAN.md）。検査の本体は scrapping-agent。
+    同じ絵（exact）は warn・よく似た絵（near）だけなら info。直す前に合成すると再合成が要るので、合成の前に知らせる。"""
+    if not report or not report.get("items"):
+        return []
+    exact = [i["line_id"] for i in report["items"] if i["kind"] == "exact"]
+    near = [i["line_id"] for i in report["items"] if i["kind"] == "near"]
+    out = []
+    if exact:
+        out.append(_issue("AROLL_DUPLICATE", "warn",
+                          f"同じ絵が話数の中で繰り返し使われている行: {_short(exact)}（最初に出た側は残し、後の行を選び直す）", exact))
+    if near:
+        out.append(_issue("AROLL_DUPLICATE_NEAR", "info",
+                          f"近い行によく似た絵が使われている行（{report.get('window')}行以内）: {_short(near)}", near))
+    return out
+
+
 # ── 仕上がり（Photoshop 組版） ──────────────────────────────────────────────
 
 def _final_issues(view_lines: list[dict], psa: dict, script_ids: set, plan_ids: list[str], qa_ids: list[str]) -> list[dict]:
@@ -260,6 +277,15 @@ def _actions(layers: dict, view_lines: list[dict]) -> list[dict]:
             note="埋まらない行は応答の need_generation に出る。そこだけ新規生成（課金）→ 次の項目")
         add("aroll", "在庫に無い行を新規生成する（課金・画像生成）", "run_aroll_batch", {"only_missing": True}, cost="paid",
             confirm=True, note="先に aroll_cutout_plan で枚数を見積もり、概算コストをユーザーに伝えてから。fill_missing の need_generation が空なら不要")
+    dup_ids = _issue_ids(a, "AROLL_DUPLICATE", "AROLL_DUPLICATE_NEAR")
+    if dup_ids:
+        add("aroll", "同じ絵の繰り返しを直す（この話数で未使用の絵へ選び直す・無料。先に案を見る）", "aroll_fix_duplicates",
+            {"mode": "reselect", "apply": False, "line_ids": dup_ids}, line_ids=dup_ids,
+            note="案（apply=false）をユーザーに見せ、了承を得てから apply=true。選び直した行は絵の確定が外れ、仕上がりは要・再合成になる"
+                 "（合成の前に直すと安い）。替えが無い行は plan の action=generate＝mode=unassign で絵を外し、"
+                 "応答の changed の行だけを run_aroll_batch（課金・見積もりをユーザーへ）で生成する。"
+                 "⚠️ 外した行に aroll_fill_missing は使わない（在庫が尽きた行へ同じ絵が再使用で戻る）。"
+                 "人が選んだ絵・✋手直し済みは触らない。戻す時は aroll_undo_duplicate_fix")
     stale_img = _issue_ids(a, "AROLL_IMAGE_STALE")
     if stale_img:
         add("aroll", "セリフが変わった行の絵を見直す（描き直すか、そのままOKにするか）", "run_aroll_batch / aroll_approve_images",
@@ -343,7 +369,8 @@ def compute(view: dict, raw: dict, full: bool = False) -> dict:
                      "issues": ([_issue("UNCONFIRMED", "warn", f"未確定の行（手で変えたまま確定していない）: {_short(unconf)}", unconf)] if unconf else [])}
                     if enabled else {"state": "na", "issues": [], "note": "確定の運用はまだ始まっていません（この話数は従来どおり）"}),
         "tts": _layer(_tts_issues(lines, raw.get("tts_doc") or {}, raw.get("missing_files") or [], view["services"]["tts"], enabled)),
-        "aroll": _layer(_aroll_issues(lines, view["cast"], raw.get("aroll_panels") or [], view["services"]["aroll"])),
+        "aroll": _layer(_aroll_issues(lines, view["cast"], raw.get("aroll_panels") or [], view["services"]["aroll"])
+                        + _duplicate_issues(raw.get("duplicates"))),
         "final": _layer(_final_issues(lines, view["psassist"], {l["id"] for l in lines}, raw.get("plan_ids") or [], raw.get("qa_ids") or [])),
     }
     if not view["services"]["tts"]:
@@ -391,4 +418,11 @@ def _raw(project_id: str, episode: int) -> dict:
 
 async def build_audit(project_id: str, episode: int, full: bool = False) -> dict:
     view = await workbench_view.build_view(project_id, episode)
-    return compute(view, _raw(project_id, episode), full=full)
+    raw = _raw(project_id, episode)
+    # 同じ絵の検査（無料・読み取り）。scrapping-agent に繋がらない・Aロール未着手なら飛ばす（検査の失敗で audit を止めない）
+    if view["services"]["aroll"] and view["lines"] and view["lines"][0]["aroll"].get("has_manifest"):
+        try:
+            raw["duplicates"] = await aroll_duplicates.duplicate_report(project_id, episode, view=view)
+        except Exception:
+            raw["duplicates"] = None
+    return compute(view, raw, full=full)

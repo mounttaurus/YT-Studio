@@ -14,6 +14,8 @@ export function createArollUi(ctx) {
     job: null, running: false, timer: null, ver: 1, msg: '', warnings: [],
     settings: { style: '', aspect: '16:9', extra: '', model: '', overwrite: false, paid: false, target: 'missing' }, touched: false,
     credits: null, setOpen: false,
+    dupPlan: null,    // 重複の直しの案（POST .../aroll-duplicates/fix の dry-run）。検査結果は S.dupReport/S.dupMap（仕上がりタブも読む）
+    dupBusy: false, dupMsg: '',
     picker: null,     // {lineId, items, note, busy}
     bg: null,         // {lineId, items, cat, busy}
     hover: '',
@@ -24,7 +26,7 @@ export function createArollUi(ctx) {
   const noManifest = () => lines().length > 0 && !lines().some((l) => l.aroll && l.aroll.has_manifest);
   const thumb = (l) => (l.aroll && l.aroll.thumb ? `${l.aroll.thumb}?v=${A.ver}` : '');
   const bgUrl = (id) => `${api.backgroundUrl(id)}?v=${A.ver}`;
-  const visibleRows = () => R.rowsFor(lines(), S.afilter);
+  const visibleRows = () => R.rowsFor(lines(), S.afilter, S.dupMap);
   const selected = () => R.selectedIds(lines(), S.sel);
   const chip = (cls, text) => `<span class="chip ${cls || ''}">${esc(text)}</span>`;
 
@@ -43,6 +45,7 @@ export function createArollUi(ctx) {
     await Promise.all(jobs);
     if (!noManifest() && lines().some((l) => l.aroll && l.aroll.has_manifest)) {
       if (!A.plan) await loadPlan();
+      if (!S.dupReport) await loadDups();
       await pollStatus(true);
     }
     ctx.rerender();
@@ -52,6 +55,18 @@ export function createArollUi(ctx) {
     A.planBusy = true;
     try { A.plan = await api.aroll.cutoutPlan(pid(), ep()); } catch (e) { A.plan = null; A.planMsg = `試算に失敗しました: ${e.message}`; }
     A.planBusy = false;
+  }
+
+  /** 同じ絵の繰り返しを検査する（無料・読み取りのみ）。指摘があれば直しの案（何も書かない）も取る。失敗しても画面は止めない。 */
+  async function loadDups() {
+    A.dupBusy = true;
+    try {
+      S.dupReport = await api.dup.report(pid(), ep());
+      S.dupMap = R.dupMap(S.dupReport);
+      A.dupPlan = S.dupMap ? await api.dup.fix(pid(), ep(), { mode: 'reselect', apply: false }) : null;
+      A.dupMsg = '';
+    } catch (e) { S.dupReport = null; S.dupMap = null; A.dupPlan = null; A.dupMsg = `重複の検査に失敗しました: ${e.message}`; }
+    A.dupBusy = false;
   }
 
   // ── 生成バッチの見守り ────────────────────────────────────
@@ -81,7 +96,7 @@ export function createArollUi(ctx) {
   // ── 描画: 一括操作バー ────────────────────────────────────
   function filterHtml() {
     return `<div class="filter" role="group" aria-label="表示する行">${R.AROLL_FILTERS.map(([k, n]) =>
-      `<button data-a="filter" data-f="${k}" aria-pressed="${S.afilter === k}">${n} ${R.filterCount(lines(), k)}</button>`).join('')}</div>`;
+      `<button data-a="filter" data-f="${k}" aria-pressed="${S.afilter === k}">${n} ${R.filterCount(lines(), k, S.dupMap)}</button>`).join('')}</div>`;
   }
 
   const opt = (v, label, cur) => `<option value="${esc(v)}" ${v === cur ? 'selected' : ''}>${esc(label)}</option>`;
@@ -122,11 +137,48 @@ export function createArollUi(ctx) {
         <button class="btn" data-a="regen" ${!n || off ? 'disabled' : ''} title="選択行を作り直します（課金・確認あり）">↻ まとめて生成し直す</button>
         <button class="btn" data-a="bg-sel" ${!n || S.working ? 'disabled' : ''} title="選択行の背景を自動で割り当て直します（手動選択も上書き・無料）">🏞️ 背景を割り当て直す</button>
         ${AXES.map(([k, label]) => `<select data-a="bulkslot" data-axis="${k}" aria-label="一括: ${label}" ${!n || S.working ? 'disabled' : ''}><option value="">一括: ${label.replace('(任意)', '')}</option>${((A.presets || {})[k] || []).map((o) => `<option value="${esc(o.id)}">${esc(o.label_ja)}</option>`).join('')}</select>`).join('')}</div>
+      <div class="arow"><b class="alabel">重複</b>${dupBarHtml()}</div>
       <div class="arow"><b class="alabel">下ごしらえ</b>
         <button class="btn" data-a="bg-missing" ${S.working ? 'disabled' : ''} title="背景が未割当の行に自動で割り当てます（無料・手動で選んだ行は変えません）">🏞️ 未割当の行に背景を自動割当</button>
         <button class="btn" data-a="prep" ${!newLines.length || S.working ? 'disabled' : ''} title="コマまたはプロンプトが無い行の分だけ、サブ行は親のコマを引き継ぎ・独立した行は台本の感情から決め、背景を割り当てます（LLMは使いません・無料・画像は生成しません）">🆕 プロンプトの無い行を下ごしらえ<span class="n">${newLines.length || ''}</span></button>
         <span class="hint">絵の在庫（許可・ラベル手直し）と背景アーカイブは director で</span></div>
       ${settingsHtml(true)}${msgHtml()}</div>`;
+  }
+
+  /** 一括操作バーの「重複」行: 検査・結果・直す・戻す。直す前に必ず案（数と概算）を見せ、押したら確認を出す。 */
+  function dupBarHtml() {
+    const off = S.working || A.running || A.dupBusy, rep = S.dupReport;
+    const check = `<button class="btn" data-a="dup-check" ${off ? 'disabled' : ''} title="この話数の中で、同じ絵・近い行（30行以内）によく似た絵が使われていないかを調べます（無料・何も変えません）。人が選んだ絵・✋手直し済みの行は対象外です">🔁 重複を検査</button>`;
+    if (A.dupBusy && !rep) return `${check}<span class="hint">検査しています…</span>`;
+    if (!rep) return `${check}<span class="hint">${esc(A.dupMsg || '未検査です')}</span>`;
+    const undo = R.lastDupFix(rep) ? `<button class="btn ghost" data-a="dup-undo" ${off ? 'disabled' : ''} title="直前の重複の直しを元に戻します（絵の割当と確定。その後に変えた行は戻しません）">↩ 直前の直しを戻す</button>` : '';
+    const conf = (rep.conflicts || []).length ? `<span class="hint" title="どちらも人が選んだ・手直し済みなので直しません">（守られた行どうしの重なり ${rep.conflicts.length}件）</span>` : '';
+    if (!S.dupMap) return `${check}<span class="chip ok">✓ 重複なし</span>${conf}${undo}`;
+    const c = R.dupFixCounts(A.dupPlan);
+    const reselect = `<button class="btn primary" data-a="dup-reselect" ${off || !c.reselect ? 'disabled' : ''} title="この話数でまだ使っていない在庫の絵へ選び直します（無料）。選び直した行は絵の確定が外れ、仕上がりは要・再合成になります">🔁 ${c.reselect}行を選び直す（無料）</button>`;
+    const gen = c.generate ? `<button class="btn" data-a="dup-unassign" ${off ? 'disabled' : ''} title="在庫に替えの絵が無い行の今の絵を外して「未決定」にし、続けてその行だけの生成（見積もり・確認あり）を提案します。確認するまで課金されません">🎬 ${c.generate}行は生成に回す（約 $${c.cost.toFixed(2)}）</button>` : '';
+    return `${check}<span class="chip warn">${esc(R.dupSummaryText(rep))}</span>${reselect}${gen}${undo}${conf}
+      <button class="btn ghost" data-a="filter" data-f="dup" title="重複の行だけを一覧に出します">一覧で見る</button>
+      ${c.skip ? `<span class="hint">感情が未指定の ${c.skip}行は自動では選べません</span>` : ''}`;
+  }
+
+  /** 行モーダルの説明: この行がなぜ「重複」なのか・この行だけ直せるか。 */
+  function dupBoxHtml(l) {
+    const it = S.dupMap && S.dupMap.get(l.id);
+    if (!it) return '';
+    const who = (it.with || []).map((w) => `${esc(w.line_id)}${w.kind === 'near' && w.distance != null ? `（距離 ${w.distance}）` : ''}`).join('・');
+    const act = R.dupPlanFor(A.dupPlan, l.id);
+    const off = S.working || A.running || A.dupBusy;
+    const what = it.kind === 'exact' ? `この話数の中で、同じ絵が ${who} にも使われています。`
+      : `近い行の絵（${who}）と、向きが同じでよく似ています。`;
+    const next = !act ? '' : act.action === 'reselect' ? `在庫に、この話数でまだ使っていない替えの絵があります（${esc(act.to_slot)}）。`
+      : act.action === 'generate' ? '在庫に替えの絵がありません。外して生成に回すと「残りを生成」で埋められます（課金は見積もり・確認のあと）。'
+      : act.action === 'keep' ? '先の行を直すと、この行はそのままで重複しなくなります。' : '感情が未指定のため自動では選べません。「🔀 選び直す」で手で選んでください。';
+    return `<div class="box"><span class="flabel">🔁 ${it.kind === 'exact' ? '同じ絵の繰り返し' : '似た絵の繰り返し'}</span>
+      <div class="note warn">${what}${next ? `<br>${next}` : ''}</div>
+      <div class="inline">
+        <button class="btn primary" data-a="m-dup-fix" ${off || !act || act.action !== 'reselect' ? 'disabled' : ''} title="この行だけ、使っていない在庫の絵へ選び直します（無料）">🔁 この行だけ選び直す</button>
+        <span class="hint">先に出た側は残し、後の行を直す対象にしています。人が選んだ絵・✋手直し済みの行は直しません。</span></div></div>`;
   }
 
   function planHtml() {
@@ -174,11 +226,16 @@ export function createArollUi(ctx) {
     const cutBtn = cut === 'join' ? `<button class="btn ghost" data-a="cut" data-mode="join" data-id="${esc(l.id)}" title="この行は前の行と同じ絵にします（吹き出しだけ変わる）。同じ話者のときだけ有効">↑ 前の絵を使う</button>`
       : cut === 'split' ? `<button class="btn ghost" data-a="cut" data-mode="start" data-id="${esc(l.id)}" title="前の行と同じ絵を使っています。別の絵にします">✂ 別の絵にする</button>` : '';
     return `<div class="detail adetail">${t ? `<img class="thumb" src="${esc(t)}" loading="lazy" alt="">` : '<span class="thumb none">—</span>'}
-      <div class="acol"><div class="ach">${cast}${R.statusChips(l).map(([c, x]) => chip(c, x)).join('')}</div>
+      <div class="acol"><div class="ach">${cast}${R.statusChips(l).map(([c, x]) => chip(c, x)).join('')}${dupChipHtml(l)}</div>
       ${used ? `<div class="hint">${esc(used)}</div>` : ''}
       ${!a.matched && (a.characters || []).length && !a.cutout_slot_id ? '<div class="hint warnt" title="表情・ショット・アングルが揃うと在庫と照合できます">未照合（必ず課金生成）</div>' : ''}
       ${a.sync === 'stale' && a.source_text ? oldLineHtml(l, a) : ''}</div>
       ${cutBtn}</div>`;
+  }
+
+  function dupChipHtml(l) {
+    const c = R.dupChip(S.dupMap && S.dupMap.get(l.id));
+    return c ? `<span class="chip ${c[0]}" title="${esc(c[2])}">${esc(c[1])}</span>` : '';
   }
 
   // ── 描画: 行モーダルの「絵」区画 ──────────────────────────
@@ -266,6 +323,7 @@ export function createArollUi(ctx) {
           ${a.restale ? '<div class="note warn">🔧 要合成: 選び直した絵が、まだ合成（PSD）に反映されていません（吹き出しの形を変えた場合も同じ）。「✓ この絵でOK」は承認だけで、合成は走りません（確定済み・手直し無しの行は、選び直した直後に自動で合成されます）。</div>' : ''}
           ${a.restale && ctx.resyncShortcut ? ctx.resyncShortcut(l) : ''}</div></div></div>
       ${prepBox}
+      ${dupBoxHtml(l)}
       <div class="pair">
         <div class="box"><span class="flabel">声の感情（台本）</span><span>${esc(l.emotion || 'neutral')}</span></div>
         <div class="box"><span class="flabel">絵の表情（Aロール）</span><span>${esc(a.emotion || '—')}</span>
@@ -311,6 +369,7 @@ export function createArollUi(ctx) {
     if (S.modal) S.modal.edited = false;
     await load();
     if (plan) await loadPlan();
+    await loadDups();          // 絵が変わるたびに検査し直す（無料・読み取りのみ）
     ctx.rerender();
     redrawModal();
   }
@@ -342,6 +401,48 @@ export function createArollUi(ctx) {
   async function offerGenerate(lineIds) {
     if (!confirm(`在庫でも埋まらない ${lineIds.length}行（同じ絵の行は1枚と数えます）は新規生成が必要です（概算 $${R.usd(lineIds.length)}・実課金）。生成しますか？\nキャンセルすると、埋まった分だけ処理して終わります。`)) return;
     await startGenerate({ line_ids: lineIds, only_missing: true });
+  }
+
+  // ── 同じ絵の繰り返しを直す（Docs/AROLL_DUPLICATE_CHECK_PLAN.md D2/D3）──
+  // 既定は案だけ（loadDups が取る）。ここで apply:true を送るのは、確認を出したあとだけ。生成（課金）はしない。
+  async function dupCheck() {
+    await loadDups();
+    ctx.rerender();
+    toast(S.dupMap ? `🔁 ${R.dupSummaryText(S.dupReport)}が見つかりました` : A.dupMsg || '🔁 重複はありません');
+  }
+
+  async function dupReselect(lineIds) {
+    const c = R.dupFixCounts(A.dupPlan);
+    const n = lineIds ? lineIds.length : c.reselect;
+    if (!n) return;
+    if (!lineIds && !confirm(`${n}行を、この話数でまだ使っていない在庫の絵へ選び直します（無料・画像は生成しません）。\n\n・選び直した行は絵の確定が外れ、仕上がりは「要合成」になります（合成の前に直すと安く済みます）\n・人が選んだ絵・✋手直し済みの行は直しません\n・「↩ 直前の直しを戻す」で戻せます\n\n続行しますか？`)) return;
+    await working(busyMsg('重複を選び直しています'), async () => {
+      const d = await api.dup.fix(pid(), ep(), { mode: 'reselect', apply: true, ...(lineIds ? { line_ids: lineIds } : {}) });
+      const f = (d.failed || []).length;
+      say(`🔁 ${(d.changed || []).length}行を選び直しました${f ? `（${f}行は失敗: ${d.failed.map((x) => x.line_id).join('・')}）` : ''}。仕上がりは要・再合成です（仕上がりタブの「合成」）${d.summary && d.summary.generate ? `／在庫に替えが無い ${d.summary.generate}行は「生成に回す」で` : ''}`);
+      await refresh();
+    });
+  }
+
+  async function dupUnassign() {
+    const c = R.dupFixCounts(A.dupPlan);
+    if (!c.generate) return;
+    if (!confirm(`在庫に替えの絵が無い ${c.generate}行の、今の絵を外して「未決定」にします（無料）。\n\n・続けて、その行だけの生成（約 $${c.cost.toFixed(2)}）の確認が出ます。そこでやめれば課金されません\n・今の絵は在庫に残ります（他の行では使えます）\n・「↩ 直前の直しを戻す」で戻せます\n\n続行しますか？`)) return;
+    await working(busyMsg('絵を外しています'), async () => {
+      const d = await api.dup.fix(pid(), ep(), { mode: 'unassign', apply: true });
+      say(`🎬 ${(d.changed || []).length}行の絵を外しました。この行だけを生成します（「✂ 在庫で埋める」は使わないでください＝在庫が尽きた行には同じ絵が再使用で戻ります）`);
+      await refresh();
+      if ((d.changed || []).length) await offerGenerate(d.changed);   // 見積もりの確認（やめれば課金なし・行は「未生成」のまま残る）
+    });
+  }
+
+  async function dupUndo() {
+    if (!confirm('直前の重複の直しを戻します（絵の割当と確定）。その後に別の絵へ変えた行は戻しません。続行しますか？')) return;
+    await working(busyMsg('戻しています'), async () => {
+      const d = await api.dup.undo(pid(), ep());
+      say(`↩ ${(d.restored || []).length}行を戻しました${(d.skipped || []).length ? `（${d.skipped.length}行は戻していません: ${d.skipped.map((x) => `${x.line_id}＝${x.reason}`).join('／')}）` : ''}`);
+      await refresh();
+    });
   }
 
   async function startGenerate(body) {
@@ -564,6 +665,11 @@ export function createArollUi(ctx) {
       'prep-line': () => prep([byId(id)]),
       prompts: () => prompts(false), 'prompts-all': () => prompts(true),
       replan: async () => { await loadPlan(); ctx.rerender(); },
+      'dup-check': dupCheck,
+      'dup-reselect': () => dupReselect(null),
+      'dup-unassign': dupUnassign,
+      'dup-undo': dupUndo,
+      'm-dup-fix': () => dupReselect([S.modal.id]),
       cut: () => setCut(id, el.dataset.mode),
       'm-approve': () => approve([S.modal.id]),
       'm-regen': () => genLine(S.modal.id, { fresh: false }),

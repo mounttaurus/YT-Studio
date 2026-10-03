@@ -285,12 +285,20 @@ def select(char_id: str, emotion: str | None, recent: list[dict],
 
 
 def plan_episode(char_of_line: list[tuple[str | None, dict | None]],
-                 want_shots: list[str | None] | None = None) -> list[dict]:
+                 want_shots: list[str | None] | None = None,
+                 fixed: list[dict | None] | None = None) -> list[dict]:
     """話数まるごとの割当を試算する（ドライラン。times_used は増やさない）。
 
     char_of_line: 台本の並び順に [(char_id, slot), ...]。2人写り等は (None, _) を渡す。
       slot は行が要求する演技（`aroll.json` の `panels[].slot`）。emotion が適格性の主軸で、
       pose は「在庫側にも値があって食い違う時だけ」制約になる（_pose_conflicts）。
+
+    fixed: 並びと同じ長さ。**既に実際の絵が決まっている行**はその在庫 entry、無ければ None。
+      その行は選び直さず、実際の絵を `used`（話数内の使用済み）と直近の窓へ入れるだけ
+      （選択の段構えはそのまま・入力に現実を渡すだけ）。⚠️ これが無いと、**後から足した行だけ
+      を在庫で埋める部分適用**が、決定済みの行の実際の絵を知らないまま仮の割当（`times_used` や
+      人の選び直しとズレる）で選び、決定済みの行と同じ絵を当ててしまう
+      （`Docs/AROLL_DUPLICATE_CHECK_PLAN.md` §5 D0・本番 MK 回で7行）。
 
     返り値の `entry` が None の行が**新規生成すべき行**。予算のつまみは
     「この行数のうち何枚を実際に生成するか」であって、モードの選択ではない（§7-4）。
@@ -321,6 +329,13 @@ def plan_episode(char_of_line: list[tuple[str | None, dict | None]],
         if not char_id:
             plan.append({"entry": None, "reason": "キャラ未確定（2人写り等）"})
             assigned.append({})
+            continue
+        fx = fixed[i] if fixed else None
+        if fx:
+            used[_ref(char_id, fx["slot_id"])] = used.get(_ref(char_id, fx["slot_id"]), 0) + 1
+            plan.append({"entry": fx, "reason": "決定済み（実際の絵）", "char_id": char_id,
+                         "emotion": emotion, "pose": pose, "fixed": True})
+            assigned.append(fx)
             continue
         if emotion is None:
             plan.append({"entry": None, "reason": "感情が未指定（自動割当はしない）",
@@ -466,6 +481,42 @@ def _select_from(cands: list[dict], recent: list[dict], th: dict,
     if prev_pose and best.get("pose") == prev_pose:
         why += "・⚠️直前と同じポーズラベル"
     return best, why
+
+
+def select_replacement(char_id: str, emotion: str | None, pose: str | None, used_refs: set[str],
+                       window_entries: list[dict], recent: list[dict], prev: dict | None,
+                       current: dict | None) -> tuple[dict | None, str]:
+    """**選んだ後の直し**用の再選択（`Docs/AROLL_DUPLICATE_CHECK_PLAN.md` D2）。選び方は変えない。
+
+    候補は `candidates()`（適格性・生涯上限）のうち、**この話数で使用中の絵（used_refs）を除いたもの**
+    （＝「除外集合を渡すだけ」）。そこから `_select_from`（段構え・使用回数最小）で選ぶ。
+    違いは窓の持ち方だけ: 検査（`aroll_duplicates`）と同じ「近い行（既定30行）の絵と指紋距離が
+    `repetitive_below` 未満」を**固い制約**にする（window_entries）。ポーズの近さ（`pose_near`）は
+    元の選択と同じ小さい窓（recent=直近5行）で段構え（1段目で避け・無ければ許す）。
+    current: 差し替える今の絵（段・向きの希望を引き継ぐ＝カメラプランの意図を壊さない・ソフト制約）。
+    候補が無ければ (None, 理由)＝**生成が要る行**（無理に選ばない）。
+    """
+    if emotion is None:
+        return None, "感情が未指定（自動では選べない）"
+    th = thresholds()
+    fresh = [e for e in candidates(char_id, emotion, load_overrides()["overrides"], None, pose=pose)
+             if _ref(char_id, e["slot_id"]) not in used_refs]
+    if not fresh:
+        return None, "この話数で未使用の適格な在庫が無い"
+    hard = [e for e in fresh
+            if not any(orientation(e) == orientation(r)
+                       and distance(e.get("fingerprint"), r.get("fingerprint")) < th["repetitive_below"]
+                       for r in window_entries)]
+    if not hard:
+        return None, "未使用の在庫はどれも近い行の絵とよく似ている"
+    want_shot = shot_meter.effective_shot(current) if current else None
+    want_facing = orientation(current) if current else None
+    for allow in (False, True):
+        entry, why = _select_from(hard, recent, th, prev, allow_pose_near=allow,
+                                  want_shot=want_shot, want_facing=want_facing)
+        if entry:
+            return entry, why
+    return None, why
 
 
 def nearest_in_stock(char_id: str, fingerprint: dict, *, limit: int = 5,

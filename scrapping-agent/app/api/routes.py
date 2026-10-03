@@ -14,7 +14,7 @@ from typing import Optional
 from pathlib import Path
 
 import httpx
-from fastapi import APIRouter, File, Form, HTTPException, UploadFile
+from fastapi import APIRouter, File, Form, HTTPException, Query, UploadFile
 from fastapi.responses import FileResponse, StreamingResponse
 from pydantic import BaseModel, Field
 
@@ -2607,6 +2607,60 @@ async def aroll_cutout_candidates(project_id: str, episode_number: int, line_id:
     """1行分の切り抜き候補を直近から遠い順に返す（検査のみ）。差替ピッカーの供給元。"""
     try:
         return aroll_manager.cutout_candidates(project_id, episode_number, line_id, limit)
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+
+
+@router.get("/projects/{project_id}/episodes/{episode_number}/aroll/duplicates")
+async def aroll_duplicates(project_id: str, episode_number: int,
+                           protect: list[str] = Query(default=[]),
+                           window: int = 30, near_threshold: Optional[float] = None):
+    """同じ絵・よく似た絵の繰り返しの検査（検査のみ・無料。Docs/AROLL_DUPLICATE_CHECK_PLAN.md）。
+
+    protect: 手直し済み（✋）の行ID（繰り返し指定）。✋ は director が判定して渡す。
+    範囲はこの話数の中だけ。判定: exact（同じ絵）／near（`window` 行以内の似た絵）。
+    """
+    try:
+        return aroll_manager.duplicate_report(project_id, episode_number, protect, window, near_threshold)
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+
+
+class DuplicateFixRequest(BaseModel):
+    mode: str = "reselect"                       # reselect（在庫から選び直す）/ unassign（替えの無い行の絵を外す）
+    apply: bool = False                          # False は案を返すだけ（何も書かない）
+    line_ids: Optional[list[str]] = None         # 省略は検査の指摘すべて
+    protected_line_ids: list[str] = []           # 手直し済み（✋）の行（director が判定して渡す）
+    window: int = 30
+    near_threshold: Optional[float] = None
+
+
+@router.post("/projects/{project_id}/episodes/{episode_number}/aroll/duplicates/fix")
+async def aroll_fix_duplicates(project_id: str, episode_number: int, req: DuplicateFixRequest):
+    """重複の検査の指摘を直す。既定は案だけ（`apply=true` で書く・無料・生成はしない）。
+
+    reselect＝この話数で未使用の絵へ選び直す／unassign＝替えが無い行の絵を外す（その後は応答の
+    `changed` の行だけを既存の「残りを生成」の見積もり・確認で生成。「在庫で埋める」は使わない＝
+    在庫が尽きた行へ同じ絵が再使用で戻る）。Undo は `duplicates/undo`。
+    """
+    try:
+        return aroll_manager.fix_duplicates(
+            project_id, episode_number, req.protected_line_ids, req.window, req.mode,
+            req.line_ids, req.apply, req.near_threshold)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+class DuplicateUndoRequest(BaseModel):
+    fix_id: Optional[str] = None   # 省略は直前の「重複を直した」
+
+
+@router.post("/projects/{project_id}/episodes/{episode_number}/aroll/duplicates/undo")
+async def aroll_undo_duplicate_fix(project_id: str, episode_number: int,
+                                   req: Optional[DuplicateUndoRequest] = None):
+    """直前の「重複を直した」を戻す（絵の割当と確定を元に戻す。その後に変わった行は戻さない）。"""
+    try:
+        return aroll_manager.undo_duplicate_fix(project_id, episode_number, req.fix_id if req else None)
     except ValueError as e:
         raise HTTPException(status_code=404, detail=str(e))
 

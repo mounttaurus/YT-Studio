@@ -1348,6 +1348,50 @@ async def aroll_share_picture(project_id: str, episode_number: int, line_id: str
         json=body)
 
 
+async def aroll_duplicates(project_id: str, episode_number: int, window: int = 30) -> dict:
+    """同じ絵・よく似た絵の繰り返しを検査する(READ・無料・何も変えない)。範囲は**この話数の中だけ**。
+
+    items[] が「直す対象の行」: kind=exact（同じ絵が別の行にも）/ near（window 行以内に向きが同じで
+    よく似た絵）。with[] が重なっている相手の行。最初に出た側は残し、後の行を直す対象にする。
+    除外（items に出ない）: 人が選んだ絵・Photoshop で手直し済み(✋)・実画像を持つ行・ナレーション/2ショット・
+    同じ絵を使うと明示した行のまとまりの中の共有。守られた行どうしの重なりは conflicts に出るだけ（直さない）。
+    summary は {items, exact, near, lines, conflicts, protected_cuts}。
+    直す時は選び直し（無料）→ 在庫が無い行だけ生成（課金・既存の見積もり確認）の順（`aroll_fix_duplicates`）。
+    """
+    return await dc.get(f"projects/{project_id}/episodes/{episode_number}/aroll-duplicates",
+                        params={"window": window}, timeout=120)
+
+
+async def aroll_fix_duplicates(project_id: str, episode_number: int, mode: str = "reselect",
+                               apply: bool = False, line_ids: Optional[list[str]] = None,
+                               window: int = 30) -> dict:
+    """`aroll_duplicates` の指摘を直す(WRITE・無料・**画像は生成しない**)。**既定は案を返すだけ(apply=False)**。
+
+    手順: ①apply=False で plan を見る → ②ユーザーに見せて了承 → ③apply=True で書く。
+    mode="reselect": この話数で**使っていない**在庫の絵へ選び直す。plan[].action は reselect（替えの絵がある）/
+      generate（在庫に替えが無い＝生成が要る・この mode では触らない）/ skip（感情未指定など自動では選べない）。
+    mode="unassign": 替えが無い行(generate)の絵を外して未決定にする。そのあと**応答の changed の行だけ**を
+      `run_aroll_batch(line_ids=changed, only_missing=True)`（**課金**・先に見積もりをユーザーへ）で生成する。
+      ⚠️ **外した行に `aroll_fill_missing`（在庫で埋める）を使わない**: 在庫が尽きた行へ同じ絵が再使用で当て直され、
+      重複が戻る（実測）。この道具自身は生成も課金もしない。
+    人が選んだ絵・Photoshop で手直し済み(✋)・実画像を持つ行には触らない。選び直した行は絵の「確定」が外れ、
+    仕上がりは要・再合成になる（合成の前に直すと安い）。応答の fix_id で `aroll_undo_duplicate_fix` できる。
+    line_ids: 指摘のうちこの行だけを直す。省略は指摘すべて。
+    """
+    body: dict = {"mode": mode, "apply": apply, "window": window}
+    if line_ids is not None:
+        body["line_ids"] = line_ids
+    return await dc.request("POST", f"projects/{project_id}/episodes/{episode_number}/aroll-duplicates/fix",
+                            json=body)
+
+
+async def aroll_undo_duplicate_fix(project_id: str, episode_number: int, fix_id: Optional[str] = None) -> dict:
+    """直前（または fix_id）の `aroll_fix_duplicates` を戻す(可逆WRITE)。絵の割当と確定を元に戻す。
+    その後に別の絵へ変わった行は戻さない（応答の skipped に理由）。生成した絵は戻せない・戻す対象でもない。"""
+    return await dc.request("POST", f"projects/{project_id}/episodes/{episode_number}/aroll-duplicates/undo",
+                            json={"fix_id": fix_id} if fix_id else {})
+
+
 async def aroll_cuts(project_id: str, episode_number: int) -> dict:
     """【旧名・非推奨】`aroll_picture_groups` の別名（「カット」の語彙は廃止した）。同じ結果を返す。"""
     return await aroll_picture_groups(project_id, episode_number)
@@ -1591,7 +1635,10 @@ TOOLS = [
     {"fn": aroll_assign_backgrounds, "side_effects": [S.WRITE]},
     {"fn": aroll_picture_groups, "side_effects": [S.READ]},
     {"fn": aroll_share_picture,  "side_effects": [S.WRITE]},
-    {"fn": aroll_cuts,           "side_effects": [S.READ]},        # 旧名（別名）
+    {"fn": aroll_duplicates,     "side_effects": [S.READ]},
+    {"fn": aroll_fix_duplicates, "side_effects": [S.WRITE]},
+    {"fn": aroll_undo_duplicate_fix, "side_effects": [S.WRITE]},
+    {"fn": aroll_cuts,          "side_effects": [S.READ]},        # 旧名（別名）
     {"fn": aroll_set_cut,        "side_effects": [S.WRITE]},       # 旧名（別名）
     {"fn": aroll_update_line,    "side_effects": [S.WRITE]},
     # ホスト工程（psassist・Photoshop）

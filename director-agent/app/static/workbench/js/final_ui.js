@@ -99,6 +99,8 @@ export function createFinalUi(ctx) {
       if (p.run.length) fin.push(['auto', `${p.run.length}行を Photoshop で最初から合成し直します（背景→キャラ→吹き出し→本文→保存→検査→納品PNG）。Photoshop を占有します`]);
       if (p.unconfirmed.length) fin.push(['keep', `未確定の ${p.unconfirmed.length}行は飛ばします（先に「✓ 確定」）`]);
       if (p.noPicture.length) fin.push(['keep', `絵がまだ無い ${p.noPicture.length}行は組めません（絵タブで決めてください）`]);
+      const dupRun = S.dupMap ? p.run.filter((id) => S.dupMap.has(id)) : [];
+      if (dupRun.length) fin.push(['later', `同じ絵の繰り返しが ${dupRun.length}行あります。絵タブの「🔁 重複を選び直す」を先に済ませると、再合成が要らず安く済みます（このまま合成しても構いません）`]);
       if (p.skippedEdited.length) fin.push(['keep', `✋手直し済み ${p.skippedEdited.length}行は飛ばします（上書きすると手直しが消えるため）`]);
       if (p.includeEdited && p.edited.length) fin.push(['later', `✋手直し済み ${p.edited.filter((id) => p.run.includes(id)).length}行は、元のPSDを psd_final/_backup/ に退避してから上書きします`]);
       const edit = p.edited.length ? `<label class="chk"><input type="checkbox" data-a="f-include" ${C.includeEdited ? 'checked' : ''}> 手直し済みも含める（元のPSDを退避してから上書き）</label>` : '';

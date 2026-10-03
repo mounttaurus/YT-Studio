@@ -33,9 +33,9 @@ from pathlib import Path
 import httpx
 
 from app.core import (
-    aroll_prompt_generator, background_manager, camera_plan, character_manager, cut_planner,
-    cutout_selector, nanobanana_client, panel_library_manager, panel_presets, project_manager,
-    shot_meter, slot_rules, style_manager,
+    aroll_duplicates, aroll_prompt_generator, background_manager, camera_plan, character_manager,
+    cut_planner, cutout_selector, nanobanana_client, panel_library_manager, panel_presets,
+    project_manager, shot_meter, slot_rules, style_manager,
 )
 
 SCHEMA_VERSION = "1.3.0"  # 1.3.0: panels[].parent_line_id を追加（サブ行・SUBLINE_PLAN §4-2）
@@ -1477,6 +1477,16 @@ async def generate_line_image(
     sibling_ids = [lid for lid in (cut or {}).get("line_ids", []) if lid != line_id]
 
     if use_library:
+        if exclude_slot_ids is None:
+            # 単発の呼び出し（行ごとの「作り直す」・在庫で埋める等）も、この話数で既に他の行が使っている
+            # 絵は引かない（除外集合がバッチの中だけで積まれていた穴。Docs/AROLL_DUPLICATE_CHECK_PLAN.md §5 D0）
+            own = set((cut or {}).get("line_ids", [line_id]))
+            mine = [c for c in (panel.get("characters") or []) if c]
+            if len(mine) == 1:
+                exclude_slot_ids = {
+                    q["cutout_slot_id"] for q in manifest["panels"]
+                    if not q.get("orphan") and q.get("line_id") not in own
+                    and q.get("cutout_slot_id") and q.get("cutout_char_id") == mine[0]}
         lib_hit = _library_lookup(panel, exclude_slot_ids=exclude_slot_ids)
         if lib_hit is not None:
             src = panel_library_manager.library_dir(lib_hit["char_id"]) / lib_hit["image"]
@@ -1772,8 +1782,32 @@ def _assign_variants(group_panels: list[dict], max_reuse: int, min_gap: int) -> 
     return {p["line_id"]: i for i, p in enumerate(ordered)}
 
 
+def _episode_used_slots(project_id: str, episode: int, manifest: dict,
+                        targets: list[dict]) -> dict[str, set[str]]:
+    """この話数で**既に他の行が使っている絵**（キャラごと）。生成の在庫引きの除外集合の初期値。
+
+    生成対象（`targets`＝カットの先頭行）のカットの行は除く（その行自身の今の絵は差し替える側）。
+    ⚠️ これを渡さないと、一括生成の在庫引き（`find_current`）が**話数で既に使われている絵**を
+    もう一度当てる（除外集合がバッチの中だけで積まれていた＝Docs/AROLL_DUPLICATE_CHECK_PLAN.md §5 D0）。
+    """
+    cuts = cut_report(project_id, episode, manifest)["cuts"]
+    cut_of = cut_planner.cut_of_line(cuts)
+    own: set[str] = set()
+    for t in targets:
+        own.update((cut_of.get(t["line_id"]) or {"line_ids": [t["line_id"]]})["line_ids"])
+    out: dict[str, set[str]] = {}
+    for p in manifest.get("panels", []):
+        if p.get("orphan") or p.get("line_id") in own:
+            continue
+        cid, sid = p.get("cutout_char_id"), p.get("cutout_slot_id")
+        if cid and sid:
+            out.setdefault(cid, set()).add(sid)
+    return out
+
+
 def build_generation_plan(
     targets: list[dict], max_reuse: int = 1, min_gap: int = 8, use_library: bool = True,
+    already_used: dict[str, set[str]] | None = None,
 ) -> dict:
     """targets(select_targetsの出力＝カットの先頭行のみ)を「ライブラリ引用」「実生成する代表行」
     「コピーで済む行」に振り分ける。
@@ -1796,7 +1830,8 @@ def build_generation_plan(
     # （詳細 memory/aroll-duplicate-cutout-same-batch）。ここでの判定は実際に消費する
     # run_batch のループと**同じアルゴリズム（順番にexclude_slot_idsを蓄積）**でなければ、
     # 見積もり（ここ）と実際の課金結果がズレる事故になるので、両方を必ず対で直すこと。
-    used_slots: dict[str, set[str]] = {}
+    # already_used: この話数で既に他の行が使っている絵（run_batch と同じ初期値を渡す＝見積もりと実適用を揃える）
+    used_slots: dict[str, set[str]] = {c: set(s) for c, s in (already_used or {}).items()}
     library_entries: list[dict] = []
     remaining: list[dict] = []
     for p in targets:
@@ -1860,8 +1895,9 @@ def generation_plan_estimate(
         raise ValueError("aroll.json not found (run /aroll/prompts first)")
     # プロンプトの無い行も数える（実行側 `run_batch` と同じ対象。在庫から選べない行だけ演出プロンプトを作る＝E4）
     targets = select_targets(project_id, episode, manifest, line_ids, only_missing, require_prompt=False)
-    plan = build_generation_plan(targets, max_reuse=max_reuse, min_gap=min_gap, use_library=use_library)
-    unkeyed = sum(1 for e in plan["generate"] if e["variant_id"] is None)
+    plan = build_generation_plan(targets, max_reuse=max_reuse, min_gap=min_gap, use_library=use_library,
+                                 already_used=_episode_used_slots(project_id, episode, manifest, targets))
+    unkeyed =sum(1 for e in plan["generate"] if e["variant_id"] is None)
     panels = {p.get("line_id"): p for p in manifest.get("panels", [])}
     prompt_needed = sum(1 for e in plan["generate"] if _panel_needs_prompt(panels.get(e["line_id"])))
     return {
@@ -1945,7 +1981,9 @@ async def run_batch(
     manifest = load_manifest(project_id, episode) or {}
     # プロンプトの無い行も対象に含める（独立した新しい行。在庫で賄えない行だけ、下で生成の直前に作る＝E4）
     targets = select_targets(project_id, episode, manifest, line_ids, only_missing, require_prompt=False)
-    plan = build_generation_plan(targets, max_reuse=max_reuse, min_gap=min_gap, use_library=use_library)
+    seed_used = _episode_used_slots(project_id, episode, manifest, targets)
+    plan = build_generation_plan(targets, max_reuse=max_reuse, min_gap=min_gap, use_library=use_library,
+                                 already_used=seed_used)
     generate_entries = plan["generate"]
     copy_by_source: dict[str, list[dict]] = {}
     for entry in plan["copy"]:
@@ -1978,7 +2016,7 @@ async def run_batch(
     # ⚠️ build_generation_plan の見積もりと同じアルゴリズム（char_idごとに使用済み
     # slot_idを蓄積）で実適用する。片方だけ直すと見積もりと実際の課金結果がズレる
     # （詳細 memory/aroll-duplicate-cutout-same-batch・2026-09-23）。
-    used_slots: dict[str, set[str]] = {}
+    used_slots: dict[str, set[str]] = {c: set(s) for c, s in seed_used.items()}
     for entry in plan["library"]:
         if job["cancel"]:
             break
@@ -2008,10 +2046,15 @@ async def run_batch(
             lid = entry["line_id"]
             job["current_line"] = lid
             try:
+                # ⚠️ 計画が「在庫に使える絵が無い」と判断した行なので、ここで在庫をもう一度引く時も
+                # **同じ除外集合**を渡す（渡さないと、計画が除外した「この話数で使用済みの絵」を
+                # 生成の直前に引き直して当ててしまう）
+                p_chars = [c for c in ((panels_now.get(lid) or {}).get("characters") or []) if c]
                 await generate_line_image(
                     project_id, episode, lid,
                     allow_paid_fallback=allow_paid_fallback, log=log,
                     use_library=use_library, ensure_prompt=False,
+                    exclude_slot_ids=used_slots.get(p_chars[0]) if len(p_chars) == 1 else None,
                 )
                 if entry.get("variant_id"):
                     _stamp_variant(project_id, episode, lid, entry["variant_id"])
@@ -2065,8 +2108,38 @@ def status(project_id: str, episode: int) -> dict:
     }
 
 
-def cutout_plan(project_id: str, episode: int) -> dict:
+def _fixed_entries(cuts: list[dict], panels_by_id: dict, reselect: set[str] | None) -> list[dict | None]:
+    """既に実際の絵が決まっているカットの在庫 entry（`cutout_selector.plan_episode(fixed=)` へ渡す）。
+
+    選び直す行（`reselect`）を含むカットは None（選び直す）。在庫に無い entry も None。
+    ⚠️ library.json は呼ぶたびに丸ごと読むのでキャラごとに1回だけ読む。
+    """
+    cache: dict[str, dict] = {}
+    out: list[dict | None] = []
+    for c in cuts:
+        if reselect and reselect & set(c["line_ids"]):
+            out.append(None)
+            continue
+        head = next((panels_by_id[l] for l in c["line_ids"]
+                     if l in panels_by_id and panels_by_id[l].get("cutout_slot_id")
+                     and panels_by_id[l].get("cutout_char_id")), None)
+        if head is None:
+            out.append(None)
+            continue
+        cid = head["cutout_char_id"]
+        if cid not in cache:
+            cache[cid] = {e.get("slot_id"): e for e in panel_library_manager.load_index(cid).get("entries", [])}
+        out.append(cache[cid].get(head["cutout_slot_id"]))
+    return out
+
+
+def cutout_plan(project_id: str, episode: int, reselect_line_ids: set[str] | None = None) -> dict:
     """切り抜き在庫から全行を割り当ててみる（**検査のみ・何も変更しない**）。
+
+    ⚠️ **既に絵が決まっているカットは、その実際の絵を入力として渡す**（`plan_episode(fixed=)`）。
+    選び直さない＝試算の `used`・直近の窓が現実と一致するので、後から足した行だけを埋める部分適用が
+    決定済みの行と同じ絵を当てない（Docs/AROLL_DUPLICATE_CHECK_PLAN.md §5 D0）。
+    `reselect_line_ids` に含まれる行のカットだけは、決定済みでも選び直す（行を明示した適用）。
 
     「在庫で賄える行」と「新規生成が要る行」を分ける。UI の予算のつまみはこの結果を使う ──
     モードを選ばせるのではなく、**新規生成が要ると出た行のうち何枚を実際に作るか**を
@@ -2119,7 +2192,8 @@ def cutout_plan(project_id: str, episode: int) -> dict:
     want_shots = [{"shot": cam.get(c["cut_id"], {}).get("shot"),
                    "facing": cam.get(c["cut_id"], {}).get("facing")} for c in cuts]
 
-    plan = cutout_selector.plan_episode(seq, want_shots)
+    plan = cutout_selector.plan_episode(
+        seq, want_shots, fixed=_fixed_entries(cuts, panels_by_id, reselect_line_ids))
     lines, from_stock_cuts, open_cuts = [], 0, 0
     for c, r in zip(cuts, plan):
         e = r.get("entry")
@@ -2224,6 +2298,178 @@ def cutout_candidates(project_id: str, episode: int, line_id: str, limit: int = 
     return {"line_id": line_id, "char_id": char_id, "emotion": emotion,
             "threshold": th["repetitive_below"], "recent": recent_ids,
             "items": items[:limit], "total_candidates": len(items)}
+
+
+def _duplicate_inputs(project_id: str, episode: int, protected_line_ids: list[str] | None,
+                      window: int, near_threshold: float | None) -> dict:
+    """検査と直しが共有する入力（マニフェスト・絵を持つカット・在庫 entry の引き方）。"""
+    manifest = load_manifest(project_id, episode)
+    if manifest is None:
+        raise ValueError("aroll.json not found")
+    th = cutout_selector.thresholds()
+    near_th = near_threshold if near_threshold is not None else th["repetitive_below"]
+    panels_by_id = {p.get("line_id"): p for p in manifest.get("panels", []) if not p.get("orphan")}
+    cuts = cut_report(project_id, episode, manifest)["cuts"]
+    pcuts = aroll_duplicates.collect_picture_cuts(cuts, panels_by_id, set(protected_line_ids or []))
+    # ⚠️ get_entry は呼ぶたびに library.json を丸ごと読む（本番のルカで約4MB）。キャラごとに1回だけ読む
+    index_cache: dict[str, dict] = {}
+
+    def entry_of(char_id: str, slot_id: str) -> dict | None:
+        if char_id not in index_cache:
+            index_cache[char_id] = {e.get("slot_id"): e
+                                    for e in panel_library_manager.load_index(char_id).get("entries", [])}
+        return index_cache[char_id].get(slot_id)
+
+    report = aroll_duplicates.compute_report(
+        pcuts, entry_of, cutout_selector.distance, cutout_selector.orientation,
+        near_th, window=window)
+    return {"manifest": manifest, "pcuts": pcuts, "entry_of": entry_of, "report": report,
+            "panels_by_id": panels_by_id}
+
+
+def duplicate_report(project_id: str, episode: int, protected_line_ids: list[str] | None = None,
+                     window: int = aroll_duplicates.DEFAULT_WINDOW,
+                     near_threshold: float | None = None) -> dict:
+    """同じ絵・よく似た絵の繰り返しを検査する（**検査のみ・何も変更しない・無料**）。
+
+    判定と除外の規則は `aroll_duplicates` の docstring（`Docs/AROLL_DUPLICATE_CHECK_PLAN.md` §2）。
+    範囲は**この話数の中だけ**（他の話数で使った絵は避けない・§4 Q2）。
+    protected_line_ids: 手直し済み（✋）の行。✋ は PSD の中身から director が判定するので、
+      呼び出し側（director の窓口）が渡す。ここでは判定できない。
+    near_threshold: 省略時は `cutout_selector` の `repetitive_below`（`cutout_candidates` の
+      `too_close` と同じ）。
+    """
+    ctx = _duplicate_inputs(project_id, episode, protected_line_ids, window, near_threshold)
+    fixes = [{"fix_id": f["fix_id"], "at": f["at"], "mode": f["mode"], "cuts": len(f["changes"]),
+              "undone": bool(f.get("undone"))}
+             for f in (ctx["manifest"].get("duplicate_fixes") or [])][-3:]
+    return {"project_id": project_id, "episode": episode, **ctx["report"], "fixes": fixes}
+
+
+_FIX_MODES = ("reselect", "unassign")
+_APPROVAL_FIELDS = ("image_approved_at", "image_approved_hash")
+_FIX_HISTORY = 10   # 話数ごとに残す「重複を直した」履歴の数（Undo 用・古いものから消す）
+
+
+def fix_duplicates(project_id: str, episode: int, protected_line_ids: list[str] | None = None,
+                   window: int = aroll_duplicates.DEFAULT_WINDOW, mode: str = "reselect",
+                   line_ids: list[str] | None = None, apply: bool = False,
+                   near_threshold: float | None = None) -> dict:
+    """検査の指摘を直す（Docs/AROLL_DUPLICATE_CHECK_PLAN.md D2）。**既定は案を返すだけ（apply=False）**。
+
+    mode:
+      reselect … 在庫から、**この話数で使っていない**絵へ選び直す（無料）。選び方は既存の選択アルゴリズム
+                 （除外集合を渡すだけ）。替えが無い行は `generate`（生成が要る）として案に出るだけで触らない。
+      unassign … 替えの絵が在庫に無い行の**絵を外して未決定にする**（無料）。そのあと**その行（応答の
+                 `changed`）だけを生成**する（既存の「残りを生成」＝見積もり・確認つき）＝**ここでは生成しない**。
+                 ⚠️ **外した行に「在庫で埋める」（`fill_missing`/`apply_cutout_plan`）を使わない**: 在庫が
+                 尽きた行へは選択アルゴリズムの段3「この話で再使用」が**同じ絵を当て直す**（仕様）ので、
+                 重複が戻る（コピー環境の通しで実測・3/5行）。
+    line_ids: 指定した行（そのカットのどの行でもよい）だけを直す。省略は検査の指摘すべて。
+    apply=True で書く。選び直した行は絵の「確定」（`image_approved_at`）が外れる（絵が変わるので）。
+    Undo は `undo_duplicate_fix`。履歴はマニフェストの `duplicate_fixes`。
+    """
+    if mode not in _FIX_MODES:
+        raise ValueError(f"mode は {' / '.join(_FIX_MODES)} のいずれか")
+    ctx = _duplicate_inputs(project_id, episode, protected_line_ids, window, near_threshold)
+    items = ctx["report"]["items"]
+    if line_ids is not None:
+        wanted = set(line_ids)
+        items = [it for it in items if wanted & set(it["line_ids"])]
+    plan = aroll_duplicates.plan_fixes(
+        ctx["pcuts"], items, ctx["entry_of"], cutout_selector.select_replacement, window=window)
+    todo = [a for a in plan if a["action"] == ("reselect" if mode == "reselect" else "generate")]
+    summary = {
+        "found": len(items), "reselect": sum(1 for a in plan if a["action"] == "reselect"),
+        "generate": sum(1 for a in plan if a["action"] == "generate"),
+        "skip": sum(1 for a in plan if a["action"] == "skip"),
+        "keep": sum(1 for a in plan if a["action"] == "keep"),
+        "will_apply": len(todo),
+        # 概算（確定の見積もりは「残りを生成」の見積もりが正。ここは目安）
+        "estimated_cost_usd": round(sum(1 for a in plan if a["action"] == "generate") * AROLL_COST_PER_IMAGE_USD, 2),
+    }
+    out = {"project_id": project_id, "episode": episode, "mode": mode, "applied": False,
+           "plan": plan, "summary": summary, "conflicts": ctx["report"]["conflicts"]}
+    if not apply or not todo:
+        return out
+
+    manifest = ctx["manifest"]
+    panels_by_id = {p.get("line_id"): p for p in manifest.get("panels", [])}
+    changes, failed = [], []
+    for a in todo:
+        members = [panels_by_id[l] for l in a["line_ids"] if l in panels_by_id]
+        before = {"slot": a["from_slot"], "char": a["char_id"],
+                  "source": next((m.get("cutout_source") for m in members if m.get("cutout_slot_id")), None),
+                  "assigned_at": next((m.get("cutout_assigned_at") for m in members if m.get("cutout_slot_id")), None),
+                  "approval": {m["line_id"]: {k: m[k] for k in _APPROVAL_FIELDS if m.get(k)} for m in members}}
+        target = a["to_slot"] if mode == "reselect" else None
+        try:
+            set_cutout_selection(project_id, episode, a["line_id"], target, source="plan")
+        except ValueError as e:
+            failed.append({"line_id": a["line_id"], "reason": str(e)})
+            continue
+        changes.append({"line_ids": a["line_ids"], "head": a["line_id"], "cut_id": a["cut_id"],
+                        "char_id": a["char_id"], "from": a["from_slot"], "to": target, "before": before})
+    if changes:
+        m2 = load_manifest(project_id, episode) or {}
+        fix_id = "fix_" + _now().replace(":", "").replace("-", "")[:15]
+        hist = list(m2.get("duplicate_fixes") or [])
+        hist.append({"fix_id": fix_id, "at": _now(), "mode": mode, "changes": changes})
+        m2["duplicate_fixes"] = hist[-_FIX_HISTORY:]
+        save_manifest(project_id, episode, m2)
+        out["fix_id"] = fix_id
+    out.update(applied=bool(changes), changed=[c["head"] for c in changes], failed=failed)
+    if changes and mode == "unassign":
+        out["next_step"] = ("changed の行だけを生成する（run_aroll_batch の line_ids・見積もりを確認してから）。"
+                            "在庫で埋める（fill_missing）は使わない＝同じ絵が再使用で戻る")
+    return out
+
+
+def undo_duplicate_fix(project_id: str, episode: int, fix_id: str | None = None) -> dict:
+    """直前（または fix_id）の「重複を直した」を戻す（絵の割当と確定を元に戻す）。
+
+    **その後に別の変更があった行は戻さない**（今の割当が直した結果と違う行は skipped に理由つきで残す）。
+    在庫から消えた絵・未承認になった絵へは戻せない（skipped）。
+    """
+    manifest = load_manifest(project_id, episode)
+    if manifest is None:
+        raise ValueError("aroll.json not found")
+    hist = manifest.get("duplicate_fixes") or []
+    cand = [f for f in hist if not f.get("undone") and (fix_id is None or f["fix_id"] == fix_id)]
+    if not cand:
+        raise ValueError("戻せる「重複を直した」履歴がありません")
+    fix = cand[-1]
+    restored, skipped = [], []
+    for ch in reversed(fix["changes"]):
+        head = next((p for p in load_manifest(project_id, episode)["panels"] if p.get("line_id") == ch["head"]), None)
+        if head is None or (head.get("cutout_slot_id") or None) != (ch["to"] or None):
+            skipped.append({"line_id": ch["head"], "reason": "その後に絵が変わっているので戻さない"})
+            continue
+        b = ch["before"]
+        try:
+            set_cutout_selection(project_id, episode, ch["head"], b["slot"], source=b.get("source") or "plan")
+        except ValueError as e:
+            skipped.append({"line_id": ch["head"], "reason": str(e)})
+            continue
+        m = load_manifest(project_id, episode)
+        by_id = {p.get("line_id"): p for p in m["panels"]}
+        for lid in ch["line_ids"]:
+            p = by_id.get(lid)
+            if p is None:
+                continue
+            if b.get("assigned_at"):
+                p["cutout_assigned_at"] = b["assigned_at"]
+            for k, v in (b.get("approval", {}).get(lid) or {}).items():
+                p[k] = v
+        save_manifest(project_id, episode, m)
+        restored.append(ch["head"])
+    m = load_manifest(project_id, episode)
+    for f in m.get("duplicate_fixes") or []:
+        if f["fix_id"] == fix["fix_id"]:
+            f["undone"] = True
+            f["undone_at"] = _now()
+    save_manifest(project_id, episode, m)
+    return {"fix_id": fix["fix_id"], "mode": fix["mode"], "restored": restored, "skipped": skipped}
 
 
 def set_cutout_selection(project_id: str, episode: int, line_id: str, slot_id: str | None,
@@ -2729,8 +2975,8 @@ def apply_cutout_plan(project_id: str, episode: int, line_ids: list[str] | None 
     「在庫N行を割り当てる」を押すたびに確定済みのカットまで選び直され、確定も外れる。
     行を明示した時は従来どおり（呼び出し側がその行を選び直すと決めている）。
     """
-    plan = cutout_plan(project_id, episode)
     targets = None if line_ids is None else set(line_ids)
+    plan = cutout_plan(project_id, episode, reselect_line_ids=targets)
     applied, skipped, kept, cuts_done = [], 0, 0, 0
     for line in plan["lines"]:
         if targets is None and line["decided"]:

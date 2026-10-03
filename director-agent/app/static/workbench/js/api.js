@@ -62,6 +62,13 @@ export function createApi(fetchImpl = (...a) => fetch(...a)) {
       autoAssignBackgrounds: (pid, n, body) => call('POST', `${ar(pid, n)}/backgrounds/auto_assign`, body),
       setCut: (pid, n, lineId, body) => call('PUT', `${ar(pid, n)}/cuts/${encodeURIComponent(lineId)}`, body),
     },
+    // 同じ絵の繰り返し（Docs/AROLL_DUPLICATE_CHECK_PLAN.md）。director の窓口が ✋手直し済みの行を守って scrapping へ中継する。
+    // fix は apply:false が案だけ（何も書かない）・apply:true で書く（無料・生成はしない）
+    dup: {
+      report: (pid, n) => call('GET', `${ep(pid, n)}/aroll-duplicates`),
+      fix: (pid, n, body) => call('POST', `${ep(pid, n)}/aroll-duplicates/fix`, body),
+      undo: (pid, n, fixId) => call('POST', `${ep(pid, n)}/aroll-duplicates/undo`, fixId ? { fix_id: fixId } : {}),
+    },
     // 仕上がり（ホスト工程＝Photoshop の常駐へのジョブ。director はキューに書くだけ・HTTPでは繋がない）
     psassist: {
       jobs: (pid, n) => call('GET', `${ep(pid, n)}/psassist/jobs`),
