@@ -799,6 +799,16 @@ async function picker() {
   } catch (e) { fail(e); }
 }
 
+// 先頭へ戻るボタン: 少しスクロールしたら出す
+(function totop() {
+  const b = document.getElementById('totop');
+  if (!b) return;
+  const sync = () => { b.hidden = window.scrollY < 400; };
+  window.addEventListener('scroll', sync, { passive: true });
+  b.addEventListener('click', () => window.scrollTo({ top: 0, behavior: 'smooth' }));
+  sync();
+})();
+
 (async function boot() {
   if (!S.pid || !S.ep) { await picker(); return; }
   $('back').href = '/';
