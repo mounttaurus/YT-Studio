@@ -822,3 +822,10 @@ async function picker() {
     $('banner').innerHTML = `<div class="banner bad">この話数を読み込めませんでした: ${esc(e.message)}</div>`;
   }
 })();
+
+// director の台本・TTS タブ（併用の旧画面）で直して戻ってきた時に、状態を読み直す。
+// 編集中・確認中のモーダルは load() が触らない（drawModal を呼ばない）ので安全
+document.addEventListener('visibilitychange', () => {
+  if (document.hidden || !S.pid || !S.ep || !S.view || (S.modal && (S.modal.edited || S.modal.pending))) return;
+  load().catch(() => {});
+});

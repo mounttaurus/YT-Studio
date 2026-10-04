@@ -536,6 +536,9 @@
       <button class="tab-btn" :class="{ active: tab === 'script' }" @click="setTab('script')">📝 台本</button>
       <button class="tab-btn" :class="{ active: tab === 'tts' }" @click="setTab('tts')">🎙️ TTS</button>
       <button class="tab-btn" :class="{ active: tab === 'footage' }" @click="setTab('footage')">📦 素材</button>
+      <!-- Aロールは行ワークベンチの「絵」タブ（別ページ）。director にはタブ本体を置かない（Docs/DIRECTOR_CLASSIC_UI_PLAN.md C-4） -->
+      <a class="tab-btn" x-show="currentProject && activeEpisodeNumber" :href="workbenchUrl('aroll')" target="_blank"
+         style="text-decoration:none" title="行ワークベンチの絵（Aロール）タブを別ページで開きます">🖼️ Aロール ↗</a>
       <button class="tab-btn" :class="{ active: tab === 'chara' }" @click="setTab('chara')">🎭 キャラ</button>
       <button class="tab-btn" :class="{ active: tab === 'bg' }" @click="setTab('bg')">🏞️ 背景</button>
       <button class="tab-btn" :class="{ active: tab === 'charLib' }" @click="setTab('charLib')">📚 キャラ在庫</button>
@@ -6416,7 +6419,9 @@ function app() {
       if (speakerId !== line.speaker_id) calls.push(['speaker', { line_id: line.id, speaker_id: speakerId, speaker_name: speakerName }]);
       if (this.editBuffer.emotion !== line.emotion) calls.push(['emotion', { line_id: line.id, emotion: this.editBuffer.emotion }]);
       const edit = { line_id: line.id };
-      if (this.editBuffer.text !== line.text) edit.text = this.editBuffer.text;
+      // 本文に改行は意味が無い（TTS・字幕・吹き出しへ流れる）。ワークベンチの oneLine と同じ扱い
+      const newText = (this.editBuffer.text || '').replace(/[\r\n]+/g, '');
+      if (newText !== line.text) edit.text = newText;
       if (speed !== Number(line.speed)) edit.speed = speed;
       if (pause !== Number(line.pause_after_sec)) edit.pause_after_sec = pause;
       if (Object.keys(edit).length > 1) calls.push(['edit', edit]);
@@ -6443,7 +6448,7 @@ function app() {
       const line = this.draft?.lines?.find(l => l.order === order);
       if (!line) return;
       // 完全な空行を追加する（話者はコピーしない＝挿入後に配役キャラから選ぶ）
-      const data = await this.lineOp('insert', { after_line_id: line.id }, '行追加エラー');
+      const data = await this.lineOp('insert', { after_line_id: line.id, text: '' }, '行追加エラー');
       if (!data) return;
       await this.afterLineOp();
       // 追加した行をすぐ編集モードにする
