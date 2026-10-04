@@ -33,7 +33,8 @@ def list_models() -> list[dict]:
     return [
         {"id": "gemini/gemini-2.5-pro", "label": "Gemini 2.5 Pro（合成・既定）", "available": gemini_ok},
         {"id": "gemini/gemini-2.5-flash", "label": "Gemini 2.5 Flash（高速）", "available": gemini_ok},
-        {"id": "gemini/gemini-2.5-flash-lite", "label": "Gemini 2.5 Flash Lite", "available": gemini_ok},
+        # 2.5-flash-lite は 2026-10-03 に404「no longer available to new users」→ Google指定の後継へ
+        {"id": "gemini/gemini-3.5-flash-lite", "label": "Gemini 3.5 Flash Lite", "available": gemini_ok},
         {"id": "cloudflare/llama-3.3-70b", "label": "Cloudflare Llama 3.3 70B（保険）", "available": cf_ok},
     ]
 

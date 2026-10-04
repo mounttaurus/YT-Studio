@@ -12,12 +12,15 @@ LLMで生成する。章（section）単位で1回のLLM呼び出しにまとめ
   query_generator と同じ _parse_llm_json パターンでJSONを取り出す。
 """
 import json
+import logging
 import os
 import re
 from typing import Optional
 
 from app.core import cutout_selector, emotion_rubric, llm_client, panel_presets
 from app.core.query_generator import _parse_llm_json, group_lines_by_section
+
+logger = logging.getLogger(__name__)
 
 # 演技スロット（2026-08-19新規）: 画像再利用の照合キーに使う4軸。
 # 語彙は panel_presets.py（🎬紙芝居タブと共有）から動的に読む＝ハードコードしない。
@@ -423,8 +426,11 @@ async def generate_section_prompts(
                     f"機微なテーマは、モデルに {REFUSAL_HINT_MODEL} を指定すると通ります")
                 refused.__cause__ = e
                 break
-            # 時間切れ・429/503・JSONの壊れ → 次のモデルへ
+            # 時間切れ・429/503・JSONの壊れ・モデル名の提供終了(404) → 次のモデルへ。
+            # warnings は応答にしか載らないのでログにも出す（既定モデルが404になっても
+            # 無料ルーターへ無音で切り替わり続けるのを docker logs で気付けるように）
             warnings.append(f"[{section}] {m} failed: {str(e)[:150]}")
+            logger.warning("aroll prompt: %s failed, trying next model: %s", m, str(e)[:200])
 
     # 有料の最終フォールバック（オプトインした環境だけ・どのモデルで通ったかを結果に残す＝LLM_FALLBACK_PLAN §0 の4）
     paid = paid_fallback_model()
@@ -435,6 +441,7 @@ async def generate_section_prompts(
                                         timeout=CALL_TIMEOUT_SEC)
             parsed, used_model = _parse_llm_json(raw), paid
             warnings.append(f"[{section}] {why}のため {paid}（有料）で生成しました")
+            logger.warning("aroll prompt: %s; generated with paid fallback %s", why, paid)
         except Exception as e:  # noqa: BLE001
             last_err = e
             warnings.append(f"[{section}] {paid}（有料）も失敗: {str(e)[:150]}")

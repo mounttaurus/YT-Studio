@@ -194,7 +194,8 @@ PROVIDERS: list[dict] = [
         "models": [
             {"id": "gemini/gemini-2.5-pro",        "label": "Gemini 2.5 Pro",        "tier": "high"},
             {"id": "gemini/gemini-2.5-flash",      "label": "Gemini 2.5 Flash",      "tier": "mid"},
-            {"id": "gemini/gemini-2.5-flash-lite", "label": "Gemini 2.5 Flash Lite", "tier": "fast"},
+            # 2.5-flash-lite は 2026-10-03 に404「no longer available to new users」→ Google指定の後継へ
+            {"id": "gemini/gemini-3.5-flash-lite", "label": "Gemini 3.5 Flash Lite", "tier": "fast"},
         ],
     },
     {
