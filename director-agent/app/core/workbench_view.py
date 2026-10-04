@@ -129,7 +129,31 @@ def _bubble_stale(p: dict | None, plan_p: dict | None) -> bool:
     return plan_b.get("key_source") == "user"
 
 
-def _build_state(p: dict | None, plan_p: dict | None, qa_p: dict | None, versions: dict) -> str:
+def _bubble_key(s: str | None) -> str:
+    """吹き出し文字の比較用（qa_check._bubble_text_key と同じ：改行と前後の空白だけ吸収）。"""
+    return (s or "").replace("\r", "").replace("\n", "").strip()
+
+
+def _text_stale_now(qa_p: dict | None, live_text: str | None) -> bool:
+    """PSD の吹き出し文字が、**今の台本**と食い違うか（表示のたびに計算する）。
+
+    QA の `text_stale` は検査した瞬間の台本との比較で、台本をその後に直しても QA は走らない＝直した行が
+    「問題なし」のまま残る穴があった（2026-10-04・本番1話で32行中28行が見逃されていた）。
+    比べる相手は、QA が記録した PSD の実際の文字（`psd_text`）。旧い記録には無いので、`text_stale` でなかった行に限り
+    検査時点の台本（`text`＝この時は PSD と一致していた）で代用する。
+    """
+    if not qa_p or not (live_text or "").strip():
+        return False
+    psd_text = qa_p.get("psd_text")
+    if psd_text is None and not qa_p.get("text_stale"):
+        psd_text = qa_p.get("text")
+    if psd_text is None:
+        return False
+    return _bubble_key(psd_text) != _bubble_key(live_text)
+
+
+def _build_state(p: dict | None, plan_p: dict | None, qa_p: dict | None, versions: dict,
+                 live_text: str | None = None) -> str:
     """行の合成の状態（director の旧 `arollBuildState` の移し替え・判定をサーバーへ）。
 
     ungenerated＝絵がまだ無い／unplanned＝プラン未作成／unbuilt＝PSD 未合成／
@@ -153,7 +177,7 @@ def _build_state(p: dict | None, plan_p: dict | None, qa_p: dict | None, version
         cv = versions.get(slot)
         if pv and cv and pv != cv:
             return "restale"
-    if qa_p.get("text_stale"):          # 絵は同じでも、台本の文面が変わって吹き出しの文字が古い
+    if qa_p.get("text_stale") or _text_stale_now(qa_p, live_text):   # 絵は同じでも、台本の文面が変わって吹き出しの文字が古い
         return "restale"
     if _bubble_stale(p, plan_p):        # 吹き出しの形を選び直した（上書きを足した・変えた・外した）
         return "restale"
@@ -221,16 +245,25 @@ def _psassist_meta(qa_doc: dict, plan: dict, worker: dict | None) -> dict:
 
 
 def _final_view(plan_p: dict | None, qa_p: dict | None, state: str, psd: dict, *, pid: str, ep: int,
-                bubble_stale: bool = False) -> dict:
+                bubble_stale: bool = False, live_text: str | None = None) -> dict:
     """1行の仕上がり。プランの印（`status`・`warnings`・`bubble`）に、合成チェックの結果（重さ・指摘・画像）と
     ✋手直し済みを足す。検査していない行は QA の項目を持たない。"""
     out = {"status": (plan_p or {}).get("status"), "warnings": (plan_p or {}).get("warnings") or [],
            "bubble": ((plan_p or {}).get("bubble") or {}).get("kind")} if plan_p else {"status": None}
     base = f"/projects/{pid}/episodes/{ep}/psassist/file/"
     if qa_p:
+        # QA 実行後に台本が変わった行は、QA の記録が「問題なし」のままでも指摘を足して見える化する
+        stale_now = _text_stale_now(qa_p, live_text)
+        issues = list(qa_p.get("issues") or [])
+        severity = qa_p.get("severity")
+        if stale_now and not any(i.get("code") == "TEXT_STALE" for i in issues):
+            issues.append({"code": "TEXT_STALE", "severity": "advisory",
+                           "label": "セリフが変わりました（吹き出しの文字が古いままです）"})
+            if severity == "clean":
+                severity = "advisory"
         out.update({
-            "severity": qa_p.get("severity"), "issues": qa_p.get("issues") or [], "measured": qa_p.get("measured") or {},
-            "text_stale": bool(qa_p.get("text_stale")), "psd": qa_p.get("psd"),
+            "severity": severity, "issues": issues, "measured": qa_p.get("measured") or {},
+            "text_stale": bool(qa_p.get("text_stale")) or stale_now, "psd": qa_p.get("psd"),
             "thumb": base + qa_p["thumb"] if qa_p.get("thumb") else None,
             "view": base + qa_p["view"] if qa_p.get("view") else None,
             "export": base + qa_p["export"] if qa_p.get("export") else None})
@@ -275,10 +308,13 @@ async def build_view(project_id: str, episode: int) -> dict:
     records = psd_records.load_records(psa_dir)
     ver_cache: dict = {}
 
+    live_text = {l.get("id"): l.get("text") or "" for l in lines}
+
     def build_state(lid: str) -> str:
         p = aroll["panels"].get(lid)
         cid = (p or {}).get("cutout_char_id") or (((p or {}).get("characters") or [None])[0])
-        return _build_state(p, plan.get(lid), qa.get(lid), _lib_versions(chars_dir, cid, ver_cache) if cid else {})
+        return _build_state(p, plan.get(lid), qa.get(lid), _lib_versions(chars_dir, cid, ver_cache) if cid else {},
+                            live_text.get(lid))
     actx = {"pid": project_id, "ep": episode, "plan": plan, "char_name": char_name, "build_state": build_state}
 
     ep_meta = next((e for e in pj.get("episodes", []) if e.get("number") == episode), {})
@@ -297,7 +333,7 @@ async def build_view(project_id: str, episode: int) -> dict:
             "tts": _tts_view(tts, entries, lid),
             "aroll": _aroll_view(aroll, lid, actx),
             "final": _final_view(pl, qa.get(lid), build_state(lid), psd_records.psd_state(psa_dir, records, lid), pid=project_id, ep=episode,
-                                bubble_stale=_bubble_stale(aroll["panels"].get(lid), pl)),
+                                bubble_stale=_bubble_stale(aroll["panels"].get(lid), pl), live_text=live_text.get(lid)),
         })
 
     return {

@@ -344,14 +344,18 @@ def check_panel(psd_path: str, meta: dict, bgs: dict, export_png: str | None,
 
     # ── ⑦ 吹き出しの文字が台本の今の文面と食い違う（D1/D2・2026-09-24） ──
     # 台本から消えた行(current_scriptに無い)は比較しない（絵のstale判定と同じ扱い）。
+    # ⚠️ `text_stale` は検査した瞬間の台本との比較でしかない。台本をその後に直しても QA は走らないので、
+    # director は `psd_text`（PSDに実際に入っている文字）を今の台本と見比べて自分で判定する（workbench_view）。
     text_stale = False
     now_text = (current_script or {}).get(line_id)
-    if L["text"] is not None and now_text:
+    psd_text = None
+    if L["text"] is not None:
         try:
             psd_text = L["text"].text
         except Exception:
             psd_text = None
-        if psd_text is not None and _bubble_text_key(psd_text) != _bubble_text_key(now_text):
+    if psd_text is not None and now_text:
+        if _bubble_text_key(psd_text) != _bubble_text_key(now_text):
             text_stale = True
             add("TEXT_STALE", "advisory", "セリフが変わりました（吹き出しの文字が古いままです）")
 
@@ -483,7 +487,7 @@ def check_panel(psd_path: str, meta: dict, bgs: dict, export_png: str | None,
             sev = it["severity"]
 
     return {"psd": psd, "severity": sev, "issues": issues, "measured": measured,
-            "text_stale": text_stale}
+            "text_stale": text_stale, "psd_text": psd_text}
 
 
 # ── 表示用画像 ──────────────────────────────────────────────────────────
@@ -672,6 +676,7 @@ def run_pass(ctx: dict, files: list[str], *, verbose: bool) -> dict:
             "issues": r["issues"],
             "measured": r["measured"],
             "text_stale": r.get("text_stale", False),
+            "psd_text": r.get("psd_text"),
         })
         if verbose and (i % 25 == 0 or i == len(files)):
             print("  %3d/%3d  %.0f秒" % (i, len(files), time.time() - t0))
