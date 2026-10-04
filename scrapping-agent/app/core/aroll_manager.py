@@ -35,7 +35,7 @@ import httpx
 from app.core import (
     aroll_duplicates, aroll_prompt_generator, background_manager, camera_plan, character_manager,
     cut_planner, cutout_selector, nanobanana_client, panel_library_manager, panel_presets,
-    project_manager, shot_meter, slot_rules, stock_health, style_manager,
+    emotion_gate, project_manager, shot_meter, slot_rules, stock_health, style_manager,
 )
 
 SCHEMA_VERSION = "1.3.0"  # 1.3.0: panels[].parent_line_id を追加（サブ行・SUBLINE_PLAN §4-2）
@@ -1019,7 +1019,7 @@ def _stock_picture_bytes(panel: dict) -> bytes | None:
 
 
 def approve_images(project_id: str, episode: int, line_ids: list[str] | None = None,
-                   *, register: bool = True) -> dict:
+                   *, register: bool = True, stock_status: str = "approved") -> dict:
     """行の絵を**確定**する（``image_approved_at`` を立てる）。「この行の絵はこれでいい」の答え。
 
     T2（Docs/AROLL_UNIFIED_FLOW_PLAN.md §3）: 「承認」は2つの別の判断に割れている。
@@ -1125,6 +1125,8 @@ def approve_images(project_id: str, episode: int, line_ids: list[str] | None = N
                 model=p.get("model") or "", provider=p.get("provider") or "nanobanana",
                 source={"project_id": project_id, "episode": episode, "line_id": lid},
                 emotion_tag=slot.get("emotion_tag") or "",
+                # 登録ゲートが有効なら pending で積み、ルートが観察してから決める（§4-5 ②）
+                review_status=stock_status,
             )
         except Exception as e:  # noqa: BLE001 — 1行の失敗で承認全体を落とさない
             skipped.append({"line_id": lid, "reason": f"取り込み失敗: {type(e).__name__}: {e}"})
@@ -1643,6 +1645,12 @@ async def generate_line_image(
                         project_id=project_id, episode=episode, line_id=line_id)
                     if log is not None:
                         log.append(f"📦 {line_id} 生成物を在庫へ登録(pending): {char_id}/{reg['slot_id']}")
+                    # 登録ゲート（Docs/STOCK_LABEL_ACCURACY_PLAN.md §4-5 ①）: 表情を観察し、依頼と食い違えば
+                    # 在庫のラベルを観察へ。この行の絵はそのまま使う（作り直しは課金なので人が判断する）
+                    gate = await emotion_gate.apply(char_id, reg["slot_id"], entrance="aroll_generated",
+                                                    target_status="pending")
+                    if gate.get("message") and log is not None:
+                        log.append(f"{line_id} {gate['message']}")
                 elif log is not None:
                     log.append(f"⚠️ {line_id} 切り抜きに失敗し在庫登録できませんでした: {reg.get('reason')}")
         elif len(chars) > 1 and log is not None:

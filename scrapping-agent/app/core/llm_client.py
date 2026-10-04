@@ -124,3 +124,62 @@ async def _chat(prompt, model, system, temperature, max_tokens) -> str:
     if not text.strip():
         raise LLMRefused(f"{model} の応答が空でした（安全フィルタで拒否された時の典型）")
     return text
+
+async def chat_vision(
+    prompt: str,
+    image_png: bytes,
+    model: str,
+    system: Optional[str] = None,
+    max_tokens: int = 600,
+    timeout: float = 60.0,
+) -> tuple[str, Optional[float]]:
+    """画像1枚＋文字の問い合わせ（感情の観察・`emotion_vision`）。(応答の文字, 費用USD or None) を返す。
+
+    `anthropic/…`・`gemini/…`・`openrouter/…:free` で共通（litellm の image_url に data URI を渡す）。
+    OpenRouter の有料モデルは `chat` と同じく拒否する。温度は 0（同じ絵に同じ答え＝自己一致を測れるように）。
+    ストリーミングで受ける理由は `chat` と同じ（Docker Desktop の NAT が無通信の接続を切る）。
+    費用は litellm の価格表から計算する（表に無いモデル・無料モデルは None か 0）。
+    """
+    import base64
+
+    if model.startswith("openrouter/") and not _is_free_openrouter_model(model):
+        raise ValueError(f"OpenRouter経由の有料モデルは使えません: {model}")
+    messages = []
+    if system:
+        messages.append({"role": "system", "content": system})
+    messages.append({"role": "user", "content": [
+        {"type": "text", "text": prompt},
+        {"type": "image_url", "image_url": {"url": "data:image/png;base64," + base64.b64encode(image_png).decode()}},
+    ]})
+    kwargs = _build_api_kwargs(model)
+    if _supports_temperature(model):
+        kwargs["temperature"] = 0.0
+
+    async def _run():
+        stream = await litellm.acompletion(model=model, messages=messages, max_tokens=max_tokens,
+                                           stream=True, stream_options={"include_usage": True}, **kwargs)
+        chunks, parts, finish = [], [], None
+        async for chunk in stream:
+            chunks.append(chunk)
+            if chunk.choices:
+                delta = chunk.choices[0].delta.content
+                if delta:
+                    parts.append(delta)
+                finish = getattr(chunk.choices[0], "finish_reason", None) or finish
+        return "".join(parts), finish, chunks
+
+    try:
+        text, finish, chunks = await asyncio.wait_for(_run(), timeout)
+    except asyncio.TimeoutError:
+        raise LLMTimeout(f"{model} が {timeout:.0f} 秒以内に応答しませんでした")
+    if finish and str(finish).lower() in ("content_filter", "safety", "prohibited_content", "recitation"):
+        raise LLMRefused(f"{model} が安全フィルタで応答を止めました（finish_reason={finish}）")
+    if not text.strip():
+        raise LLMRefused(f"{model} の応答が空でした")
+    cost = None
+    try:
+        built = litellm.stream_chunk_builder(chunks, messages=messages)
+        cost = float(litellm.completion_cost(completion_response=built, model=model))
+    except Exception:  # noqa: BLE001 — 価格表に無いモデル。費用が分からないだけで観察は有効
+        cost = None
+    return text, cost

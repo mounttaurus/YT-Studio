@@ -28,6 +28,7 @@ from app.core import (
     cloudflare_client,
     comfy_client,
     cutout_selector,
+    emotion_gate,
     emotion_rubric,
     grok_image_client,
     grok_video_client,
@@ -557,6 +558,9 @@ async def upload_panel_library_image(
         raise HTTPException(status_code=502, detail=f"panel library upload failed: {e}")
     if not result.get("registered"):
         raise HTTPException(status_code=400, detail=result.get("reason") or "登録に失敗しました")
+    # 登録ゲート（§4-5 ④）: 人が選んだラベルは変えない。観察は下書きとして残し、食い違えば承認カードで見せる
+    result["emotion_gate"] = await emotion_gate.apply(
+        char_id, result["slot_id"], entrance="upload", target_status="pending")
     return result
 
 
@@ -2464,10 +2468,18 @@ async def aroll_approve_images(project_id: str, episode_number: int,
     （旧 `/aroll/sync/accept` は撤去・本エンドポイントへ統合。2026-09-24）。
     """
     try:
-        return aroll_manager.approve_images(
-            project_id, episode_number, req.line_ids, register=req.register)
+        res = aroll_manager.approve_images(
+            project_id, episode_number, req.line_ids, register=req.register,
+            stock_status=emotion_gate.initial_status("approved"))
     except ValueError as e:
         raise HTTPException(status_code=404, detail=str(e))
+    # 登録ゲート（Docs/STOCK_LABEL_ACCURACY_PLAN.md §4-5 ②）: 積んだ絵の表情を観察。一致すれば approved、
+    # 食い違い・判定不能は pending（観察した感情の在庫として人の確認待ち）。無効なら何もしない
+    if emotion_gate.enabled():
+        for ent in res.get("entries") or []:
+            ent["emotion_gate"] = await emotion_gate.apply(
+                ent["char_id"], ent["slot_id"], entrance="approve", target_status="approved")
+    return res
 
 
 @router.post("/projects/{project_id}/episodes/{episode_number}/aroll/normalize-filenames")
@@ -2864,7 +2876,9 @@ async def aroll_fill_missing(project_id: str, episode_number: int, req: ArollFil
 @router.post("/characters/{char_id}/panel_library/approve-all")
 async def approve_all_panel_library(char_id: str, kind: str = "cutout"):
     """指定 kind の pending をまとめて承認する（取り込み直後の194件などを一括で通す）。"""
-    return {"char_id": char_id, "kind": kind, "approved": panel_library_manager.approve_all(char_id, kind)}
+    return {"char_id": char_id, "kind": kind, "approved": panel_library_manager.approve_all(char_id, kind),
+            # 登録ゲートが人の確認に回した絵（観察が依頼と食い違った・判定不能）は一括承認しない（§4-5 ⑤）
+            "held_by_gate": panel_library_manager.count_held_by_gate(char_id, kind)}
 
 
 @router.get("/characters/{char_id}/panel_library/cutout/{filename}")

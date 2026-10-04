@@ -533,16 +533,30 @@ def approve_all(char_id: str, kind: str = "cutout") -> int:
 
     取り込み直後は全件 pending（安全弁）で、194件を1枚ずつ承認するのは現実的でない。
     却下は既存の DELETE（1件ずつ）で行う＝**まとめて入れて、要らないものを落とす**運用。
+
+    ⚠️ 登録ゲートが止めた絵（観察が依頼と食い違った・判定不能＝`held_by_gate`）は**まとめて承認しない**
+    （`Docs/STOCK_LABEL_ACCURACY_PLAN.md` §4-5 ⑤）。人が1枚ずつ見て承認する（`approve_entry`）。件数は
+    `count_held_by_gate` で返す。
     """
     data = load_index(char_id)
     n = 0
     for e in data.get("entries", []):
-        if e.get("kind", "panel") == kind and e.get("review_status") == "pending":
+        if e.get("kind", "panel") == kind and e.get("review_status") == "pending" and not held_by_gate(e):
             e["review_status"] = "approved"
             n += 1
     if n:
         save_index(char_id, data)
     return n
+
+
+def held_by_gate(entry: dict) -> bool:
+    """登録ゲートが人の確認に回した絵か（観察が依頼と食い違った・判定不能）。"""
+    return (entry.get("emotion_check") or {}).get("status") in ("disagree", "ambiguous")
+
+
+def count_held_by_gate(char_id: str, kind: str = "cutout") -> int:
+    return sum(1 for e in load_index(char_id).get("entries", [])
+               if e.get("kind", "panel") == kind and e.get("review_status") == "pending" and held_by_gate(e))
 
 
 def get_entry(char_id: str, slot_id: str) -> dict | None:
@@ -640,7 +654,7 @@ EMOTION_LOG_KEEP = 10
 
 
 def set_emotion_tags(char_id: str, updates: dict[str, dict], *, source: str = "user",
-                     dry_run: bool = True, note: str = "", backup: bool = True) -> dict:
+                     dry_run: bool = True, note: str = "", backup: bool = True, log: bool = True) -> dict:
     """感情タグ（主タグ＋副タグ・2層の辞書）の**唯一の書き手**（`Docs/STOCK_LABEL_ACCURACY_PLAN.md` §14）。
 
     updates: `slot_id` → `{"tag": 主タグ, "subs": [副タグ…]}`（subs 省略＝副タグなし）。
@@ -652,6 +666,9 @@ def set_emotion_tags(char_id: str, updates: dict[str, dict], *, source: str = "u
     - 既定は dry_run＝件数と系統ごとの増減だけ返す。書く時はキャラ単位のロック・自動バックアップ・
       `emotion_review_log` に変更前の値を残す（`undo_emotion_tags` で戻せる）。
     - ⚠️ `slot_id` は変えない（ラベル≠ID・CLAUDE.md の罠）。
+    - source="vision"（登録ゲートが観察を採る時）は人の確認ではないので `emotion_reviewed_at` を書かず、
+      `label_source` も "vision" にする。1枚ずつの登録で呼ぶので backup=False・log=False で呼ぶ
+      （`emotion_review_log` は最大 10 件＝登録のたびに積むと人の一括適用の Undo が押し出される）。
     """
     errors: dict[str, list[str]] = {}
     # dry-run は読むだけ＝ロック（ロックファイルを作る）を取らない（読み取り専用の場所でも試算できる）
@@ -702,12 +719,16 @@ def set_emotion_tags(char_id: str, updates: dict[str, dict], *, source: str = "u
             if fam != e.get("emotion") and not e.get("emotion_requested") and e.get("emotion"):
                 e["emotion_requested"] = e.get("emotion")
             if fam != e.get("emotion"):
-                e["label_source"] = "user"
+                e["label_source"] = source
             e["emotion"] = fam
             e["emotion_tag"] = tag
             e["emotion_sub_tags"] = subs
             e["emotion_source"] = source
-            e["emotion_reviewed_at"] = now
+            if source == "user":
+                e["emotion_reviewed_at"] = now
+        if not log:
+            save_index(char_id, data)
+            return result
         log_id = "emo_" + now.replace(":", "").replace("-", "")
         log = data.setdefault("emotion_review_log", [])
         log.append({"log_id": log_id, "at": now, "source": source, "note": note,
@@ -716,6 +737,21 @@ def set_emotion_tags(char_id: str, updates: dict[str, dict], *, source: str = "u
         save_index(char_id, data)
         result["log_id"] = log_id
         return result
+
+
+def set_emotion_check(char_id: str, slot_id: str, check: dict, review_status: str | None = None) -> dict | None:
+    """登録ゲートの観察（`emotion_check`）と、ゲートが決めた `review_status` を書く（タグは書かない＝
+    タグの書き手は `set_emotion_tags` だけ）。キャラ単位のロック・原子的な保存。無ければ None。"""
+    with index_lock(char_id):
+        data = load_index(char_id)
+        for e in data.get("entries", []):
+            if e.get("slot_id") == slot_id:
+                e["emotion_check"] = check
+                if review_status:
+                    e["review_status"] = review_status
+                save_index(char_id, data)
+                return e
+    return None
 
 
 def undo_emotion_tags(char_id: str, log_id: str | None = None) -> dict:
@@ -1110,6 +1146,7 @@ async def generate_and_register(
     ok, why = character_manager.can_generate_images(char_id)
     if not ok:
         raise ValueError(why)
+    from app.core import emotion_gate  # 循環 import を避ける（emotion_gate → emotion_vision → この module）
     c = character_manager.read_character(char_id)
     appearance = (c.get("appearance_prompt") or "").strip()
     style = style_manager.get_style(style_name) or {}
@@ -1165,14 +1202,19 @@ async def generate_and_register(
         "created_at": _now(),
         # 切り抜きに失敗した場合だけ理由を残す（絵はパネルとして使えるので登録は続ける）
         "note": cut_note,
-        "review_status": review_status,
+        # 登録ゲート（§4-5 ③）が有効なら観察が終わるまで pending（終われば下の apply が決める）
+        "review_status": emotion_gate.initial_status(review_status) if cut_png else review_status,
         "times_used": 0,
+        "emotion_source": "request",
     }
     if cut_png:
         entry |= {"cutout": f"cutouts/{slot_id}.png", "fingerprint": fp, "mask": mask}
     idx["entries"].append(entry)
     save_index(char_id, idx)
-    return entry
+    if not cut_png:
+        return entry   # 切り抜きが無い＝顔を切り出せない。観察せずパネルとしてだけ残す
+    gate = await emotion_gate.apply(char_id, slot_id, entrance="library", target_status=review_status)
+    return dict(get_entry(char_id, slot_id) or entry, emotion_gate=gate)
 
 
 def register_from_image(
@@ -1214,6 +1256,10 @@ def register_from_image(
     shot, angle, pose, legacy_facing = _normalize_legacy_axes(shot=shot, angle=angle, pose=pose or None)
     pose = pose or ""
     facing = facing or legacy_facing
+    # ⚠️ 感情が空・語彙外の絵を積まない（§4-5 ⑥）。感情なしは完全一致でしか選ばれず死蔵になる
+    # （本番に `unknown_*`・None が 22 枚あった）。例外ではなく未登録で返す＝生成済みの行の絵は止めない。
+    if emotion not in emotion_rubric.vocab():
+        return {"registered": False, "reason": f"感情が語彙にありません（{emotion!r}）。在庫には積みません"}
 
     img_hash = hashlib.sha256(data).hexdigest()[:16]
     src = dict(source or {}, image_hash=img_hash)
