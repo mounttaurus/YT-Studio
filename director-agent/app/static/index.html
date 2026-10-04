@@ -1359,11 +1359,27 @@
               <!-- 台本プレビュー -->
               <div class="card" x-show="draft">
                 <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px;flex-wrap:wrap;gap:8px">
-                  <h2 style="margin-bottom:0">台本プレビュー <span style="font-weight:400;text-transform:none;color:#4b5563;font-size:11px">（行をクリックで行ワークベンチで開く（編集・分割・結合は窓口経由で音声・絵が追随）／チェックボックスでLLMの書き直し対象に選択・Shift+クリックで範囲選択）</span></h2>
+                  <h2 style="margin-bottom:0">台本プレビュー <span style="font-weight:400;text-transform:none;color:#4b5563;font-size:11px">（行をクリックで編集・チェックボックスで選択／Shift+クリックで範囲選択）</span></h2>
                   <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">
                     <label style="display:flex;align-items:center;gap:4px;font-size:11px;color:#94a3b8;cursor:pointer">
                       <input type="checkbox" x-model="onlyLongLines"> 長い行だけ表示
                     </label>
+                    <button class="btn btn-ghost btn-sm" :disabled="autoSplittingAll || !overLimitLineCount()"
+                            @click="autoSplitWholeEpisode()"
+                            :title="`上限(${autoSplitLimit}字)を超える行をまとめて自動区切りします（読点の無い行はスキップされます）`">
+                      <span x-text="autoSplittingAll ? '区切り中...' : `✂ 話数全体を自動区切り (${overLimitLineCount()})`"></span>
+                    </button>
+                    <button class="btn btn-ghost btn-sm" x-show="lineUndoable > 0" :disabled="undoing" @click="undoLastChange()"
+                            title="直前の行操作を1つ取り消します（ワークベンチと同じ履歴。台本・音声・コマが一緒に戻ります。LLM書き直し・JSON取り込みは履歴に載りません）">
+                      <span x-text="undoing ? '元に戻しています...' : `↺ 元に戻す (${lineUndoable})`"></span>
+                    </button>
+                    <button class="btn btn-primary btn-sm" x-show="lineConfirm && lineConfirm.unconfirmed.length"
+                            :disabled="confirmingLines" @click="confirmLines()"
+                            title="直した行を確定します（確定で音声の生成・絵の下ごしらえが動きます）">
+                      <span x-text="confirmingLines ? '確定中...' : `✓ 未確定 ${lineConfirm.unconfirmed.length}行を確定`"></span>
+                    </button>
+                    <a class="btn btn-ghost btn-sm" style="text-decoration:none" :href="workbenchUrl('script')" target="_blank"
+                       title="行ワークベンチで開く（絵・仕上がり・速度/間・テイクのやり直しなど）">🧰 ワークベンチ</a>
                   </div>
                 </div>
 
@@ -1391,9 +1407,9 @@
                   </template>
                   <template x-for="line in visibleLines()" :key="line.id">
                     <div class="script-line"
-                         :class="{ 'line-selected': selectedLineIds.includes(line.id) }"
+                         :class="{ editing: editingLineOrder === line.order, 'line-selected': selectedLineIds.includes(line.id) }"
                          :style="isSublineOf(line) ? 'margin-left:22px;border-left:2px solid #4c1d95' : ''"
-                         @click="openInWorkbench('script', line)">
+                         @click="toggleEdit(line)">
                       <input type="checkbox" class="line-select-cb"
                              :checked="selectedLineIds.includes(line.id)"
                              @click.stop="toggleLineSelect(line, $event)"
@@ -1411,6 +1427,11 @@
                           <div>
                             <div class="line-text" x-text="line.text"></div>
                             <div style="display:flex;gap:8px;align-items:center;margin-top:2px;flex-wrap:wrap">
+                              <span x-show="isLineUnconfirmed(line)" style="font-size:9px;color:#fbbf24" title="直した後まだ確定していません">● 未確定</span>
+                              <button x-show="isLineUnconfirmed(line)" class="btn btn-ghost btn-sm" style="padding:1px 8px;font-size:9px"
+                                      :disabled="confirmingLines" @click.stop="confirmLines([line.id])">✓ 確定</button>
+                              <a style="font-size:9px;color:#a78bfa;text-decoration:none" :href="workbenchUrl('script', line.id)" target="_blank"
+                                 @click.stop title="この行をワークベンチで開く">🧰</a>
                               <span style="font-size:9px" :style="lineDurationSec(line) > 12 ? 'color:#f59e0b' : 'color:#4b5563'"
                                     :title="lineDurationSec(line) > 12 ? '推定12秒超（サブ行に分けると1枚あたりの尺が短くなります）' : '推定尺（文字数からの概算）'"
                                     x-text="`〜${lineDurationSec(line)}秒`"></span>
@@ -1418,6 +1439,25 @@
                                     x-text="`サブ行 ${sublineCountFor(line)}件`"></span>
                               <span x-show="line.split_review" style="font-size:9px;color:#f59e0b"
                                     title="読点の位置で自動区切りされました。内容を確認してください">⚠ 要確認（自動区切り）</span>
+                              <button x-show="isOverSplitLimit(line)" class="btn btn-ghost btn-sm"
+                                      style="padding:1px 8px;font-size:9px;color:#f59e0b"
+                                      @click.stop="previewAutoSplit(line.order)"
+                                      :title="`上限(${autoSplitLimit}字)を超えています。自動区切りの候補を見る`">✂ 自動区切りの候補</button>
+                            </div>
+                            <div x-show="splitProposalFor && splitProposalFor.order === line.order"
+                                 style="margin-top:6px;padding:8px;background:#160d2e;border:1px solid #6d28d9;border-radius:6px" @click.stop>
+                              <div style="font-size:10px;color:#c4b5fd;margin-bottom:4px"
+                                   x-text="`自動区切りの候補（${splitProposalFor?.pieces?.length || 0}片）`"></div>
+                              <template x-for="(piece, pieceIdx) in splitProposalFor?.pieces || []" :key="pieceIdx">
+                                <div style="font-size:12px;color:#e2e8f0;padding:3px 0;border-top:1px solid #2d3748">
+                                  <span x-text="piece.text"></span>
+                                  <span x-show="piece.split_review" style="color:#f59e0b;font-size:9px;margin-left:4px">⚠読点で区切り・要確認</span>
+                                </div>
+                              </template>
+                              <div style="display:flex;gap:6px;margin-top:6px">
+                                <button class="btn btn-primary btn-sm" @click="applyAutoSplit(line.order)">この提案で区切る</button>
+                                <button class="btn btn-ghost btn-sm" @click="closeSplitProposal()">閉じる</button>
+                              </div>
                             </div>
                             <div x-show="missingLocalesForLine(line).length" style="display:flex;gap:4px;flex-wrap:wrap;margin-top:4px" @click.stop>
                               <template x-for="lang in missingLocalesForLine(line)" :key="lang">
@@ -1427,6 +1467,66 @@
                                         :title="`この新しい行を${lang.toUpperCase()}へ追加翻訳`"
                                         x-text="translatingNewLineKey === `${line.id}:${lang}` ? '翻訳中…' : `→ ${lang.toUpperCase()} 翻訳`"></button>
                               </template>
+                            </div>
+                          </div>
+                        </template>
+                        <template x-if="editingLineOrder === line.order">
+                          <div style="display:flex;flex-direction:column;gap:6px" @click.stop>
+                            <textarea class="line-text-edit" x-ref="editTextarea" x-model="editBuffer.text"
+                                      title="Enterで保存（Shift+Enterで改行／Ctrl+Enterでカーソル位置から分ける）"
+                                      @keydown.enter="$event.ctrlKey ? ($event.preventDefault(), splitLineAtCursor(line.order)) : (!$event.shiftKey && ($event.preventDefault(), saveLine(line.order)))"></textarea>
+                            <div style="display:flex;gap:6px;flex-wrap:wrap">
+                              <div class="form-group" style="flex:1.2">
+                                <label>話者 <span style="font-weight:400;color:#64748b">— 配役キャラから選択</span></label>
+                                <select x-model="editBuffer.speaker_choice" @change="onSpeakerChoiceChange()" style="padding:4px 8px;font-size:12px">
+                                  <option value="">（話者を選択）</option>
+                                  <template x-for="o in castSpeakerOptions()" :key="o.id">
+                                    <option :value="o.id" x-text="o.label"></option>
+                                  </template>
+                                </select>
+                              </div>
+                              <div class="form-group" style="flex:1.2">
+                                <label>Voice <span style="font-weight:400;color:#64748b">— キャラから自動</span></label>
+                                <div style="padding:5px 8px;font-size:12px;color:#a5b4fc" x-text="editBuffer.voice || 'none'"></div>
+                              </div>
+                              <template x-if="!castSpeakerOptions().length">
+                                <div style="flex-basis:100%;font-size:11px;color:#fbbf24">
+                                  配役がありません。キャラタブでキャラを作成し、🎙️TTSタブで各役にキャラを割り当ててください（Voiceはキャラに紐づきます）。
+                                </div>
+                              </template>
+                              <div class="form-group" style="flex:1">
+                                <label>感情</label>
+                                <select x-model="editBuffer.emotion" style="padding:4px 8px;font-size:12px">
+                                  <option>happy</option><option>neutral</option><option>surprised</option>
+                                  <option>sad</option><option>angry</option><option>thinking</option>
+                                  <option>serious</option><option>excited</option>
+                                </select>
+                              </div>
+                              <div class="form-group" style="flex:1">
+                                <label>速度</label>
+                                <input type="text" x-model="editBuffer.speed" style="padding:4px 8px;font-size:12px">
+                              </div>
+                              <div class="form-group" style="flex:1">
+                                <label>ポーズ(秒)</label>
+                                <input type="text" x-model="editBuffer.pause_after_sec" style="padding:4px 8px;font-size:12px">
+                              </div>
+                            </div>
+                            <div style="display:flex;gap:6px;flex-wrap:wrap">
+                              <button class="btn btn-primary btn-sm" @click.stop="saveLine(line.order)">保存</button>
+                              <button class="btn btn-ghost btn-sm" @click.stop="cancelEdit()">キャンセル</button>
+                              <button class="btn btn-ghost btn-sm" style="color:#f87171" @click.stop="deleteLine(line.order)">🗑 削除</button>
+                              <button class="btn btn-ghost btn-sm" @click.stop="insertLineAfter(line.order)">＋ 下に行を追加</button>
+                              <button class="btn btn-ghost btn-sm" @click.stop="moveLine(line.order, 'up')">▲ 上へ</button>
+                              <button class="btn btn-ghost btn-sm" @click.stop="moveLine(line.order, 'down')">▼ 下へ</button>
+                              <button class="btn btn-ghost btn-sm" style="color:#a78bfa"
+                                      title="テキストエリア内でカーソルを置いた位置から後ろをサブ行として分けます（近くの句読点へ吸着／Ctrl+Enterでも同じ操作）"
+                                      @click.stop="splitLineAtCursor(line.order)">✂ この位置で分ける</button>
+                              <button class="btn btn-ghost btn-sm" style="color:#a78bfa"
+                                      title="次の行のセリフをこの行へつなげます（次の行は削除扱い・音声は要作り直し）"
+                                      @click.stop="mergeLineWithNext(line.order)">🔗 次の行と結合</button>
+                              <button class="btn btn-ghost btn-sm" style="color:#a78bfa"
+                                      title="同じグループの新しいサブ行をこの行の直後に追加します"
+                                      @click.stop="addSubline(line.order)">＋ サブ行追加</button>
                             </div>
                           </div>
                         </template>
@@ -1710,7 +1810,7 @@
                   <p class="info-note" x-show="!ttsLang" style="margin-top:6px">
                     ここで設定した速度・ポーズは「全セリフ生成」実行時にプロジェクトへ保存されます。
                     「全行に適用」を押すと、現在の台本の全行の速度・ポーズをこの値で一括上書きします
-                    （個別の行は後から行ワークベンチで再調整できます）。
+                    （個別の行は後から「セリフ＆音声」一覧で再調整できます）。
                   </p>
 
                   <div style="margin-top:14px;display:flex;gap:10px;flex-wrap:wrap;align-items:center">
@@ -1804,10 +1904,113 @@
                     </template>
                   </div>
 
-                  <!-- W7: 原語のセリフの一覧・再生・行の編集・1行の生成・テイクのやり直しは行ワークベンチへ移した -->
-                  <div x-show="!ttsLang" class="info-note" style="padding-bottom:16px;display:flex;align-items:center;gap:12px;flex-wrap:wrap">
-                    <span>原語のセリフの<b>一覧・再生・行の編集・1行の生成・テイクのやり直し</b>は、行ワークベンチへ移りました（音声・絵が自動で追随します）。ここには全セリフ生成・配役・デフォルト・参照音声・多言語が残っています。</span>
-                    <a class="btn btn-primary btn-sm" style="text-decoration:none" :href="workbenchUrl('tts')" target="_blank">🧰 ワークベンチのTTSタブを開く</a>
+                  <div x-show="!ttsLang" style="display:flex;flex-direction:column;gap:6px;padding-bottom:72px">
+                    <template x-for="line in draft?.lines || []" :key="line.id">
+                      <div class="audio-line-row" :id="'ttsline-' + line.id" style="align-items:flex-start"
+                           :class="{ 'tts-line-playing': ttsPlayingLineId === line.id }"
+                           :style="(editingLineOrder === line.order ? 'border-color:#7c3aed;background:#13101f;' : '')
+                                   + (isSublineOf(line) ? 'margin-left:22px;border-left:2px solid #4c1d95;' : '')"
+                           @click="toggleEdit(line)">
+                        <!-- 左: 行番号・話者・状態 -->
+                        <div class="al-meta">
+                          <div style="display:flex;align-items:center;gap:6px;flex-wrap:wrap">
+                            <span style="font-size:11px;color:#4b5563">
+                              <span x-show="isSublineOf(line)" style="color:#a78bfa" title="サブ行">↳</span><span x-text="line.order"></span>
+                            </span>
+                            <span class="line-speaker" :class="speakerClass(line.speaker_id)" x-text="line.speaker_name"></span>
+                          </div>
+                          <div style="margin-top:4px;display:flex;align-items:center;gap:6px;flex-wrap:wrap">
+                            <span class="status-badge"
+                                  :class="regeneratingLineId === line.id ? 'status-running' : (lineTtsState(line) === 'done' ? 'status-done' : (lineTtsState(line) === 'stale' ? 'status-running' : 'status-pending'))"
+                                  x-text="regeneratingLineId === line.id ? '⏳ 生成中...' : (lineTtsState(line) === 'done' ? '✅ 生成済み' : (lineTtsState(line) === 'stale' ? '⚠ 要再生成' : '未生成'))"></span>
+                            <span x-show="ttsEntryFor(line)" style="font-size:10px;color:#4b5563"
+                                  x-text="ttsEntryFor(line) ? `${ttsEntryFor(line).duration_sec}s` : ''"></span>
+                            <span x-show="isLineUnconfirmed(line)" style="font-size:9px;color:#fbbf24" title="直した後まだ確定していません">● 未確定</span>
+                            <a style="font-size:9px;color:#a78bfa;text-decoration:none" :href="workbenchUrl('tts', line.id)" target="_blank"
+                               @click.stop title="この行をワークベンチで開く（速度・間・テイクのやり直しなど）">🧰</a>
+                            <span x-show="sublineCountFor(line) > 0" style="font-size:9px;color:#a78bfa"
+                                  x-text="`サブ行 ${sublineCountFor(line)}件`"></span>
+                            <span x-show="line.split_review" style="font-size:9px;color:#f59e0b"
+                                  title="読点の位置で自動区切りされました。内容を確認してください">⚠ 要確認</span>
+                          </div>
+                        </div>
+
+                        <!-- 中央: セリフ（クリックで編集）＋プレーヤー -->
+                        <div style="flex:1;min-width:0">
+                          <template x-if="editingLineOrder !== line.order">
+                            <div class="line-text" title="クリックで編集" x-text="line.text"></div>
+                          </template>
+                          <template x-if="editingLineOrder === line.order">
+                            <div style="display:flex;flex-direction:column;gap:6px" @click.stop>
+                              <textarea class="line-text-edit" x-ref="editTextarea" x-model="editBuffer.text"
+                                      title="Enterで保存（Shift+Enterで改行）"
+                                      @keydown.enter="!$event.shiftKey && ($event.preventDefault(), saveLine(line.order))"></textarea>
+                              <div style="display:flex;gap:6px;flex-wrap:wrap">
+                                <div class="form-group" style="flex:1.2">
+                                  <label>話者 <span style="font-weight:400;color:#64748b">— 配役キャラから選択</span></label>
+                                  <select x-model="editBuffer.speaker_choice" @change="onSpeakerChoiceChange()" style="padding:4px 8px;font-size:12px">
+                                    <option value="">（話者を選択）</option>
+                                    <template x-for="o in castSpeakerOptions()" :key="o.id">
+                                      <option :value="o.id" x-text="o.label"></option>
+                                    </template>
+                                  </select>
+                                </div>
+                                <div class="form-group" style="flex:1.2">
+                                  <label>Voice <span style="font-weight:400;color:#64748b">— キャラから自動</span></label>
+                                  <div style="padding:5px 8px;font-size:12px;color:#a5b4fc" x-text="editBuffer.voice || 'none'"></div>
+                                </div>
+                                <template x-if="!castSpeakerOptions().length">
+                                  <div style="flex-basis:100%;font-size:11px;color:#fbbf24">
+                                    配役がありません。キャラタブでキャラを作成し、上の「役に配役」でキャラを割り当ててください。
+                                  </div>
+                                </template>
+                                <div class="form-group" style="flex:1">
+                                  <label>感情</label>
+                                  <select x-model="editBuffer.emotion" style="padding:4px 8px;font-size:12px">
+                                    <option>happy</option><option>neutral</option><option>surprised</option>
+                                    <option>sad</option><option>angry</option><option>thinking</option>
+                                    <option>serious</option><option>excited</option>
+                                  </select>
+                                </div>
+                                <div class="form-group" style="flex:1">
+                                  <label>速度</label>
+                                  <input type="text" x-model="editBuffer.speed" style="padding:4px 8px;font-size:12px">
+                                </div>
+                                <div class="form-group" style="flex:1">
+                                  <label>ポーズ(秒)</label>
+                                  <input type="text" x-model="editBuffer.pause_after_sec" style="padding:4px 8px;font-size:12px">
+                                </div>
+                              </div>
+                              <div style="display:flex;gap:6px;flex-wrap:wrap">
+                                <button class="btn btn-primary btn-sm" @click="saveLine(line.order)">保存</button>
+                                <button class="btn btn-ghost btn-sm" @click="cancelEdit()">キャンセル</button>
+                              </div>
+                            </div>
+                          </template>
+                          <!-- 行単位再生成中のプログレスバー -->
+                          <div class="progress-indeterminate" x-show="regeneratingLineId === line.id"></div>
+                          <template x-if="ttsEntryFor(line) && regeneratingLineId !== line.id">
+                            <audio :src="episodeAudioUrl({ line_id: line.id })" controls preload="none"
+                                   style="width:100%;height:32px;margin-top:6px" @click.stop></audio>
+                          </template>
+                        </div>
+
+                        <!-- 右: 行操作 -->
+                        <div style="display:flex;flex-direction:column;gap:4px;flex-shrink:0" @click.stop>
+                          <button class="btn btn-ghost btn-sm" style="white-space:nowrap"
+                                  @click="playAllLines(line.id)" :disabled="!ttsEntryFor(line) || ttsRunning"
+                                  title="この行から最後まで順に再生します">▶ ここから再生</button>
+                          <button class="btn btn-ghost btn-sm" style="white-space:nowrap"
+                                  @click="regenSingleLine(line.id)"
+                                  :disabled="regeneratingLineId === line.id || ttsRunning || !currentEpisodeHasScript"
+                                  x-text="regeneratingLineId === line.id ? '生成中...' : '🎙 この行を生成'"></button>
+                          <button class="btn btn-ghost btn-sm" style="white-space:nowrap;color:#f87171"
+                                  @click="deleteLine(line.order)" :disabled="ttsRunning">🗑 削除</button>
+                          <button class="btn btn-ghost btn-sm" style="white-space:nowrap"
+                                  @click="insertLineAfter(line.order)" :disabled="ttsRunning">＋ 下に追加</button>
+                        </div>
+                      </div>
+                    </template>
                   </div>
                 </div>
 
@@ -2141,7 +2344,7 @@
               このキャラは画像を使わない（声のみ）
             </label>
             <div style="font-size:10px;color:#64748b;margin:2px 0 0">
-              ONにすると画像生成の全経路（🎭生成・📚キャラ在庫・行ワークベンチの絵の在庫化）から外れます。
+              ONにすると画像生成の全経路（🎭生成・📚キャラ在庫・🖼️Aロールの在庫化）から外れます。
               ナレーターや、既存キャラに声だけ変えて当てたバリアント向け。外見プロンプトは不要になります。
             </div>
 
@@ -4154,7 +4357,6 @@
   </template>
 </div>
 
-
 <!-- 新規キャラ作成モーダル -->
 <div class="modal-overlay" x-show="showNewCharaModal" x-cloak @keydown.escape.window="showNewCharaModal=false; clearNewCharaFiles()">
   <div class="modal-box">
@@ -4660,6 +4862,7 @@ function app() {
     editingStyleId: null,
     editingBuiltin: false,
     selectedTemplateId: '',
+    ttsVoices: [],
     newStyle: {
       style_name: '', description: '', target_line_count: 60, line_count_mode: 'auto', is_default: false,
       series_mode: false,
@@ -4678,15 +4881,21 @@ function app() {
     importingProject: false,
     feedbackText: '',
     editingLineOrder: null,
+    editBuffer: {},
     // 複数行選択・一括再生成
     selectedLineIds: [],
     lastClickedLineOrder: null,
     lineRegenFeedback: '',
     regeneratingLines: false,
     // 行操作のUndo（直前の1回のみ・import_scriptの仕組みを再利用して復元する）
-    undoSnapshot: null,
+    lineUndoable: 0,               // 窓口の履歴で戻せる件数（ワークベンチと共通）
+    lineConfirm: null,             // 確定の運用中の話数だけ { unconfirmed:[line_id], total, audioPending }
+    confirmingLines: false,
+    undoing: false,
     // 自動区切り（SUBLINE_PLAN §9・S5）。上限はsubline_manager.DEFAULT_SPLIT_LIMITと一致させる
     autoSplitLimit: 55,
+    splitProposalFor: null,
+    autoSplittingAll: false,
     onlyLongLines: false,
     modelFilter: '',
     showPendingProviders: false,
@@ -4767,24 +4976,63 @@ function app() {
     arollStatus: null,            // /aroll/status のポーリング結果
     arollRunning: false,
     arollPollTimer: null,
+    arollBusy: null,              // null | 'prompts'
+    arollLineBusy: null,          // 行単位生成中の line_id
+    arollPickerFor: null,          // キャラ画像ピッカーを開いている line_id
+    arollPickerItems: [],
+    arollPickerNote: '',
+    arollHoverPreview: null,       // 在庫サムネにマウスオーバー中の拡大表示URL（現在の絵の下に出す）
+    arollPickerThreshold: 0.073,
+    cutoutPlan: null,
+    cutoutPlanBusy: false,
+    cutoutPlanMsg: '',
+    arollPickerBusy: false,
+    arollBgPickerFor: null,        // 背景ピッカーを開いている line_id
+    arollBgPickerItems: [],
+    arollBgPickerBusy: false,
+    arollBgPickerCat: 'all',       // 系統チップの選択状態（location/psych/comic等・データから作る）
+    arollBgPickerFraming: '',      // 行のshot（framingはlocationにしか意味を持たないのでlocationにだけ適用）
+    arollBgAssignBusy: false,
+    arollMsg: '',
+    arollWarnings: [],
     arollStyle: 'kamishibai',
     arollAspect: '16:9',
-// missing | failed | all
-// OpenRouter課金退避（既定OFF）
-// OpenRouter残高（課金退避ON時に表示）
+    arollExtraPrompt: '',
+    arollOverwrite: false,
+    arollTarget: 'missing',       // missing | failed | all
+    arollPaidFallback: false,     // OpenRouter課金退避（既定OFF）
+    arollOrCredits: null,         // OpenRouter残高（課金退避ON時に表示）
     arollImgVersion: 0,           // サムネのキャッシュバスター
     arollSync: null,              // /aroll/sync（確定台本との差分レポート）
+    arollPanelTableOpen: true,    // コマ一覧セクションの開閉
+    arollExportBusy: false,
+    arollExportResult: null,      // 直近の /aroll/export レスポンス
+    arollApproveBusy: false,
 
-// psassist/qa_report.json
-// all | blocking | advisory | code:<CODE>
-// コマ一覧のチェック状態 {line_id: true}
+    // 🔍 合成チェック（PS-Assist が書いた qa_report.json を読むだけ）
+    qa: null,                     // psassist/qa_report.json
+    qaBusy: false,
+    qaFilter: 'all',              // all | blocking | advisory | code:<CODE>
+    qaDetail: null,               // 詳細ビューで開いているパネル
+    // Aロールタブの工程セクション開閉。**未設定なら進捗から自動で決める**（済んだ工程は畳む）。
+    // 手で開閉した分だけここに記録し、以後はその意思を尊重する（勝手に閉じ直さない）。
+    arollSecManual: {},
+    arollShowLegacyExport: false,  // 旧・手作業用の書き出し（既定で畳む）
+    arollChecked: {},              // コマ一覧のチェック状態 {line_id: true}
+    arollRowFilter: 'all',
     arollCuts: null,        // GET .../aroll/cuts の結果（毎回サーバで計算される）
-// 画像のキャッシュバスター
+    arollBulkBusy: false,
+    arollBulkMsg: '',
+    qaVersion: 0,                 // 画像のキャッシュバスター
 
-// 要組み直し判定用: {char_id: {slot_id: recut_ps_at||created_at}}
-// その話数のジョブ状態（新しい順）
-// ポーリング用 setInterval の id
-// P2b: 中断ボタンを押した後の二重押下防止
+    // 🖥️ ホスト工程ブリッジ（host_worker.py・AROLL_TAB_REDESIGN_PLAN.md Phase 0）
+    psassistWorker: null,         // GET /psassist/worker（プロジェクト非依存・タブを開いた時だけ叩く）
+    psCutoutPending: null,        // P4: この話数が使うキャラのPS切り抜き未処理枚数の合計（null=未取得）
+    charLibVersions: {},          // 要組み直し判定用: {char_id: {slot_id: recut_ps_at||created_at}}
+    psassistJobs: [],             // その話数のジョブ状態（新しい順）
+    psassistJobBusy: false,       // ジョブ投入中
+    psassistJobPollTimer: null,   // ポーリング用 setInterval の id
+    psassistCancelRequested: false, // P2b: 中断ボタンを押した後の二重押下防止
 
     // 🎞️ 編集情報タブ
     editOk: false,
@@ -4844,6 +5092,13 @@ function app() {
       await this.loadProjects();
       this.$watch('selectedModel', (val) => { if (val) localStorage.setItem('llm_last_model', val); });
       await this.restoreSession();
+      // ワークベンチ（別ページ）で直した後に戻ってきたら、台本・音声・確定の状態を読み直す
+      // （編集中・生成中は触らない）。書き込みは窓口が line_id で受けるので古い画面でも壊れないが、見た目の食い違いを避ける
+      document.addEventListener('visibilitychange', () => {
+        if (document.hidden || this.editingLineOrder != null || this.ttsRunning || this.viewingLocale) return;
+        if (!['script', 'tts'].includes(this.tab) || !this.currentProject || !this.activeEpisodeNumber) return;
+        this.loadEpisode(this.activeEpisodeNumber, true);
+      });
     },
 
     // 前回のプロジェクト・エピソード・タブをリロード後に復元する
@@ -5055,6 +5310,15 @@ function app() {
       };
     },
 
+    async loadTtsVoices() {
+      try {
+        const res = await fetch(`${SAPI}/tts-voices`);
+        const data = await res.json();
+        this.ttsVoices = data.profiles || [];
+      } catch(e) {
+        this.ttsVoices = [];
+      }
+    },
 
     openNewStyleModal() {
       this.editingStyleId = null;
@@ -5461,7 +5725,6 @@ function app() {
       if (!(keepUndo && isSameEpisode)) {
         this.selectedLineIds = [];  // 話が変わったら行選択もリセット（別話のline_idを引き継がない）
         this.lastClickedLineOrder = null;
-        this.undoSnapshot = null;   // Undoスナップショットも話をまたいで持ち越さない
       }
       if (r.ok) {
         this.draft = await r.json();
@@ -5473,6 +5736,7 @@ function app() {
       if (this.tab === 'footage') await this.refreshFootageTab();
       if (this.tab === 'editing') await this.refreshEditingTab();
       if (this.tab === 'script') await this.loadLocales();
+      await this.refreshLineMeta();
     },
 
     // ⚠️ **フル再生成は line_id を振り直す** ＝ Aロールの絵とTTSの音声の紐付けが全滅する
@@ -5575,11 +5839,11 @@ function app() {
         if (data.aroll) {
           msg += `\n\n🖼️ Aロール: ${data.aroll.panel_count}コマ分のプロンプトを用意しました`;
           const w = data.aroll.warnings || [];
-          if (w.length) msg += `\n⚠️ ${w.length}件の警告（行ワークベンチの絵タブで確認してください）`;
+          if (w.length) msg += `\n⚠️ ${w.length}件の警告（Aロールタブで確認してください）`;
         } else if (data.aroll_error) {
           // 承認そのものは成功している。ここを混ぜて「失敗した」と読ませない
           msg += `\n\n⚠️ Aロールのプロンプト生成は失敗しました（承認は完了しています）\n`
-               + `${data.aroll_error}\n行ワークベンチの絵タブから手動で実行できます。`;
+               + `${data.aroll_error}\n🖼️Aロールタブから手動で実行できます。`;
         }
         // P3（AROLL_TAB_REDESIGN_PLAN.md §6-d）: 背景の自動割当もプロンプトと同じ扱いで
         // 承認時に走る。only_missing 固定なので手で選び直した行は上書きされない。
@@ -5924,6 +6188,33 @@ function app() {
       await this.loadNamedDrafts();
     },
 
+    // ─── 行ワークベンチへの導線（絵・仕上がり・テイクのやり直しは別ページ /workbench/） ───
+    workbenchUrl(tab, lineId) {
+      const q = new URLSearchParams({ project: this.currentProject?.id || '', episode: String(this.activeEpisodeNumber || 1) });
+      if (tab) q.set('tab', tab);
+      if (lineId) q.set('line', lineId);
+      return `/workbench/?${q.toString()}`;
+    },
+    openInWorkbench(tab, line) {
+      window.open(this.workbenchUrl(tab, line?.id), '_blank');
+    },
+
+    toggleEdit(line) {
+      if (this.editingLineOrder === line.order) {
+        this.cancelEdit();
+      } else {
+        this.editingLineOrder = line.order;
+        const inCast = this.castSpeakerOptions().some(o => o.id === line.speaker_id);
+        this.editBuffer = {
+          text: line.text,
+          emotion: line.emotion,
+          speed: String(line.speed),
+          pause_after_sec: String(line.pause_after_sec),
+          speaker_choice: inCast ? line.speaker_id : '',
+          voice: this.voiceForSpeaker(line.speaker_id),
+        };
+      }
+    },
 
     // ─── 複数行選択・一括再生成 ─────────────────────────────────────
     toggleLineSelect(line, event) {
@@ -5945,19 +6236,112 @@ function app() {
       this.lastClickedLineOrder = line.order;
     },
 
-    // ─── Undo（直前の1回のみ）─────────────────────────────────────
-    // 台本を変更する操作の直前に、その時点のdraft全体をスナップショットしておく。
-    // 元に戻す時はimport_script(既存の外部台本取込み機構)へそのまま投げ直すだけで良い
-    // ＝Undo専用のバックエンドを新設していない。
-    captureUndoSnapshot() {
-      this.undoSnapshot = this.draft ? JSON.parse(JSON.stringify(this.draft)) : null;
+    // ─── 行の操作は全て director の窓口（POST /projects/{pid}/episodes/{n}/lines/{op}）を通す ───
+    // 旧画面は scripting-agent の行APIへ直接書いていた＝Undoの履歴・後処理（音声の要再生成・コマの追加・
+    // 要合成）・確定に乗らなかった。ワークベンチ・MCPと同じ窓口を使えば、どちらの画面で直しても
+    // 同じ履歴に載り、Undoも共通になる（Docs/DIRECTOR_CLASSIC_UI_PLAN.md C-1・C-2）。
+    lineApi(suffix) {
+      return `/projects/${this.currentProject.id}/episodes/${this.activeEpisodeNumber || 1}/lines/${suffix}`;
+    },
+
+    // 窓口の1操作。失敗は alert して null。成功は応答（new_line_ids など）を返す。
+    async lineOp(op, body = {}, errLabel = '操作エラー') {
+      if (!this.currentProject) return null;
+      let r, data;
+      try {
+        r = await fetch(this.lineApi(op), {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(body),
+        });
+        data = await r.json().catch(() => ({}));
+      } catch (e) {
+        alert(`${errLabel}: ${e}`);
+        return null;
+      }
+      if (!r.ok) {
+        alert(`${errLabel}: ${typeof data.detail === 'string' ? data.detail : (data.detail ? JSON.stringify(data.detail) : r.status)}`);
+        return null;
+      }
+      if (data.warnings?.length) alert('操作は完了しましたが、後処理で注意があります:\n' + data.warnings.join('\n'));
+      return data;
+    },
+
+    // 操作後の読み直し（orderが振り直されるのでサーバーから取り直す。音声・確定・Undo件数も）
+    async afterLineOp() {
+      const ep = this.activeEpisodeNumber || 1;
+      this.cancelEdit();
+      await this.loadEpisode(ep, true);
+      await Promise.all([this.loadEpisodes(), this.loadEpisodeTts()]);
+    },
+
+    // Undo件数（窓口の履歴）と確定の状態。どちらも窓口が正本
+    async refreshLineMeta() {
+      if (!this.currentProject || !this.activeEpisodeNumber) { this.lineUndoable = 0; this.lineConfirm = null; return; }
+      const get = (u) => fetch(u).then(r => r.ok ? r.json() : null).catch(() => null);
+      const [h, s] = await Promise.all([get(this.lineApi('history?limit=1')), get(this.lineApi('state'))]);
+      this.lineUndoable = h?.undoable || 0;
+      this.lineConfirm = s?.enabled
+        ? { unconfirmed: s.unconfirmed_line_ids || [], total: s.total || 0, audioPending: s.audio_pending_line_ids || [] }
+        : null;
+    },
+
+    isLineUnconfirmed(line) {
+      return !!this.lineConfirm && this.lineConfirm.unconfirmed.includes(line.id);
+    },
+
+    // 行の確定（line_ids 省略＝未確定すべて）。確定で音声の生成・絵の下ごしらえが動く
+    async confirmLines(lineIds) {
+      if (!this.currentProject || this.confirmingLines) return;
+      this.confirmingLines = true;
+      try {
+        const r = await fetch(this.lineApi('confirm'), {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(lineIds ? { line_ids: lineIds } : {}),
+        });
+        const data = await r.json().catch(() => ({}));
+        if (!r.ok) { alert('確定エラー: ' + (data.detail || r.status)); return; }
+        if (data.warnings?.length) alert('確定しました。注意:\n' + data.warnings.join('\n'));
+        await this.loadEpisodeTts();
+        await this.refreshLineMeta();
+      } finally {
+        this.confirmingLines = false;
+      }
+    },
+
+    // 窓口のUndo（ワークベンチと同じ履歴）。台本・音声・コマが一緒に戻る。
+    // 409＝窓口を通らない変更（LLM再生成・JSON取り込み・別画面）が挟まっている → 読み直しを促し、了承で強制
+    async undoLastChange() {
+      if (!this.currentProject || this.undoing) return;
+      this.undoing = true;
+      try {
+        let r = await fetch(this.lineApi('undo'), { method: 'POST' });
+        let data = await r.json().catch(() => ({}));
+        if (r.status === 409) {
+          if (!confirm((data.detail || '台本が別の経路で変更されています') + '\n\n強制的に戻しますか？')) return;
+          r = await fetch(this.lineApi('undo?force=true'), { method: 'POST' });
+          data = await r.json().catch(() => ({}));
+        }
+        if (!r.ok) { alert('元に戻せませんでした: ' + (data.detail || r.status)); return; }
+        if (data.warnings?.length) alert('戻しました。注意:\n' + data.warnings.join('\n'));
+        this.selectedLineIds = [];
+        await this.afterLineOp();
+      } finally {
+        this.undoing = false;
+      }
     },
 
 
+    async moveLine(order, direction) {
+      const line = this.draft?.lines?.find(l => l.order === order);
+      if (!line) return;
+      const data = await this.lineOp('move', { line_id: line.id, direction }, '移動できませんでした');
+      if (data) await this.afterLineOp();
+    },
 
     async regenerateSelectedLines() {
       if (!this.currentProject || !this.selectedLineIds.length || !this.lineRegenFeedback.trim()) return;
-      this.captureUndoSnapshot();
       this.regeneratingLines = true;
       try {
         const r = await fetch(`${SAPI}/projects/${this.currentProject.id}/episodes/${this.activeEpisodeNumber}/regenerate-lines`, {
@@ -5982,12 +6366,90 @@ function app() {
       }
     },
 
+    cancelEdit() {
+      this.editingLineOrder = null;
+      this.editBuffer = {};
+    },
+
+    // 行編集フォームの話者選択肢: 配役済みキャラ（config.tts.speakers[].character_id）のみ。
+    // 名前・声はキャラが唯一の本籍（DATA_SCHEMA §2b）。エキストラ（キャラ無し話者）は廃止。
+    castSpeakerOptions() {
+      const opts = [];
+      for (const sp of this.ttsSpeakers || []) {
+        if (!sp.character_id) continue;   // キャラ未割当の役は選ばせない（声が紐づかないため）
+        const c = this.charaForSpeaker(sp);
+        const nm = c ? (c.name || c.caption || sp.id) : (sp.name || sp.id);
+        opts.push({ id: sp.id, name: nm, label: `${nm}（${sp.role || '役'}）` });
+      }
+      return opts;
+    },
+
+    // 話者のVoice割当をキャラ本籍から解決する（config.tts.speakers→character.json）
+    voiceForSpeaker(speakerId) {
+      const sp = this.ttsSpeakers.find(s => s.id === speakerId);
+      return sp ? this.speakerResolvedVoice(sp) : 'none';   // キャラ割当があればその声を解決
+    },
+
+    // 話者プルダウン変更時: 選んだ役のVoice（キャラ由来）を表示に反映
+    onSpeakerChoiceChange() {
+      this.editBuffer.voice = this.editBuffer.speaker_choice
+        ? this.voiceForSpeaker(this.editBuffer.speaker_choice) : 'none';
+    },
 
 
+    async saveLine(order) {
+      if (!this.currentProject) return;
+      const line = this.draft?.lines?.find(l => l.order === order);
+      if (!line) return;
+      // 話者は配役済みキャラから選ぶ（エキストラ廃止）。未選択は保存不可。
+      const speakerId = this.editBuffer.speaker_choice || '';
+      if (!speakerId) {
+        alert('話者を選択してください。\nキャラタブでキャラを作成 → 🎙️TTSタブで役に割り当てると選べます。');
+        return;
+      }
+      const opt = this.castSpeakerOptions().find(o => o.id === speakerId);
+      const speakerName = opt?.name ?? speakerId;
+      // 窓口は項目ごとの操作（話者=speaker／感情=emotion／本文・速度・間=edit）。変えた項目だけ送る
+      const speed = parseFloat(this.editBuffer.speed) || 1.0;
+      const pause = parseFloat(this.editBuffer.pause_after_sec) || 0.4;
+      const calls = [];
+      if (speakerId !== line.speaker_id) calls.push(['speaker', { line_id: line.id, speaker_id: speakerId, speaker_name: speakerName }]);
+      if (this.editBuffer.emotion !== line.emotion) calls.push(['emotion', { line_id: line.id, emotion: this.editBuffer.emotion }]);
+      const edit = { line_id: line.id };
+      if (this.editBuffer.text !== line.text) edit.text = this.editBuffer.text;
+      if (speed !== Number(line.speed)) edit.speed = speed;
+      if (pause !== Number(line.pause_after_sec)) edit.pause_after_sec = pause;
+      if (Object.keys(edit).length > 1) calls.push(['edit', edit]);
+      if (!calls.length) { this.cancelEdit(); return; }
+      for (const [op, body] of calls) {
+        const data = await this.lineOp(op, body, '保存エラー');
+        if (!data) { await this.afterLineOp(); return; }   // 途中まで反映済みの可能性があるので読み直す
+      }
+      await this.afterLineOp();
+    },
 
 
+    async deleteLine(order) {
+      const line = this.draft?.lines?.find(l => l.order === order);
+      if (!line) return;
+      const head = (line.text || '').slice(0, 24);
+      if (!confirm(`${order}行目「${head}${line.text?.length > 24 ? '…' : ''}」を削除しますか？\n（音声・コマは消さずに預かります。「元に戻す」で戻せます）`)) return;
+      const data = await this.lineOp('delete', { line_id: line.id }, '削除エラー');
+      if (data) await this.afterLineOp();
+    },
 
 
+    async insertLineAfter(order) {
+      const line = this.draft?.lines?.find(l => l.order === order);
+      if (!line) return;
+      // 完全な空行を追加する（話者はコピーしない＝挿入後に配役キャラから選ぶ）
+      const data = await this.lineOp('insert', { after_line_id: line.id }, '行追加エラー');
+      if (!data) return;
+      await this.afterLineOp();
+      // 追加した行をすぐ編集モードにする
+      const nl = this.draft?.lines?.find(l => l.id === data.new_line_ids?.[0]);
+      if (nl) this.toggleEdit(nl);
+    },
 
     // ─── サブ行（Docs/SUBLINE_PLAN.md §5・§10・S5） ─────────────────
     // サブ行は「親を示す parent_line_id を持つ普通の行」（I1）。グループの先頭行は
@@ -6006,9 +6468,72 @@ function app() {
       return Math.round((0.8 + 0.2 * (line.text || '').length) * 10) / 10;
     },
 
+    // カーソル位置を近くの句読点（。！？、）へ吸着する（§10「近くの句読点へ吸着」）。
+    // 見つからなければ元の位置のまま warn:true を返し、呼び出し側が確認を挟む
+    snapToPunctuation(text, pos) {
+      const PUNCT = '。！？、';
+      const isBoundary = (i) => i > 0 && i < text.length && PUNCT.includes(text[i - 1]);
+      if (isBoundary(pos)) return { pos, warn: false };
+      const WINDOW = 6;
+      for (let d = 1; d <= WINDOW; d++) {
+        if (isBoundary(pos + d)) return { pos: pos + d, warn: false };
+        if (isBoundary(pos - d)) return { pos: pos - d, warn: false };
+      }
+      return { pos, warn: true };
+    },
 
 
+    async splitLineAtCursor(order) {
+      if (!this.currentProject) return;
+      const line = this.draft?.lines?.find(l => l.order === order);
+      if (!line) return;
+      const ta = this.$refs.editTextarea;
+      let pos = ta ? ta.selectionStart : null;
+      const text = this.editBuffer.text || '';
+      if (pos == null || pos <= 0 || pos >= text.length) {
+        alert('分ける位置にテキストエリア内でカーソルを置いてから押してください（先頭・末尾では分けられません）');
+        return;
+      }
+      const snapped = this.snapToPunctuation(text, pos);
+      if (snapped.warn) {
+        const around = `…${text.slice(Math.max(0, pos - 6), pos)}｜${text.slice(pos, pos + 6)}…`;
+        if (!confirm(`近くに句読点がありません（${around}）。この位置で分けますか？`)) return;
+      }
+      pos = snapped.pos;
+      // 未保存の編集があれば先に確定する（分割位置はサーバー側の現在の文字数を基準にする）
+      if (text !== line.text) {
+        await this.saveLine(order);
+        if (this.editingLineOrder === order) return;   // saveLineが話者未選択等で失敗（編集モードのまま）
+      }
+      // 前半の絵を「古い」と誤判定させない処理は窓口の split が持つ（sync-structure）
+      const data = await this.lineOp('split', { line_id: line.id, position: pos }, '分割エラー');
+      if (data) await this.afterLineOp();
+    },
 
+
+    async mergeLineWithNext(order) {
+      if (!this.currentProject) return;
+      const lines = this.draft?.lines || [];
+      const idx = lines.findIndex(l => l.order === order);
+      const next = idx >= 0 ? lines[idx + 1] : null;
+      if (!next) { alert('次の行がありません（末尾です）'); return; }
+      const a = (lines[idx].text || '').slice(0, 16);
+      const b = (next.text || '').slice(0, 16);
+      if (!confirm(`この行と次の行のセリフをつなげます:\n「${a}…」+「${b}…」\n（音声は要作り直しです。元に戻せます）`)) return;
+      const data = await this.lineOp('merge', { line_id: lines[idx].id }, '結合エラー');
+      if (data) await this.afterLineOp();
+    },
+
+
+    async addSubline(order) {
+      const line = this.draft?.lines?.find(l => l.order === order);
+      if (!line) return;
+      const data = await this.lineOp('add-subline', { line_id: line.id, text: '' }, 'サブ行追加エラー');
+      if (!data) return;
+      await this.afterLineOp();
+      const nl = this.draft?.lines?.find(l => l.id === data.new_line_ids?.[0]);
+      if (nl) this.toggleEdit(nl);
+    },
 
     // ─── 自動区切り（SUBLINE_PLAN §9・S5「残り」）────────────────────
     // 提案の計算（句点優先・最少分割）は本籍がscripting-agent（subline_manager.propose_splits）
@@ -6017,25 +6542,57 @@ function app() {
       return (line.text || '').length > this.autoSplitLimit;
     },
 
+    overLimitLineCount() {
+      return (this.draft?.lines || []).filter(l => this.isOverSplitLimit(l)).length;
+    },
 
     visibleLines() {
       const lines = this.draft?.lines || [];
       return this.onlyLongLines ? lines.filter(l => this.isOverSplitLimit(l)) : lines;
     },
 
-
-
-
-
-    // ─── 行ワークベンチへの導線（W7: 行の編集・音声・絵・仕上がりは別ページ /workbench/） ───
-    workbenchUrl(tab, lineId) {
-      const q = new URLSearchParams({ project: this.currentProject?.id || '', episode: String(this.activeEpisodeNumber || 1) });
-      if (tab) q.set('tab', tab);
-      if (lineId) q.set('line', lineId);
-      return `/workbench/?${q.toString()}`;
+    async previewAutoSplit(order) {
+      if (!this.currentProject) return;
+      const ep = this.activeEpisodeNumber || 1;
+      this.splitProposalFor = null;
+      const r = await fetch(`${SAPI}/projects/${this.currentProject.id}/script/line/${order}/split-proposal?episode=${ep}`);
+      const data = await r.json().catch(() => ({}));
+      if (!r.ok) { alert('提案の取得エラー: ' + (data.detail || r.status)); return; }
+      if (!data.pieces?.length) { alert('自動で区切れる候補がありません（読点が無い、または既に上限内です）'); return; }
+      this.splitProposalFor = { order, pieces: data.pieces };
     },
-    openInWorkbench(tab, line) {
-      window.open(this.workbenchUrl(tab, line?.id), '_blank');
+
+    closeSplitProposal() {
+      this.splitProposalFor = null;
+    },
+
+
+    async applyAutoSplit(order) {
+      const line = this.draft?.lines?.find(l => l.order === order);
+      if (!line) return;
+      const data = await this.lineOp('split-apply', { line_id: line.id, limit: this.autoSplitLimit }, '自動区切りエラー');
+      if (!data) return;
+      this.splitProposalFor = null;
+      await this.afterLineOp();
+    },
+
+
+    async autoSplitWholeEpisode() {
+      if (!this.currentProject) return;
+      const n = this.overLimitLineCount();
+      if (!n) { alert('上限を超えている行はありません'); return; }
+      if (!confirm(`上限(${this.autoSplitLimit}字)を超えている${n}行をまとめて自動区切りします。よろしいですか？\n（「元に戻す」で1回で戻せます）`)) return;
+      this.autoSplittingAll = true;
+      try {
+        const data = await this.lineOp('split-apply-all', { limit: this.autoSplitLimit }, '自動区切りエラー');
+        if (!data) return;
+        this.splitProposalFor = null;
+        await this.afterLineOp();
+        const added = data.new_line_ids?.length || 0;
+        alert(added ? `${added}行ぶん増えました（読点の無い行などはスキップされます）` : '区切れる行がありませんでした（読点が無い等）');
+      } finally {
+        this.autoSplittingAll = false;
+      }
     },
 
     // ─── タブ切替 ──────────────────────────────────────────────
@@ -6222,6 +6779,11 @@ function app() {
       } catch {}
     },
 
+    // ─── 📝 台本に反映するキーワード（script_brief） ──────────────
+    // ※ここだけが台本本文に軽く反映される。seoPack本体は「パレット」＝メタデータ/参考用。
+    isBriefKeyword(kw) {
+      return !!(this.seoPack?.script_brief?.keywords || []).includes(kw);
+    },
     async toggleBriefKeyword(kw) {
       if (!this.seoPack) return;
       const cur = (this.seoPack.script_brief?.keywords || []).slice();
@@ -7505,6 +8067,472 @@ function app() {
       ]);
     },
 
+    // ─── 🔍 合成チェック（PS-Assist 連携・読むだけ） ──────────────────
+    //
+    // PS-Assist とは **HTTPで繋がない**（ps-assist-net と youtube-auto-net を
+    // 跨がせない）。PS-Assist が共有フォルダへ書いた qa_report.json と表示用画像を
+    // director が既存の /shared マウント越しに読む。検査・書き出しの実行は
+    // ホスト側のコマンド（カードに表示）で行う。
+    get qaBase() {
+      return `/projects/${this.currentProject?.id}/episodes/${this.activeEpisodeNumber}/psassist`;
+    },
+    // ─── 🖥️ ホスト工程ブリッジ（host_worker.py） ──────────────────
+    //
+    // psassistWorker が null のまま＝shared/_psassist/worker.json が一度も
+    // 書かれていない＝host_worker.py を使わない環境（公開パッケージ等）。
+    // その場合はカードごと隠す（psassistAvailable）。alive はワーカーが「今」
+    // 生きているか（心拍が60秒以内）で、止まっていてもカード自体は出す。
+    get psassistAvailable() { return !!this.psassistWorker; },
+    get psassistAlive() { return !!this.psassistWorker?.alive; },
+    async loadPsassistWorker() {
+      try {
+        const r = await fetch(`/psassist/worker`);
+        this.psassistWorker = r.ok ? await r.json() : null;
+      } catch { this.psassistWorker = null; }
+    },
+    // P4（Docs/CUTOUT_PS_PRIMARY_PLAN.md）: この話数が使うキャラだけを対象にps-statusを
+    // 合算する（全キャラ分を毎回叩くのは無駄）。host_workerがPS本線化に対応していない
+    // 環境（capabilitiesにlibrary_cutoutが無い）では意味を持たないので取得しない。
+    async loadPsCutoutStatus() {
+      this.psCutoutPending = null;
+      if (!this.psassistWorker?.capabilities?.includes('library_cutout')) return;
+      const charIds = [...new Set((this.arollManifest?.panels || [])
+        .map(p => p.cutout_char_id).filter(Boolean))];
+      if (!charIds.length) { this.psCutoutPending = 0; return; }
+      try {
+        const results = await Promise.all(charIds.map(id =>
+          fetch(`${FAPI}/panel-library/${id}/ps-status`).then(r => r.ok ? r.json() : null)));
+        this.psCutoutPending = results.reduce((sum, r) => sum + (r?.pending || 0), 0);
+      } catch { this.psCutoutPending = null; }
+    },
+    // 要組み直し判定（P2の中身差し替え検知）用。charIdごとにpanel_libraryを1回だけ取得し
+    // {slot_id: recut_ps_at||created_at} のマップにする。バッジ自体は既存のarollBuildState
+    // に相乗りする（Docs/CUTOUT_PS_PRIMARY_PLAN.md P2注記・新しい仕組みは作らない）。
+    async loadCharLibVersions() {
+      const charIds = [...new Set((this.arollManifest?.panels || [])
+        .map(p => p.cutout_char_id).filter(Boolean))];
+      if (!charIds.length) { this.charLibVersions = {}; return; }
+      try {
+        const entries = await Promise.all(charIds.map(id =>
+          fetch(`${FAPI}/characters/${id}/panel_library?kind=`).then(r => r.ok ? r.json() : null)));
+        const out = {};
+        charIds.forEach((id, i) => {
+          const map = {};
+          for (const e of (entries[i]?.entries || [])) {
+            map[e.slot_id] = e.recut_ps_at || e.created_at || null;
+          }
+          out[id] = map;
+        });
+        this.charLibVersions = out;
+      } catch { this.charLibVersions = {}; }
+    },
+    // qaMerged から EXPORT_STALE / EXPORT_MISSING を持つ行だけを拾う
+    // （「納品PNGを更新」の対象＝もう計算材料はある。§3-a と同じ考え方）。
+    get psassistExportTargets() {
+      return this.qaMerged
+        .filter(p => (p.issues || []).some(i => i.code === 'EXPORT_STALE' || i.code === 'EXPORT_MISSING'))
+        .map(p => p.line_id);
+    },
+    get psassistLatestJob() { return this.psassistJobs[0] || null; },
+    async loadPsassistJobs() {
+      if (!this.currentProject || !this.activeEpisodeNumber) { this.psassistJobs = []; return; }
+      try {
+        const r = await fetch(`${this.qaBase}/jobs`);
+        this.psassistJobs = r.ok ? (await r.json()).jobs || [] : [];
+      } catch { this.psassistJobs = []; }
+    },
+    // 押した瞬間に1件投げてポーリング開始。lineIds省略時はEXPORT_STALE/MISSING全部。
+    // 工程の定義。director は kind 文字列だけを知る（Photoshop固有の詳細は持たない §2-6）
+    get psassistSteps() {
+      return [
+        { kind: 'build_plan',  label: '① プランを作る',   ps: false,
+          hint: 'aroll.json と背景アーカイブから panel_plan.json を組み立てます（Photoshop不要・数秒）' },
+        { kind: 'cutout',      label: '② 背景を抜く',     ps: true,
+          hint: '生成した絵からキャラを切り抜きます。在庫から選んだ行は既に抜けているので対象外' },
+        { kind: 'build_panel', label: '③ コマを組む',     ps: true,
+          hint: '吹き出しの配置・セリフの流し込み・背景合成。プランが要ります' },
+        { kind: 'qa_check',    label: '④ 検査する',       ps: false,
+          hint: '合成結果を検査してサムネと指摘を作ります（Photoshop不要・196枚で約1分）' },
+      ];
+    },
+    // P3（Docs/CUTOUT_PS_PRIMARY_PLAN.md）: build_panel/resync/export_pngは、対象行の
+    // PS切り抜きがまだ未処理だと409で返る（{ps_pending_lines, worker_alive}）。
+    // 「待つ」＝何もしない（呼び出し側でメッセージを出す）／「このまま進める」＝force再送。
+    // 新しいUI部品は作らず、他のPhotoshop占有確認と同じconfirm()に相乗りする。
+    async postPsassistJob(kind, lines, { silent = false } = {}) {
+      const body = { kind };
+      if (lines) body.lines = lines;
+      let r = await fetch(`${this.qaBase}/jobs`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body),
+      });
+      if (r.status === 409) {
+        const d = await r.json().catch(() => ({}));
+        const detail = d.detail || {};
+        if (Array.isArray(detail.ps_pending_lines)) {
+          // silent（選び直し直後の自動組み直し等）は確認を出さず進める＝自動化を止めない（§1-5）。
+          // 取りこぼしはslot_id自体は変わらないので「♻️要組み直し」バッジで後から拾える。
+          let proceed = silent;
+          if (!silent) {
+            const workerMsg = detail.worker_alive ? 'worker: 稼働中' : 'worker: 停止中（待っても進みません）';
+            proceed = confirm(
+              `🖼️ PS切り抜きが未処理の行が ${detail.ps_pending_lines.length} 行あります（${workerMsg}）。\n\n`
+              + `[OK] このまま進める（rembgの仮絵のまま組みます。後でPS版に差し替わったら「♻️要組み直し」で拾えます）\n`
+              + `[キャンセル] 待つ（今回は何もしません）`);
+          }
+          if (!proceed) return { ok: false, cancelled: true };
+          r = await fetch(`${this.qaBase}/jobs`, {
+            method: 'POST', headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ ...body, force: true }),
+          });
+        }
+      }
+      return { ok: r.ok, response: r };
+    },
+    // 汎用のジョブ投入。lines を省略すると工程1〜4は全件を意味する
+    async psassistRunStep(kind, label, needsPhotoshop) {
+      if (this.psassistJobBusy || !this.psassistAlive) return;
+      if (this.psassistLatestJob?.status === 'running') { alert('別のジョブが実行中です'); return; }
+      let msg = `${label} を実行します。`;
+      if (needsPhotoshop) {
+        // ⚠️ Photoshop を占有する工程は必ず確認する（作業中に流すと壊れる）
+        msg += `\n\n⚠️ この工程は Photoshop を占有します。`
+             + `\nPhotoshop で作業中なら、先に手を止めてください。`;
+      }
+      if (!confirm(msg + `\n\n続行しますか？`)) return;
+      this.psassistJobBusy = true;
+      this.psassistCancelRequested = false;   // 新しいジョブなので前回の中断要求状態を捨てる
+      try {
+        const { ok, cancelled, response } = await this.postPsassistJob(kind);   // lines 省略＝全件
+        if (cancelled) return;
+        if (!ok) { const d = await response.json().catch(() => ({})); alert('ジョブ投入エラー: ' + (d.detail || response.status)); return; }
+        await this.loadPsassistJobs();
+        this.psassistPollJob();
+      } finally { this.psassistJobBusy = false; }
+    },
+    // P2b: build_panel のチャンク境界での中断を要求する（子プロセスは kill しない）。
+    async psassistCancelJob() {
+      const job = this.psassistLatestJob;
+      if (!job || job.status !== 'running' || this.psassistCancelRequested) return;
+      if (!confirm('中断を要求します。今のチャンク（最大20行）を終えてから止まります。\n'
+                  + 'Photoshop のドキュメントはそのまま残ります。続行しますか？')) return;
+      this.psassistCancelRequested = true;
+      try {
+        const r = await fetch(`${this.qaBase}/jobs/${job.job_id}/cancel`, { method: 'POST' });
+        if (!r.ok) {
+          const d = await r.json().catch(() => ({}));
+          alert('中断要求エラー: ' + (d.detail || r.status));
+          this.psassistCancelRequested = false;
+        }
+      } catch (e) {
+        alert('中断要求に失敗しました: ' + e);
+        this.psassistCancelRequested = false;
+      }
+    },
+    async psassistRunExportJob(lineIds) {
+      const lines = lineIds && lineIds.length ? lineIds : this.psassistExportTargets;
+      if (!lines.length || this.psassistJobBusy) return;
+      this.psassistJobBusy = true;
+      try {
+        const { ok, cancelled, response } = await this.postPsassistJob('export_png', lines);
+        if (cancelled) return;
+        if (!ok) { const d = await response.json().catch(() => ({})); alert('ジョブ投入エラー: ' + (d.detail || response.status)); return; }
+        await this.loadPsassistJobs();
+        this.psassistPollJob();
+      } finally {
+        this.psassistJobBusy = false;
+      }
+    },
+    // T3: 要組み直しの行を①③④⑤で1ジョブに連鎖して組み直す（Docs/AROLL_UNIFIED_FLOW_PLAN.md §17）
+    // silent=true: 選び直し直後の自動呼び出し用（確認ダイアログを出さない・実行中でも黙って諦める。
+    // 完全自動化はユーザー承認2026-09-22。取りこぼした行は「♻️要組み直し」バッジに残り続けるので、
+    // 後から「🔧要組み直しを選択」→手動の組み直しで拾える＝データが失われるわけではない）
+    async psassistResync(lineIds, { silent = false } = {}) {
+      const lines = lineIds && lineIds.length ? lineIds : [];
+      if (!lines.length) return;
+      if (!this.psassistAlive) {
+        // ⚠️ host_worker（ホスト常駐・Photoshop）はDockerコンテナの外側で動くプロセスなので、
+        // 起動し忘れたまま気づかず「選び直したのに反映されない」に見えるのが一番の事故りどころ。
+        // 黙って諦めない（2026-09-23・実機で踏んだ穴）。
+        const msg = 'host_worker が起動していないため自動組み直しをスキップしました（start-psassist-worker.ps1 を起動してください）';
+        if (silent) { this.arollMsg = '⚠️ ' + msg; } else { alert(msg); }
+        return;
+      }
+      if (this.psassistJobBusy || this.psassistLatestJob?.status === 'running') {
+        if (silent) { this.arollMsg = '♻️ 他の組版ジョブが実行中のため自動組み直しを見送りました。後で「🔧要組み直しを選択」から反映してください'; }
+        else { alert('別のジョブが実行中です'); }
+        return;
+      }
+      if (!silent && !confirm(`♻️ 要組み直しの${lines.length}行を組み直します。`
+                 + `\n\n⚠️ この工程は Photoshop を占有します。`
+                 + `\nPhotoshop で作業中なら、先に手を止めてください。\n\n続行しますか？`)) return;
+      this.psassistJobBusy = true;
+      this.psassistCancelRequested = false;
+      try {
+        const { ok, cancelled, response } = await this.postPsassistJob('resync', lines, { silent });
+        if (cancelled) return;   // silentは常にforce再送するのでここに来るのは非silentの「待つ」選択時のみ
+        if (!ok) {
+          const d = await response.json().catch(() => ({}));
+          const msg = 'ジョブ投入エラー: ' + (d.detail || response.status);
+          if (silent) { this.arollMsg = msg; } else { alert(msg); }
+          return;
+        }
+        await this.loadPsassistJobs();
+        this.psassistPollJob();
+      } finally {
+        this.psassistJobBusy = false;
+      }
+    },
+    // 3秒間隔でポーリングし、running でなくなったら止めて合成チェックを再読込する
+    psassistPollJob() {
+      if (this.psassistJobPollTimer) clearInterval(this.psassistJobPollTimer);
+      this.psassistJobPollTimer = setInterval(async () => {
+        await this.loadPsassistJobs();
+        const job = this.psassistLatestJob;
+        if (!job || job.status !== 'running') {
+          clearInterval(this.psassistJobPollTimer);
+          this.psassistJobPollTimer = null;
+          this.psassistCancelRequested = false;
+          // cancelled も build_panel が途中まで進んでいる＝新しいPSDができている
+          if (job && (job.status === 'done' || job.status === 'cancelled')) {
+            await this.loadPsassistQa();
+            // resync（T3）は plan/aroll も動かすので、要組み直しバッジを消すために読み直す
+            if (job.kind === 'resync') {
+              await Promise.all([this.loadPsassistPlan(), this.loadArollManifest()]);
+            }
+          }
+        }
+      }, 3000);
+    },
+    get qaCounts() {
+      const m = this.qaMerged;
+      const by = sev => m.filter(p => p.severity === sev).length;
+      return {
+        total: m.length, blocking: by('blocking'), advisory: by('advisory'),
+        clean: by('clean'), unbuilt: by('unbuilt'), ungenerated: by('ungenerated'),
+        restale: by('restale'),
+      };
+    },
+    get qaCheckedAt() {
+      if (!this.qa?.checked_at) return '—';
+      const d = new Date(this.qa.checked_at);
+      return isNaN(d) ? this.qa.checked_at
+        : `${d.getMonth() + 1}/${d.getDate()} ${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`;
+    },
+    get qaEpisodeDir() {
+      // ホストの実パスは director（コンテナ）からは分からない。検査を書いた側が
+      // qa_report.json に記録しているので、あればそれを使う。
+      return this.qa?.episode_dir
+        || `<エピソードのフォルダ>\\episodes\\ep${String(this.activeEpisodeNumber).padStart(2, '0')}`;
+    },
+    // ホスト常駐の起動コマンド。
+    // ⚠️ **`--shared` を省いた形を案内しない。** psassist の組版には配布物に含まれない
+    //    ユーザー資産（bubbles.psd 等）が要るので、資産を持つチェックアウトから
+    //    **稼働側の shared を指して**起動する必要がある。素の
+    //    `python psassist/scripts/host_worker.py` を案内していたため、実機で
+    //    `Expected a reference to an existing File/Folder` という原因の分からない
+    //    エラーになった（2026-08-30）。shared は検査レポートの episode_dir から導く
+    //    （`<shared>/projects/<pid>/episodes/epNN` の4段上）。
+    get psassistSharedDir() {
+      const ep = this.qa?.episode_dir;
+      if (!ep) return '';
+      const parts = ep.replace(/[\\/]+$/, '').split(/[\\/]/);
+      return parts.length >= 4 ? parts.slice(0, -4).join('\\') : '';
+    },
+    get psassistStartCommand() {
+      // start-psassist-worker.ps1（リポ直下・refresh-user-folders.ps1と同じ「ダブルクリックで
+      // 起動・ウィンドウを閉じて終了」運用）が host_worker.py の起動を肩代わりする。
+      const shared = this.psassistSharedDir;
+      return shared
+        ? `.\\start-psassist-worker.ps1 -Shared "${shared}"`
+        : '.\\start-psassist-worker.ps1 -Shared "<稼働中のsharedフォルダ>"';
+    },
+    get qaCheckCommand() {
+      return `python psassist/scripts/qa_check.py --episode "${this.qaEpisodeDir}"`;
+    },
+    get qaWatchCommand() {
+      // 直す作業中はこれを出しっぱなしにする＝保存するたびに1枚だけ検査し直される
+      return `python psassist/scripts/qa_check.py --episode "${this.qaEpisodeDir}" --watch`;
+    },
+    get qaExportCommand() {
+      return `python psassist/host-bridge/export_png.py --episode "${this.qaEpisodeDir}" --all --resume`;
+    },
+    // 合成チェックの一覧は**台本の全行**を持つ（3状態: 未生成 / 生成済み(未合成) / 合成済み）。
+    // qa_report.json は Photoshop で組んだ後にしか存在しないので、それだけを並べると
+    // 「まだ組んでいない行」が画面から消える＝進捗が分からない。
+    get qaMerged() {
+      const built = new Map((this.qa?.panels || []).map(p => [p.line_id, p]));
+      return this.arollPanels.map(a => {
+        const q = built.get(a.line_id);
+        if (!q) {
+          return {
+            line_id: a.line_id, order: a.order, speaker: a.speaker_name, text: a.text,
+            severity: a.status === 'done' || a.cutout_slot_id ? 'unbuilt' : 'ungenerated',
+            issues: [], unbuilt: true,
+          };
+        }
+        // T3: 組んだ時点のcutoutと現在のcutoutがズレている行は、古いPSDのサムネを見せてはいけない
+        // （直したつもりが直っていない/直したのに古い指摘が残る、どちらも起きる）。
+        // ⚠️ 以前は`qa.checked_at`（レポート全体で1個の時刻）と比較していたが、1行だけ
+        // 部分再検査するとchecked_atがグローバルに更新され他行の判定が狂う欠陥があった
+        // （arollBuildStateはpanel_plan.json比較なのでこの問題が無い）。
+        if (this.arollBuildState(a.line_id) === 'restale') {
+          return { ...q, severity: 'restale', issues: [], thumb: null, view: null, restale: true };
+        }
+        return q;
+      });
+    },
+    get qaFiltered() {
+      const panels = this.qaMerged;
+      const f = this.qaFilter;
+      if (f === 'all') return panels;
+      // 「絵はあるがまだ確定していない」行（在庫登録自体はT1で済んでいる）。見て確定する動線
+      if (f === 'unapproved') {
+        return panels.filter(p => {
+          const a = this.arollPanelOf(p.line_id);
+          return a && a.status === 'done' && a.image && !a.image_approved_at;
+        });
+      }
+      if (f.startsWith('code:')) {
+        const code = f.slice(5);
+        return panels.filter(p => (p.issues || []).some(i => i.code === code));
+      }
+      return panels.filter(p => p.severity === f);
+    },
+    // その行のAロール情報（プロンプト・slot・割当）を引く。編集操作の対象
+    arollPanelOf(lineId) {
+      return this.arollPanels.find(a => a.line_id === lineId) || null;
+    },
+    // T3: panel_plan.json（build_planが最後に作った時点のスナップショット）から、
+    // その行が「プラン作成時点」で使っていたcutout由来slot_idを逆算する。
+    // 在庫から選ばれた絵は character.image が ".../panel_library/cutouts/{slot_id}.png"
+    // になる（psassist/psassist-agent/app/core/plan_builder.py の _library_cutout_path）。
+    // 旧形式（cutoutを経由しない生成画像そのまま）は判定対象外としてnullを返す。
+    arollPlanCutoutSlot(lineId) {
+      const p = (this.psassistPlan?.panels || []).find(x => x.line_id === lineId);
+      const img = p?.character?.image;
+      if (!img || !/[\\/]cutouts?[\\/]/.test(img)) return null;
+      const base = img.replace(/\\/g, '/').split('/').pop() || '';
+      return base.endsWith('.png') ? base.slice(0, -4) : null;
+    },
+    // P2（Docs/CUTOUT_PS_PRIMARY_PLAN.md）: slot_idは在庫のPS取り込みでも不変なので、
+    // 上のarollPlanCutoutSlotだけでは「同じファイル名のまま中身だけ差し替わった」を
+    // 検知できない。plan_builder.pyがプラン作成時点で記録したcutout_versionを返す。
+    arollPlanCutoutVersion(lineId) {
+      const p = (this.psassistPlan?.panels || []).find(x => x.line_id === lineId);
+      return p?.character?.cutout_version || null;
+    },
+    // T3: 行の組版状態（TTSのlineTtsStateと同型）。
+    //   ungenerated = 絵がまだ無い / unplanned = ①プラン未作成 / unbuilt = ③PSD未組版 /
+    //   restale = PSDはあるがプラン作成時点のcutoutと現在のcutoutがズレている（要組み直し）/
+    //   built = 最新
+    // ⚠️ 旧qaMergedの`restale`判定（checked_at と cutout_assigned_at のグローバル時刻比較）は
+    // 1行だけ再検査すると他行の判定を誤らせる欠陥があった。ここはplan.json比較に置き換えている。
+    arollBuildState(lineId) {
+      const a = this.arollPanelOf(lineId);
+      if (!a) return 'unknown';
+      if (!a.cutout_slot_id && !a.image) return 'ungenerated';
+      const planPanels = this.psassistPlan?.panels;
+      if (!planPanels || !planPanels.some(p => p.line_id === lineId)) return 'unplanned';
+      const qaPanel = (this.qa?.panels || []).find(p => p.line_id === lineId);
+      if (!qaPanel) return 'unbuilt';
+      if (a.cutout_slot_id) {
+        const planSlot = this.arollPlanCutoutSlot(lineId);
+        if (planSlot !== a.cutout_slot_id) return 'restale';
+        // P2（Docs/CUTOUT_PS_PRIMARY_PLAN.md）: slot_idが同じでも、host_workerのPS取り込みで
+        // cutouts/{slot_id}.pngの中身だけ差し替わっていることがある（ファイル名は不変）。
+        // プラン作成時点の版（cutout_version）と現在の版を突き合わせて検知する。
+        const planVersion = this.arollPlanCutoutVersion(lineId);
+        const curVersion = this.charLibVersions[a.cutout_char_id]?.[a.cutout_slot_id];
+        if (planVersion && curVersion && planVersion !== curVersion) return 'restale';
+      }
+      // D2（2026-09-24）: 絵は同じでも、セリフが変わって吹き出しの文字が古いまま
+      //（qa_check.pyがPSD実物の文字レイヤーと今の台本を突き合わせて検知）。
+      if (qaPanel.text_stale) return 'restale';
+      return 'built';
+    },
+    // まだ組んでいない行のサムネ。割当済みの切り抜き → 生成した絵、の順で出す
+    // （どちらも無ければ「まだ絵が無い」＝生成か在庫選択が要る行）
+    qaFallbackThumb(p) {
+      const a = this.arollPanelOf(p.line_id);
+      if (!a) return '';
+      if (a.cutout_slot_id) {
+        const charId = a.cutout_char_id || (a.characters || [])[0];
+        if (charId) return `${FAPI}/characters/${charId}/panel_library/cutout/${a.cutout_slot_id}.png`;
+      }
+      return a.image ? this.arollImageUrl(a) : '';
+    },
+    get qaPositionLabel() {
+      const list = this.qaFiltered;
+      const i = list.findIndex(p => p.line_id === this.qaDetail?.line_id);
+      return i < 0 ? '' : `${i + 1} / ${list.length}`;
+    },
+    qaFileUrl(rel) {
+      return `${this.qaBase}/file/${rel}?v=${this.qaVersion}`;
+    },
+    // unbuilt=絵はあるがPhotoshopで組んでいない / ungenerated=絵がまだ無い
+    qaSevColor(sev) {
+      return { blocking: '#ef4444', advisory: '#f59e0b', clean: '#334155',
+               unbuilt: '#1e3a8a', ungenerated: '#3f3f46', restale: '#a855f7' }[sev] || '#334155';
+    },
+    qaSevBg(sev) {
+      return { blocking: '#7f1d1d', advisory: '#78350f', clean: '#14532d',
+               unbuilt: '#1e3a8a', ungenerated: '#3f3f46', restale: '#581c87' }[sev] || '#1e293b';
+    },
+    qaSevMark(sev) {
+      return { blocking: '🔴', advisory: '🟡', clean: '✓', unbuilt: '🔧',
+               ungenerated: '○', restale: '♻️' }[sev] || '';
+    },
+    qaSevLabel(sev) {
+      return { blocking: '要対応', advisory: '助言', clean: '問題なし',
+               unbuilt: '未合成', ungenerated: '未生成', restale: '要・組み直し' }[sev] || sev;
+    },
+    qaCodeLabel(code) {
+      return {
+        BUBBLE_OVERLAP: '吹き出し重なり', TEXT_OVERFLOW: '文字はみ出し',
+        TEXT_OFF_CANVAS: '文字が画面外', BUBBLE_ON_FACE: '顔に被る',
+        FRAMING_MISMATCH: '画角不一致', LIGHT_CONFLICT: '光源が逆',
+        EMPTY_LAYER: '空レイヤー', NO_ADJUSTMENT: '色調整なし',
+        MISSING_CHARACTER: 'キャラ欠落', MISSING_BUBBLE: '吹き出し欠落',
+        MISSING_TEXT: '文字欠落', NO_VISIBLE_BACKGROUND: '背景なし',
+        EXPORT_MISSING: '書き出し未', EXPORT_SIZE: '書き出し寸法',
+        EXPORT_STALE: '書き出しが古い',
+        EXPORT_UNREADABLE: '書き出し不良', PSD_UNREADABLE: 'PSD不良',
+      }[code] || code;
+    },
+    qaMainIssue(p) {
+      // タイルには主要因を1つだけ出す（詳細はクリック）。要対応を優先する。
+      const list = p.issues || [];
+      const it = list.find(i => i.severity === 'blocking') || list[0];
+      return it ? this.qaCodeLabel(it.code) : '';
+    },
+    qaRegionStyle(p, it) {
+      // region は PSD 座標（1376×768）。表示サイズが違うので % に直して重ねる。
+      const [cw, ch] = p.measured?.canvas || [1376, 768];
+      const [x0, y0, x1, y1] = it.region;
+      const c = this.qaSevColor(it.severity);
+      // ⚠️ Alpine の :style は**文字列を渡すと static な style 属性を丸ごと置き換える**。
+      //    position:absolute を静的側に書くと消える（赤枠が画像の下に流れる）ので、
+      //    重ねるのに必要な指定はすべてここに含める。
+      return `position:absolute;pointer-events:none;border-radius:2px;`
+           + `left:${(x0 / cw) * 100}%;top:${(y0 / ch) * 100}%;`
+           + `width:${((x1 - x0) / cw) * 100}%;height:${((y1 - y0) / ch) * 100}%;`
+           + `border:2px solid ${c};box-shadow:0 0 0 1px rgba(0,0,0,0.6)`;
+    },
+    qaMeasuredRows(p) {
+      const m = p.measured || {};
+      const rows = [];
+      if (m.overlap !== undefined) rows.push(['吹き出し重なり', `${(m.overlap * 100).toFixed(1)}%`]);
+      if (m.text_outside !== undefined) rows.push(['文字はみ出し', `${(m.text_outside * 100).toFixed(1)}%`]);
+      if (m.face_overlap !== undefined) rows.push(['顔に被る', `${(m.face_overlap * 100).toFixed(1)}%`]);
+      if (m.heads !== undefined) rows.push(['頭身', m.heads]);
+      if (m.light_dx !== undefined && m.light_dx !== null) {
+        rows.push(['光の向き', `キャラ ${m.light_dx > 0 ? '+' : ''}${m.light_dx}`
+          + (m.bg_light_dx !== undefined ? ` / 背景 ${m.bg_light_dx > 0 ? '+' : ''}${m.bg_light_dx}` : '')]);
+      }
+      if (m.export_size) rows.push(['納品PNG', m.export_size.join('×')]);
+      return rows;
+    },
     // ─── 📚 キャラ在庫タブ: 閲覧・整理（旧✂️切り抜き＋📚キャラ画像を統合。2026-08-28） ────
     // 選択のロジックは持たない（find_current・cutout_selectorが本籍・1事実1ホーム）。
     // ここは在庫を見て再利用許可/削除/ラベル編集/使用回数リセットをするだけ。
@@ -7628,6 +8656,50 @@ function app() {
     // rembgの仮切り抜きのまま＝host_workerがまだPSで仕上げていない（見た目だけの印。動作には影響しない）。
     charLibNeedsPs(item) {
       return !!item.image && item.kind !== 'cutout' && item.cutout_method !== 'ps_select_subject';
+    },
+    // ② の試算。**生成の前に無料で埋まる行を確定させる**ための窓口。
+    // 「賄えない行」は在庫から無理に埋めない（ワンパターンの発生源になる）。
+    get cutoutPlanReasons() {
+      if (!this.cutoutPlan) return [];
+      const m = {};
+      for (const l of this.cutoutPlan.lines || []) {
+        if (l.slot_id || l.decided) continue;
+        const k = (l.reason || '').split('（')[0];
+        m[k] = (m[k] || 0) + 1;
+      }
+      return Object.entries(m).sort((a, b) => b[1] - a[1]);
+    },
+    async loadCutoutPlan() {
+      if (!this.currentProject || !this.activeEpisodeNumber) return;
+      this.cutoutPlanBusy = true;
+      this.cutoutPlanMsg = '';
+      try {
+        this.cutoutPlan = await (await fetch(`${this.arollApiBase}/cutout-plan`)).json();
+      } catch (e) {
+        this.cutoutPlanMsg = '試算に失敗しました: ' + e;
+      } finally {
+        this.cutoutPlanBusy = false;
+      }
+    },
+    async applyCutoutPlan() {
+      if (!this.cutoutPlan) return;
+      if (!confirm(`在庫から ${this.cutoutPlan.from_stock} 行に割り当てます（無料・画像生成なし）。よろしいですか？`)) return;
+      this.cutoutPlanBusy = true;
+      try {
+        const r = await fetch(`${this.arollApiBase}/cutout-plan/apply`, {
+          method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({}),
+        });
+        const d = await r.json();
+        this.cutoutPlanMsg = r.ok
+          ? `${d.applied} 行に割り当てました（${d.skipped} 行は在庫で賄えないため触っていません`
+            + (d.kept_decided ? `・絵が決まっている ${d.kept_decided} 行はそのまま` : '') + '）'
+          : `失敗: ${d.detail || r.status}`;
+        if (r.ok) { await this.refreshArollTab(); await this.loadCutoutPlan(); }
+      } catch (e) {
+        this.cutoutPlanMsg = '失敗: ' + e;
+      } finally {
+        this.cutoutPlanBusy = false;
+      }
     },
     // 一覧の並び（絞り込み後）を順に送る。合成チェックの qaStep と同じ作り
     charLibStep(d) {
@@ -7842,19 +8914,432 @@ function app() {
       }
     },
 
+    qaOpen(p) { this.qaDetail = p; },
+    qaStep(d) {
+      const list = this.qaFiltered;
+      if (!list.length || !this.qaDetail) return;
+      let i = list.findIndex(p => p.line_id === this.qaDetail.line_id);
+      if (i < 0) i = 0;
+      this.qaDetail = list[(i + d + list.length) % list.length];
+    },
+    async loadPsassistQa() {
+      if (!this.currentProject || !this.activeEpisodeNumber) { this.qa = null; return; }
+      this.qaBusy = true;
+      try {
+        const r = await fetch(`${this.qaBase}/qa`);
+        this.qa = r.ok ? await r.json() : null;
+      } catch { this.qa = null; }
+      finally { this.qaBusy = false; this.qaVersion++; }
+    },
+    // T3: 「要組み直し」判定（arollBuildState）の材料。build_plan が最後に作った
+    // panel_plan.json＝「プラン作成時点で使われていたcutout」のスナップショット。
+    async loadPsassistPlan() {
+      if (!this.currentProject || !this.activeEpisodeNumber) { this.psassistPlan = null; return; }
+      try {
+        const r = await fetch(`${this.qaBase}/plan`);
+        this.psassistPlan = r.ok ? await r.json() : null;
+      } catch { this.psassistPlan = null; }
+    },
 
     // ─── 🖼️ Aロールタブ（マンガ形式パネル） ────────────────────────
     get arollApiBase() {
       return `${FAPI}/projects/${this.currentProject?.id}/episodes/${this.activeEpisodeNumber}/aroll`;
     },
+    get arollPanels() {
+      // 台本から消えた行（orphan）は進捗・バッチ対象の母数に入れない
+      return (this.arollManifest?.panels || []).filter(p => !p.orphan);
+    },
+    get arollCounts() {
+      const c = { total: 0, done: 0, failed: 0, pending: 0 };
+      for (const p of this.arollPanels) {
+        c.total++;
+        if (p.status === 'done') c.done++;
+        else if (p.status === 'failed') c.failed++;
+        else c.pending++;
+      }
+      return c;
+    },
+    // 台本とAロールのズレ（stale=絵が古い / missing=画像なし / orphan=行が消えた / unknown=記録なし）
+    get arollSyncCounts() {
+      return this.arollSync?.counts || { ok: 0, stale: 0, missing: 0, orphan: 0, unknown: 0 };
+    },
+    get arollDriftCount() {
+      const c = this.arollSyncCounts;
+      return c.stale + c.missing + c.orphan + c.unknown;
+    },
+    // Step C1: missing のうち「パネル自体が無い」＝台本に新規追加された行だけを取り出す
+    // （missing にはパネルはあるが未生成/失敗の行も混ざる。あれはコマ一覧に既に見えている）。
+    get arollNewLineItems() {
+      return (this.arollSync?.items || []).filter(it => it.sync === 'missing' && it.status === 'no_panel');
+    },
+    get arollNewLineCount() { return this.arollNewLineItems.length; },
+    get arollNewLineSections() {
+      return [...new Set(this.arollNewLineItems.map(it => it.section || 'main'))];
+    },
+    arollSyncLabel(s) {
+      return { ok: '✔ 一致', stale: '⚠ 絵が古い', missing: '✘ 画像なし',
+               orphan: '🗑 行が消えた', unknown: '? 記録なし' }[s] || s;
+    },
+    arollSyncStyle(s) {
+      return {
+        ok: 'background:#14532d;color:#bbf7d0',
+        stale: 'background:#78350f;color:#fde68a',
+        missing: 'background:#7f1d1d;color:#fecaca',
+        orphan: 'background:#1e293b;color:#94a3b8',
+        unknown: 'background:#312e81;color:#c7d2fe',
+      }[s] || 'background:#1e293b;color:#94a3b8';
+    },
+    get arollJob() { return this.arollStatus?.job || {}; },
+    // 対象セレクトに応じたバッチ対象枚数（概算コスト表示用。プロンプトの無い行は対象外）
+    get arollBatchTargetCount() {
+      // ⚠️ **カット単位で数える**（穴9 §15-1・2026-09-21）。バックエンドの
+      //    aroll_manager.select_targets はカットの先頭行だけを対象にし、兄弟行は
+      //    generate_line_image の伝播で無料に埋まる（1カット1枚の原則）。ここを行数の
+      //    ままにすると、実際の課金枚数より多く見せてしまう（「押したのに枚数が違う」）。
+      const cuts = this.arollCuts?.cuts || [];
+      if (!cuts.length) return 0;
+      const panelById = {};
+      for (const p of this.arollPanels) panelById[p.line_id] = p;
+      let count = 0;
+      for (const c of cuts) {
+        const members = c.line_ids.map(lid => panelById[lid]).filter(Boolean);
+        const head = members[0];
+        if (!head || !(head.prompt || '').trim() || !(head.characters || []).length) continue;
+        if (this.arollTarget === 'failed') {
+          if (members.some(m => m.status === 'failed')) count++;
+        } else if (this.arollTarget === 'all') {
+          count++;
+        } else if (!members.every(m => m.status === 'done' || m.cutout_slot_id)) {
+          count++;   // 'missing': カット全体が既に決まっていれば対象外
+        }
+      }
+      return count;
+    },
+    // 在庫で賄える分（カット単位）を引いた「実際に課金される枚数」。試算前は null。
+    // ★先に高い数字を見せて後から安い数字を出すのは順序が逆だった（§1-5）。
+    get arollBillableCount() {
+      if (!this.cutoutPlan || this.arollTarget !== 'missing') return null;
+      return Math.max(0, this.arollBatchTargetCount - (this.cutoutPlan.from_stock_cuts || 0));
+    },
+    arollImageUrl(p) {
+      return `${this.arollApiBase}/image/${p.image}?v=${this.arollImgVersion}`;
+    },
+    // ── コマ一覧（表）と一括操作（Phase 4） ─────────────────────────
+    // 絞り込みの本籍。**純関数にする**（引数の f だけで決まり、状態を触らない）。
+    // ⚠️ かつて件数を数えるために `this.arollRowFilter` を一時的に書き換えて戻していたが、
+    //    Alpine のリアクティビティは getter 内の代入も依存として拾うため、
+    //    「描画 → 状態変更 → 再描画」のループを招きうる書き方だった（2026-08-30 修正）。
+    arollRowsFor(f) {
+      const ps = this.arollPanels;
+      switch (f) {
+        case 'ungenerated': return ps.filter(p => p.status !== 'done' && !p.cutout_slot_id);
+        case 'unapproved':  return ps.filter(p => p.status === 'done' && p.image && !p.image_approved_at);
+        case 'narration':   return ps.filter(p => !(p.characters || []).length);
+        case 'drift':       return ps.filter(p => p.sync && p.sync !== 'ok');
+        case 'restale':     return ps.filter(p => this.arollBuildState(p.line_id) === 'restale');
+        default:            return ps;
+      }
+    },
+    get arollRowsFiltered() { return this.arollRowsFor(this.arollRowFilter); },
+    arollRowFilterCount(f) { return this.arollRowsFor(f).length; },
+    // 選択中の line_id。⚠️ ここが空なら一括操作は押せない（`line_ids: []` は「対象ゼロ」）
+    get arollSelected() {
+      return this.arollPanels.filter(p => this.arollChecked[p.line_id]).map(p => p.line_id);
+    },
+    get arollAllChecked() {
+      const rows = this.arollRowsFiltered;
+      return rows.length > 0 && rows.every(p => this.arollChecked[p.line_id]);
+    },
+    arollToggleAll(on) {
+      // 絞り込み中は**見えている行だけ**を対象にする（見えない行を巻き込まない）
+      for (const p of this.arollRowsFiltered) this.arollChecked[p.line_id] = on;
+    },
+    arollClearChecked() { this.arollChecked = {}; },
+    // T3: 要組み直しの行だけをチェック状態にする（一括操作バーの「♻️ 要組み直しを選択」）
+    arollCheckRestale() {
+      this.arollChecked = {};
+      for (const p of this.arollRowsFor('restale')) this.arollChecked[p.line_id] = true;
+    },
+    // 表の小サムネ。割当済みの切り抜き → 生成した絵、の順（QAのfallbackと同じ供給元）
+    arollRowThumb(p) {
+      if (p.cutout_slot_id) {
+        const cid = p.cutout_char_id || (p.characters || [])[0];
+        if (cid) return `${FAPI}/characters/${cid}/panel_library/cutout/${p.cutout_slot_id}.png`;
+      }
+      return p.image ? this.arollImageUrl(p) : '';
+    },
+    // 行をクリック → 1行の詳細（QAモーダル）。編集UIはモーダル1箇所に集約した（§4-a）
+    arollOpenRow(lineId) {
+      const q = this.qaMerged.find(x => x.line_id === lineId);
+      if (q) this.qaDetail = q;
+    },
+    // Step C2（2026-09-24合意）: 選択行に絵の無い行が混ざっていたら、確定の前に無料の手段
+    // （①同じカットの既存の絵を引き継ぐ ②在庫から割り当てる）で先に埋める。それでも埋まらない
+    // 行は金額を見せて確認してから生成する。①②で自動的に入った絵は確定しない（未確定のまま
+    // 残す＝人が見て「まとめて確定」をもう一度押すまで image_approved_at は立てない）。
+    async arollBulkApprove() {
+      const ids = this.arollSelected;
+      if (!ids.length) return;
+      const panelById = {};
+      for (const p of this.arollPanels) panelById[p.line_id] = p;
+      const missingIds = ids.filter(id => panelById[id]?.status !== 'done');
+      const readyIds = ids.filter(id => panelById[id]?.status === 'done');
 
+      this.arollBulkBusy = true;
+      this.arollBulkMsg = '';
+      try {
+        let filledCount = 0, needGen = [];
+        if (missingIds.length) {
+          const r = await fetch(`${this.arollApiBase}/fill-missing`, {
+            method: 'POST', headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ line_ids: missingIds }),
+          });
+          const d = await r.json().catch(() => ({}));
+          if (!r.ok) { alert('エラー: ' + (d.detail || r.status)); return; }
+          filledCount = (d.filled || []).length;
+          needGen = d.need_generation || [];
+          if (filledCount) await this.loadArollManifest();
+        }
 
+        if (needGen.length) {
+          const est = (needGen.length * 0.04).toFixed(2);
+          if (confirm(`在庫でも埋まらない ${needGen.length}行（カット単位）は新規生成が必要です`
+              + `（概算 $${est}・実課金）。生成しますか？\nキャンセルすると、埋まった分だけ処理して終わります。`)) {
+            const gr = await fetch(`${this.arollApiBase}/generate`, {
+              method: 'POST', headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ line_ids: needGen, only_missing: true,
+                                     allow_paid_fallback: this.arollPaidFallback,
+                                     aspect: this.arollAspect, style: this.arollStyle }),
+            });
+            if (!gr.ok) { const gd = await gr.json().catch(() => ({})); alert('エラー: ' + (gd.detail || gr.status)); }
+            else await this.pollArollStatus();
+          }
+        }
+
+        const msgs = [];
+        if (filledCount) msgs.push(`${filledCount}行を無料で埋めました（未確定のまま）`);
+        if (readyIds.length) {
+          if (confirm(`選択した ${readyIds.length}行 の絵を「これでいい」と確定します。`
+              + `\n無料です（画像は生成しません）。続行しますか？`)) {
+            await this.arollApproveImages(readyIds);
+            msgs.push(`${readyIds.length}行を確定しました`);
+          }
+        }
+        this.arollBulkMsg = msgs.length ? `✔ ${msgs.join('・')}` : '対象行は既に処理済みでした';
+      } finally { this.arollBulkBusy = false; }
+    },
+    async arollBulkRegenerate() {
+      const ids = this.arollSelected;
+      if (!ids.length) return;
+      // 課金＋上書き＋組み直しが要る。まとめて走るので確認は必須
+      if (!confirm(`選択した ${ids.length}行 を生成し直します（概算 $${(ids.length * 0.04).toFixed(2)}・実課金）。
+既存の絵は上書きされ、Photoshopでの組み直しが必要になります。続行しますか？`)) return;
+      this.arollBulkBusy = true;
+      this.arollBulkMsg = '';
+      try {
+        const r = await fetch(`${this.arollApiBase}/generate`, {
+          method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ line_ids: ids, only_missing: false,
+                                 allow_paid_fallback: this.arollPaidFallback,
+                                 aspect: this.arollAspect, style: this.arollStyle }),
+        });
+        if (!r.ok) { const d = await r.json().catch(() => ({})); alert('エラー: ' + (d.detail || r.status)); return; }
+        this.arollBulkMsg = `🎬 ${ids.length}行の生成を開始しました`;
+        await this.pollArollStatus();
+      } finally { this.arollBulkBusy = false; }
+    },
+    async arollBulkBackground() {
+      const ids = this.arollSelected;
+      if (!ids.length) return;
+      this.arollBulkBusy = true;
+      this.arollBulkMsg = '';
+      try {
+        const r = await fetch(`${this.arollApiBase}/backgrounds/auto_assign`, {
+          method: 'POST', headers: { 'Content-Type': 'application/json' },
+          // only_missing:false = 選んだ行は手動選択も含めて割り当て直す
+          body: JSON.stringify({ only_missing: false, line_ids: ids }),
+        });
+        const d = await r.json().catch(() => ({}));
+        if (!r.ok) { alert('エラー: ' + (d.detail || r.status)); return; }
+        // from_actual_shot: 絵が既に決まっている行は実物のshotを優先した件数（穴6）
+        this.arollBulkMsg = `🏞️ ${d.assigned ?? 0}行に背景を割り当てました`
+          + ((d.unmatched ?? 0) ? `（候補なし ${d.unmatched}行）` : '')
+          + ((d.from_actual_shot ?? 0) ? `（実物優先 ${d.from_actual_shot}行）` : '');
+        await this.loadArollManifest();
+      } finally { this.arollBulkBusy = false; }
+    },
+    async arollBulkSlot(axis, value) {
+      const ids = this.arollSelected;
+      if (!ids.length || !value) return;
+      this.arollBulkBusy = true;
+      this.arollBulkMsg = '';
+      try {
+        // 1行ずつ既存の行APIを叩く（一括用の口を増やさない＝挙動が枝分かれしない）
+        for (const id of ids) {
+          const p = this.arollPanels.find(x => x.line_id === id);
+          if (p) await this.arollSetSlot(p, axis, value);
+        }
+        this.arollBulkMsg = `🎭 ${ids.length}行の${axis}を変更しました`;
+        await this.loadArollManifest();
+      } finally { this.arollBulkBusy = false; }
+    },
+
+    // ── 工程セクションの開閉（Phase 3） ─────────────────────────────
+    // 「済んだ工程は畳む」を既定にしつつ、手で開いたものは開いたままにする。
+    arollSecIsOpen(key) {
+      if (key in this.arollSecManual) return this.arollSecManual[key];
+      return !this.arollSecDone(key);
+    },
+    arollSecToggle(key) { this.arollSecManual[key] = !this.arollSecIsOpen(key); },
+    // その工程が「もう見なくてよい」か。畳む判断と ✓ 表示の両方がこれを見る。
+    arollSecDone(key) {
+      switch (key) {
+        case 'prep':    return this.arollPrepDone;
+        case 'draw':    return this.arollDrawDone;
+        // 組む/見る は「終わり」を機械で判断できない（目視が要る）ので畳まない
+        default:        return false;
+      }
+    },
+    // プロンプトが全行そろい、背景も割り当て済みで、台本ともズレていない
+    // 生きている行（台本から消えた orphan は対象外＝直しようがない）
+    get arollLivePanels() { return this.arollPanels.filter(p => !p.orphan); },
+    get arollPrepDone() {
+      if (!this.arollManifest) return false;
+      const ps = this.arollLivePanels;
+      if (!ps.length) return false;
+      // ⚠️ 背景は**全行に要る**。ナレーション行（キャラ無し）は背景だけが絵なので、
+      //    むしろ背景が必須。ここを「キャラが居る行だけ」にすると逆になる。
+      return ps.every(p => (p.prompt || '').trim())
+        && ps.every(p => p.background_id)
+        && !this.arollDriftCount;
+    },
+    // 生成が要る行が残っていない（在庫割当・生成の両方が終わっている）
+    get arollDrawDone() {
+      if (!this.arollManifest) return false;
+      const ps = this.arollLivePanels.filter(p => (p.characters || []).length);
+      return ps.length > 0 && ps.every(p => p.status === 'done' || p.cutout_slot_id);
+    },
+    // 見出しの右端に出す一行サマリ。畳んだままでも進捗が分かるようにする
+    arollSecSummary(key) {
+      const c = this.arollCounts;
+      switch (key) {
+        case 'prep': {
+          if (!this.arollManifest) return 'まだ何もありません';
+          const noPrompt = this.arollLivePanels.filter(p => !(p.prompt || '').trim()).length;
+          const noBg = this.arollLivePanels.filter(p => !p.background_id).length;
+          const bits = [];
+          if (noPrompt) bits.push(`プロンプト未 ${noPrompt}`);
+          if (noBg) bits.push(`背景未 ${noBg}`);
+          if (this.arollDriftCount) bits.push(`台本とズレ ${this.arollDriftCount}`);
+          return bits.length ? bits.join(' / ') : '✔ そろっています';
+        }
+        case 'draw': {
+          if (!this.arollManifest) return '';
+          const need = this.cutoutPlan ? this.cutoutPlan.need_generation : null;
+          const base = `生成済み ${c.done} / ${c.total}`;
+          return need === null ? base
+            : `${base}　（在庫で ${this.cutoutPlan.from_stock} 行・要生成 ${need} 行）`;
+        }
+        case 'build':
+          if (!this.psassistAlive) return 'ホスト工程が停止中';
+          return this.psassistExportTargets.length
+            ? `納品PNGが古い ${this.psassistExportTargets.length} 枚` : '✔ 納品PNGは最新';
+        case 'review': {
+          if (!this.qa) return '未検査';
+          const q = this.qaCounts;
+          return `要対応 ${q.blocking} / 助言 ${q.advisory} / 問題なし ${q.clean}`;
+        }
+        default: return '';
+      }
+    },
+
+    async refreshArollTab() {
+      if (!this.currentProject) return;
+      this.arollMsg = '';
+      await Promise.all([
+        this.loadFreeStyles(),
+        this.charas.length ? Promise.resolve() : this.loadCharas(),
+        this.loadStudioPresets(),
+      ]);
+      await this.loadArollManifest();
+      await this.loadArollSync();
+      await this.pollArollStatus();
+      // ★在庫の試算をここで済ませる。押させてから安い数字を出すのは順序が逆で、
+      //   先に「在庫で賄えない分だけの金額」を見せるべき（§3-a）。
+      if (this.arollManifest) await this.loadCutoutPlan();
+      await this.loadPsassistQa();
+      await this.loadPsassistPlan();
+      await this.loadPsassistWorker();   // タブを開いた時だけ（話数を切り替えるたびには叩かない）
+      await this.loadPsCutoutStatus();   // P4: 上のworker/manifestに依存するのでこの後
+      await this.loadCharLibVersions();  // 要組み直し判定（arollBuildStateが使う）
+      await this.loadPsassistJobs();
+    },
     async loadArollSync() {
       if (!this.currentProject || !this.activeEpisodeNumber) { this.arollSync = null; return; }
       try {
         const r = await fetch(`${this.arollApiBase}/sync`);
         this.arollSync = r.ok ? await r.json() : null;
       } catch { this.arollSync = null; }
+    },
+    // 「台本との同期」カードから、ズレている行をコマ一覧側で見る（解消操作はそちらの
+    // 「✓まとめて確定」に統合済み。2026-09-24）。
+    arollFocusDrift() {
+      this.arollRowFilter = 'drift';
+      this.arollPanelTableOpen = true;
+      this.$nextTick(() => {
+        document.getElementById('aroll-panel-table')?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+      });
+    },
+    // ─── T2: 行の絵の確定状況（image_approved_at） ──────────────────────
+    //
+    // 在庫登録はT1で生成の瞬間に済んでいる。ここが数えるのは「この行の絵はこれでいい」と
+    // 人が確定したかどうかだけで、資産の再利用許可（review_status）とは別軸
+    // （Docs/AROLL_UNIFIED_FLOW_PLAN.md §3）。
+    get arollApprovalCounts() {
+      const c = { done: 0, approved: 0, pending: 0 };
+      for (const p of this.arollPanels) {
+        if (p.status !== 'done' || !p.image) continue;
+        c.done++;
+        if (p.image_approved_at) c.approved++; else c.pending++;
+      }
+      return c;
+    },
+    // T2: 「この行の絵はこれでいい」の確定（image_approved_at）。在庫登録はT1で
+    // 生成の瞬間に済んでいるので、ここは通常 registered=0 になる（過去データ互換の時だけ動く）。
+    async arollApproveImages(lineIds) {
+      const ids = lineIds || [];
+      if (!ids.length) return;
+      this.arollApproveBusy = true;
+      this.arollMsg = '';
+      try {
+        const r = await fetch(`${this.arollApiBase}/approve-images`, {
+          method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ line_ids: ids }),
+        });
+        const d = await r.json();
+        if (!r.ok) throw new Error(d.detail || '確定に失敗しました');
+        this.arollMsg = `✔ ${d.approved}件を確定しました`
+          + (d.registered ? `（うち${d.registered}件は旧データのため在庫へ新規登録）` : '')
+          + (d.synced ? `（うち${d.synced}件は台本とのズレも解消）` : '');
+        await this.loadArollManifest();
+        await this.loadArollSync();
+      } catch (e) {
+        this.arollMsg = `確定に失敗: ${e.message}`;
+      } finally { this.arollApproveBusy = false; }
+    },
+    async arollExport() {
+      this.arollExportBusy = true;
+      this.arollMsg = '';
+      try {
+        const r = await fetch(`${this.arollApiBase}/export`, { method: 'POST' });
+        const d = await r.json();
+        if (!r.ok) throw new Error(d.detail || '書き出しに失敗しました');
+        this.arollExportResult = d;
+        // normalize-filenamesが正本のimageを書き換えるので、サムネURLを取り直す
+        await this.loadArollManifest();
+      } catch (e) {
+        this.arollMsg = `書き出しに失敗: ${e.message}`;
+      } finally { this.arollExportBusy = false; }
     },
     async loadArollManifest() {
       if (!this.currentProject || !this.activeEpisodeNumber) { this.arollManifest = null; return; }
@@ -7882,6 +9367,385 @@ function app() {
         this.arollCuts = r.ok ? await r.json() : null;
       } catch { this.arollCuts = null; }
     },
+    get arollCutByLine() {
+      const m = {};
+      for (const c of (this.arollCuts?.cuts || [])) {
+        for (const lid of c.line_ids) m[lid] = c;
+      }
+      return m;
+    },
+    arollCutOf(lineId) { return this.arollCutByLine[lineId] || null; },
+    arollIsCutHead(lineId) {
+      const c = this.arollCutOf(lineId);
+      return !c || c.line_ids[0] === lineId;
+    },
+    arollCutRoleLabel(role) {
+      return { solo: '単独', bundled: '束ね' }[role] || role || '';
+    },
+    // サブ行のグループ表示（SUBLINE_PLAN §5・§10・S5）。カット（同じ絵と背景を共有する区間）とは
+    // 別の軸＝サブ行のグループ（同じ親を持つ一連の行）を示す。manifest.panels[].parent_line_id を使う
+    // （scrapping-agent/app/core/aroll_manager.py の build_or_update_manifest が付与）
+    arollIsSublineOf(p) {
+      return !!(p.parent_line_id && p.parent_line_id !== p.line_id);
+    },
+    // 手直し: 境界を足す/消す（SUBLINE_PLAN §6-3で決めの付け替えは廃止）。
+    // 再計算しても壊れない（サーバが上書きを保存）
+    async arollSetCut(lineId, patch) {
+      this.arollLineBusy = lineId;
+      try {
+        const r = await fetch(`${this.arollApiBase}/cuts/${lineId}`, {
+          method: 'PUT', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(patch),
+        });
+        const d = await r.json().catch(() => ({}));
+        if (!r.ok) { this.arollMsg = `カットの変更に失敗: ${d.detail || r.status}`; return; }
+        await this.loadArollCuts();
+      } finally { this.arollLineBusy = null; }
+    },
+    async arollGeneratePrompts() {
+      this.arollBusy = 'prompts';
+      this.arollMsg = '';
+      this.arollWarnings = [];
+      try {
+        const r = await fetch(`${this.arollApiBase}/prompts`, {
+          method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            extra_prompt: this.arollExtraPrompt || null,
+            overwrite: this.arollOverwrite,
+            aspect: this.arollAspect, style: this.arollStyle,
+          }),
+        });
+        const d = await r.json();
+        if (!r.ok) throw new Error(d.detail || 'プロンプト生成に失敗しました');
+        // レスポンスのmanifestはsync未付与なので、注釈付きのGETで取り直す
+        await this.loadArollManifest();
+        await this.loadArollSync();
+        this.arollWarnings = d.warnings || [];
+        this.arollMsg = `✔ ${(d.manifest.panels || []).filter(p => p.prompt).length}行のプロンプトを用意しました`;
+      } catch (e) {
+        this.arollMsg = `プロンプト生成に失敗: ${e.message}`;
+      } finally { this.arollBusy = null; }
+    },
+    // Step C1: 台本に新規追加された行（パネル自体が無い）を、その行がある章だけ
+    // 下ごしらえして実体化する（overwrite=falseなので既存行のプロンプトには触れない）。
+    // 実体化した行はコマ一覧の通常フロー（在庫/生成/まとめて確定）に合流する。
+    async arollIngestNewLines() {
+      const sections = this.arollNewLineSections;
+      const n = this.arollNewLineCount;
+      if (!n) return;
+      if (!confirm(`台本に追加された ${n}行分のプロンプトを用意します（無料・画像生成なし）。続行しますか？`)) return;
+      this.arollBusy = 'ingest';
+      this.arollMsg = '';
+      try {
+        const r = await fetch(`${this.arollApiBase}/prompts`, {
+          method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            sections, overwrite: false, aspect: this.arollAspect, style: this.arollStyle,
+          }),
+        });
+        const d = await r.json();
+        if (!r.ok) throw new Error(d.detail || '取り込みに失敗しました');
+        // 新規行だけが背景未割当のはずなので only_missing=true で十分絞り込める
+        const br = await fetch(`${this.arollApiBase}/backgrounds/auto_assign`, {
+          method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ only_missing: true }),
+        });
+        const bd = await br.json().catch(() => ({}));
+        await this.loadArollManifest();
+        await this.loadArollSync();
+        this.arollWarnings = d.warnings || [];
+        this.arollMsg = `✔ 新しい行 ${n}件を取り込みました`
+          + (br.ok && bd.assigned ? `（背景 ${bd.assigned}件を割当）` : '');
+      } catch (e) {
+        this.arollMsg = `取り込みに失敗: ${e.message}`;
+      } finally { this.arollBusy = null; }
+    },
+    async arollSavePrompt(p, value) {
+      await this.arollUpdateLine(p, { prompt: value });
+    },
+    arollAddChar(p, cid) {
+      if (!cid || p.characters.includes(cid) || p.characters.length >= 2) return;
+      this.arollUpdateLine(p, { characters: [...p.characters, cid] });
+    },
+    arollRemoveChar(p, cid) {
+      this.arollUpdateLine(p, { characters: p.characters.filter(c => c !== cid) });
+    },
+    async arollUpdateLine(p, patch) {
+      try {
+        const r = await fetch(`${this.arollApiBase}/lines/${p.line_id}`, {
+          method: 'PUT', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(patch),
+        });
+        const d = await r.json();
+        if (!r.ok) throw new Error(d.detail || '保存に失敗しました');
+        Object.assign(p, d);
+      } catch (e) { this.arollMsg = `行の保存に失敗: ${e.message}`; }
+    },
+    async arollGenerateLine(p) {
+      // 既存の絵を上書きし、ライブラリに命中しなければ課金される。取り消せないので必ず確認する
+      // （🎲新規には確認があるのに、より使われるこちらに無いのは危ない）
+      if (p.image && !confirm(
+            `${p.line_id} の絵を作り直します。
+
+`
+            + `・今の絵は上書きされます（元に戻せません）
+`
+            + `・ライブラリに一致が無ければ課金されます（≈$0.04）
+`
+            + `・合成済みの場合、Photoshopで組み直しが必要になります
+
+`
+            + `よろしいですか？`)) return;
+      this.arollLineBusy = p.line_id;
+      this.arollMsg = '';
+      try {
+        const r = await fetch(`${this.arollApiBase}/generate/line/${p.line_id}`, {
+          method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ allow_paid_fallback: this.arollPaidFallback }),
+        });
+        const d = await r.json();
+        if (!r.ok) throw new Error(d.detail || '生成に失敗しました');
+        Object.assign(p, d, { sync: 'ok' });  // 今の台本から描き直した＝一致
+        this.arollImgVersion++;
+        await this.loadArollSync();
+      } catch (e) {
+        this.arollMsg = `${p.line_id} の生成に失敗: ${e.message}`;
+        await this.loadArollManifest();  // failedステータスを反映
+        await this.loadArollSync();
+      } finally { this.arollLineBusy = null; }
+    },
+    async arollGenerateLineFresh(p) {
+      // ライブラリを迂回して必ず新規課金生成する（"新規生成"ボタン専用。作り直す=ライブラリ優先とは別操作）
+      if (!confirm(`ライブラリを使わず新規課金生成します（≈$0.04）。よろしいですか？`)) return;
+      this.arollLineBusy = p.line_id;
+      this.arollMsg = '';
+      try {
+        const r = await fetch(`${this.arollApiBase}/generate/line/${p.line_id}`, {
+          method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ allow_paid_fallback: this.arollPaidFallback, use_library: false }),
+        });
+        const d = await r.json();
+        if (!r.ok) throw new Error(d.detail || '生成に失敗しました');
+        Object.assign(p, d, { sync: 'ok' });
+        this.arollImgVersion++;
+        await this.loadArollSync();
+      } catch (e) {
+        this.arollMsg = `${p.line_id} の生成に失敗: ${e.message}`;
+        await this.loadArollManifest();
+        await this.loadArollSync();
+      } finally { this.arollLineBusy = null; }
+    },
+    // コマ一覧が見せるのは「実際に使われている絵」のタグ（p.used_slot）であって、
+    // p.slot（LLMが決めた希望ラベル・在庫選定とズレて当たり前）ではない。
+    // 本番64行中56行=87.5%でズレを実測（2026-09-06）。希望を変える入力は
+    // モーダル側のプルダウン（p.slot）に残し、一覧は読み取り専用の表示に絞る。
+    studioPresetLabel(axis, id) {
+      if (!id) return '';
+      return (this.studioPresets[axis] || []).find(o => o.id === id)?.label_ja || id;
+    },
+    arollUsedSlotSummary(p) {
+      if (!p.cutout_slot_id) return '';
+      const u = p.used_slot;
+      if (!u) return '（在庫の情報を取得できません）';
+      const parts = [['emotion', '表情'], ['shot', 'ショット'], ['angle', 'アングル'], ['pose', 'ポーズ']]
+        .map(([k, label]) => u[k] ? `${label}:${this.studioPresetLabel(k, u[k])}` : null)
+        .filter(Boolean);
+      return parts.join(' / ') || '（タグ無し）';
+    },
+    async arollSetSlot(p, field, value) {
+      const slot = { emotion: '', shot: '', angle: '', pose: '', ...(p.slot || {}) };
+      slot[field] = value;
+      p.slot = slot;
+      if (!(slot.emotion && slot.shot && slot.angle)) return;  // 3軸揃うまで送らない
+      try {
+        await fetch(`${this.arollApiBase}/lines/${p.line_id}`, {
+          method: 'PUT', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ slot: { emotion: slot.emotion, shot: slot.shot, angle: slot.angle, pose: slot.pose || null } }),
+        });
+        p.slot_source = 'user';
+      } catch { return; }
+      // 無料の範囲で即座に再解決する（ライブラリに一致が無ければ何もしない＝課金しない）
+      this.arollLineBusy = p.line_id;
+      try {
+        const r = await fetch(`${this.arollApiBase}/generate/line/${p.line_id}`, {
+          method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ use_library: true, library_only: true }),
+        });
+        if (r.ok) { Object.assign(p, await r.json()); this.arollImgVersion++; }
+        // 404(ライブラリ不一致)は静かに無視。ユーザーは下のピッカーか「新規生成」ボタンを使う
+      } catch { /* noop */ }
+      finally { this.arollLineBusy = null; }
+    },
+    // 切り抜き在庫からの選択。**slot一致では並べない**（スロット軸は使い回し感を説明しない）。
+    // 直近の行から遠い順に並び、閾値未満は too_close として出す（隠さない ──
+    // 全部近ければ「生成すべき」と一目で分かる方がよい）。本籍は
+    // psassist/Docs/CHARACTER_CUTOUT_PLAN.md §10、選び方は scrapping-agent の cutout_selector。
+    async arollTogglePicker(p) {
+      this.arollHoverPreview = null;
+      if (this.arollPickerFor === p.line_id) { this.arollPickerFor = null; return; }
+      this.arollPickerFor = p.line_id;
+      this.arollPickerItems = [];
+      this.arollPickerNote = '';
+      if (!((p.characters || []).length === 1)) {
+        this.arollPickerNote = 'キャラが1人に確定していない行には割り当てられません';
+        return;
+      }
+      this.arollPickerBusy = true;
+      try {
+        const d = await (await fetch(
+          `${this.arollApiBase}/cutout-candidates?line_id=${encodeURIComponent(p.line_id)}&limit=24`)).json();
+        this.arollPickerItems = d.items || [];
+        this.arollPickerThreshold = d.threshold ?? 0.073;
+        if (!this.arollPickerItems.length) {
+          this.arollPickerNote = d.reason
+            || '適格な在庫がありません（未許可・世代違い・生涯上限・感情の不一致）。📚キャラ在庫タブで許可してください';
+        }
+      } catch { this.arollPickerItems = []; this.arollPickerNote = '候補の取得に失敗しました'; }
+      this.arollPickerBusy = false;
+    },
+    arollPickerImageUrl(charId, item) {
+      const filename = (item.cutout || '').split('/').pop();
+      return `${FAPI}/characters/${charId}/panel_library/cutout/${filename}`;
+    },
+    async arollPickLibraryImage(p, item) {
+      // ⚠️ パネル画像の差し替えではない。psassist の合成プランに渡す素材を決めるだけ。
+      this.arollLineBusy = p.line_id;
+      try {
+        const r = await fetch(`${this.arollApiBase}/lines/${p.line_id}/cutout`, {
+          method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ slot_id: item.slot_id }),
+        });
+        if (r.ok) {
+          const d = await r.json();
+          p.cutout_slot_id = d.cutout_slot_id;
+          p.cutout_char_id = (p.characters || [])[0];
+          this.arollImgVersion++;
+          // T3: 選び直した直後に自動で組み直し（③④⑤）まで走らせる（完全自動・ユーザー承認2026-09-22）。
+          // await しない＝ピッカーはすぐ閉じ、進捗は既存の psassistPollJob が拾う
+          if (this.psassistAvailable) this.psassistResync([p.line_id], { silent: true });
+        } else {
+          this.arollMsg = (await r.json()).detail || '割り当てに失敗しました';
+        }
+      } catch { /* noop */ }
+      finally { this.arollLineBusy = null; this.arollPickerFor = null; }
+    },
+    async arollClearCutout(p) {
+      this.arollLineBusy = p.line_id;
+      try {
+        const r = await fetch(`${this.arollApiBase}/lines/${p.line_id}/cutout`, {
+          method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ slot_id: null }),
+        });
+        if (r.ok) { p.cutout_slot_id = null; p.cutout_char_id = null; }
+      } catch { /* noop */ }
+      finally { this.arollLineBusy = null; }
+    },
+    // 🗑 この絵は失敗（副操作・T2 §4-2）。「外す」と違い在庫からも削除する（ゴミ箱方式で復元可）。
+    async arollRejectImage(p) {
+      if (!confirm('この絵はどの行でも使えない失敗作として在庫から削除します（ゴミ箱へ移動・復元可）。\nよろしいですか？')) return;
+      this.arollLineBusy = p.line_id;
+      try {
+        const r = await fetch(`${this.arollApiBase}/lines/${p.line_id}/cutout/reject`, { method: 'POST' });
+        const d = await r.json();
+        if (r.ok) {
+          p.cutout_slot_id = null; p.cutout_char_id = null;
+          this.arollMsg = `🗑 ${d.slot_id} を在庫から削除しました`;
+        } else {
+          this.arollMsg = d.detail || '削除に失敗しました';
+        }
+      } catch { /* noop */ }
+      finally { this.arollLineBusy = null; }
+    },
+    async arollAutoAssignBackgrounds() {
+      if (!confirm('全行の背景を自動割当します（無料・画像生成なし）。手動で選んだ行は変更しません。よろしいですか？')) return;
+      this.arollBgAssignBusy = true;
+      try {
+        const r = await fetch(`${this.arollApiBase}/backgrounds/auto_assign`, {
+          method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ only_missing: true }),
+        });
+        const d = await r.json();
+        // from_actual_shot: 在庫の実物shotで選び直せた件数（LLM希望とズレていた分。穴6）
+        const actual = d.from_actual_shot ? `・実物優先 ${d.from_actual_shot}` : '';
+        this.arollMsg = r.ok
+          ? `✔ 背景を${d.assigned}行に割当しました（未一致 ${d.unmatched}・スキップ ${d.skipped}${actual}）`
+          : `背景自動割当に失敗: ${d.detail || r.status}`;
+        await this.loadArollManifest();
+      } catch (e) {
+        this.arollMsg = `背景自動割当に失敗: ${e}`;
+      } finally {
+        this.arollBgAssignBusy = false;
+      }
+    },
+    arollBgImageUrl(bgId) {
+      return `${FAPI}/backgrounds/file/${bgId}.png`;
+    },
+    async arollToggleBgPicker(p) {
+      if (this.arollBgPickerFor === p.line_id) { this.arollBgPickerFor = null; return; }
+      this.arollBgPickerFor = p.line_id;
+      this.arollBgPickerCat = 'all';
+      // framingはlocationの背景にしか意味を持たない軸（生成フォームもlocation選択時しか出さない）。
+      // psych/comic/effect等はframing未設定のまま残るため、サーバー側でframing一致を条件にすると
+      // 全滅する（Line40等で「該当する背景がありません」になっていた原因）。ここでは絞り込まず
+      // 全件取得し、locationにだけarollBgPickerFilteredでframingを適用する。
+      this.arollBgPickerFraming = p.slot?.shot || '';
+      this.arollBgPickerItems = [];
+      this.arollBgPickerBusy = true;
+      try {
+        const d = await (await fetch(`${FAPI}/backgrounds`)).json();
+        this.arollBgPickerItems = d.backgrounds || [];
+      } catch { this.arollBgPickerItems = []; }
+      this.arollBgPickerBusy = false;
+    },
+    // 系統チップ。location/psych/comic以外も実在しうるためデータから作る（🏞️背景タブと同じ方針）
+    get arollBgPickerCatFacet() { return this.bgTally(this.arollBgPickerItems, b => b.category); },
+    get arollBgPickerFiltered() {
+      return this.arollBgPickerItems.filter(b => {
+        if (this.arollBgPickerCat !== 'all' && b.category !== this.arollBgPickerCat) return false;
+        if (b.category === 'location' && this.arollBgPickerFraming && b.framing !== this.arollBgPickerFraming) return false;
+        return true;
+      });
+    },
+    arollSetBgPickerCat(cat) {
+      this.arollBgPickerCat = (this.arollBgPickerCat === cat && cat !== 'all') ? 'all' : cat;
+    },
+    async arollSetBackground(p, bgId) {
+      this.arollLineBusy = p.line_id;
+      try {
+        await fetch(`${this.arollApiBase}/lines/${p.line_id}`, {
+          method: 'PUT', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ background_id: bgId }),
+        });
+        p.background_id = bgId;
+      } catch { /* noop */ }
+      finally { this.arollLineBusy = null; this.arollBgPickerFor = null; }
+    },
+    async arollStartBatch() {
+      const n = this.arollBatchTargetCount;
+      if (n === 0) return;
+      if (!confirm(`${n}枚 生成します（概算 $${(n * 0.04).toFixed(2)}・NanoBanana実課金）。続行しますか？`)) return;
+      const body = { allow_paid_fallback: this.arollPaidFallback, aspect: this.arollAspect, style: this.arollStyle };
+      if (this.arollTarget === 'failed') {
+        body.line_ids = (this.arollManifest?.panels || []).filter(p => p.status === 'failed').map(p => p.line_id);
+        body.only_missing = true;
+      } else {
+        body.only_missing = this.arollTarget !== 'all';
+      }
+      this.arollMsg = '';
+      try {
+        const r = await fetch(`${this.arollApiBase}/generate`, {
+          method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(body),
+        });
+        const d = await r.json();
+        if (!r.ok) throw new Error(d.detail || 'バッチ開始に失敗しました');
+        this.arollRunning = true;
+        this.schedulePollAroll();
+      } catch (e) { this.arollMsg = `バッチ開始に失敗: ${e.message}`; }
+    },
+    async arollStop() {
+      try { await fetch(`${this.arollApiBase}/stop`, { method: 'POST' }); } catch { /* 次のポーリングで反映 */ }
+    },
     schedulePollAroll() {
       clearTimeout(this.arollPollTimer);
       this.arollPollTimer = setTimeout(() => this.pollArollStatus(), 2500);
@@ -7902,6 +9766,13 @@ function app() {
         await this.loadArollManifest();  // バッチ完了 → 最終状態を反映
         await this.loadArollSync();
       }
+    },
+    async arollLoadCredits() {
+      this.arollOrCredits = null;
+      try {
+        const d = await (await fetch(`${SAPI}/llm-usage`)).json();
+        this.arollOrCredits = (typeof d.remaining === 'number') ? d.remaining : null;
+      } catch { this.arollOrCredits = null; }
     },
 
     async checkScrapHealth() {
@@ -8401,6 +10272,22 @@ function app() {
       return l ? `#${l.order} ${l.speaker_name || ''}` : this.ttsPlayingLineId;
     },
 
+    // 行の音声状態: 'done'=生成済み / 'stale'=生成後にtext/speed/感情/voice/captionを変更（要再生成） / 'pending'=未生成
+    lineTtsState(line) {
+      const e = this.ttsEntryFor(line);
+      if (!e) return 'pending';
+      const sp = this.ttsSpeakers.find(s => s.id === line.speaker_id);
+      const currentCaption = (sp ? this.speakerResolvedCaption(sp) : '').trim() || null;
+      const sameText = e.text === line.text;
+      // emotion/speedはtts-agent改修前のtts.jsonには存在しないフィールド。
+      // 未記録(undefined)の旧エントリを一律「要再生成」にしてしまわないよう、
+      // フィールドが無い場合はそのエントリではこの項目を比較しない（後方互換）。
+      const sameEmotion = e.emotion === undefined || e.emotion === (line.emotion ?? 'neutral');
+      const sameSpeed = e.speed === undefined || Number(e.speed) === Number(line.speed ?? 1.0);
+      const sameVoice = (e.voice_id ?? 'none') === this.voiceForSpeaker(line.speaker_id);
+      const sameCaption = (e.caption ?? null) === currentCaption;
+      return (sameText && sameEmotion && sameSpeed && sameVoice && sameCaption) ? 'done' : 'stale';
+    },
 
     // 翻訳言語モード用の簡易版: text一致のみで判定（速度/感情/声はキャラ本籍から自動でlineTtsStateの対象外）
     localeLineTtsState(line) {
@@ -8460,26 +10347,24 @@ function app() {
       this.startTtsPolling();
     },
 
+
     async applyTtsDefaultsToAllLines() {
       if (!this.currentProject || !this.activeEpisodeNumber) return;
       const lines = this.draft?.lines || [];
       if (!lines.length) return;
-      if (!confirm(`現在の台本 全${lines.length}行の速度・ポーズを\n速度=${this.ttsDefaultSpeed} / ポーズ=${this.ttsDefaultPauseAfterSec}秒\nで上書きします。よろしいですか？`)) return;
+      // 違う行だけ窓口の edit で書く（1行1操作＝履歴に1件ずつ載る）
+      const targets = lines.filter(l => Number(l.speed) !== Number(this.ttsDefaultSpeed)
+        || Number(l.pause_after_sec) !== Number(this.ttsDefaultPauseAfterSec));
+      if (!confirm(`速度=${this.ttsDefaultSpeed} / ポーズ=${this.ttsDefaultPauseAfterSec}秒 と違う ${targets.length}行（全${lines.length}行中）を上書きします。よろしいですか？\n（行ごとの操作として履歴に載るので、元に戻すは1行ずつです）`)) return;
 
-      const ep = this.activeEpisodeNumber;
-      for (const line of lines) {
-        const r = await fetch(`${SAPI}/projects/${this.currentProject.id}/script/line/${line.order}?episode=${ep}`, {
-          method: 'PATCH',
+      let failed = 0;
+      for (const line of targets) {
+        const r = await fetch(this.lineApi('edit'), {
+          method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            speed: this.ttsDefaultSpeed,
-            pause_after_sec: this.ttsDefaultPauseAfterSec,
-          }),
+          body: JSON.stringify({ line_id: line.id, speed: this.ttsDefaultSpeed, pause_after_sec: this.ttsDefaultPauseAfterSec }),
         }).catch(() => null);
-        if (r && r.ok) {
-          const data = await r.json();
-          Object.assign(line, data.updated_line);
-        }
+        if (!r || !r.ok) failed++;
       }
 
       // デフォルト値自体もプロジェクトに保存
@@ -8493,7 +10378,10 @@ function app() {
         }),
       }).catch(() => null);
 
-      this.addTtsLog(`✅ 全${lines.length}行に速度・ポーズのデフォルト値を適用しました`, 'ok');
+      await this.afterLineOp();
+      this.addTtsLog(failed
+        ? `⚠ ${targets.length - failed}行に適用（${failed}行は失敗）`
+        : `✅ ${targets.length}行に速度・ポーズのデフォルト値を適用しました`, failed ? 'warn' : 'ok');
     },
 
     async cancelTtsRun() {
