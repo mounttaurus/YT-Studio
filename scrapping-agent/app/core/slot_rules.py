@@ -73,8 +73,10 @@ VARIANTS = (
     ("bust", "three_quarter", "talking"),
     ("waist_up", "three_quarter", "arms_crossed"),
     ("bust", "high_angle", "looking_down"),
-    ("waist_up", "high_angle", "standing"),
+    ("waist_up", "high_angle", "presenting"),
 )
+# ⚠️ `standing`（"standing naturally, relaxed"）は入れない: 画像モデルが全身で描く（2026-10-06 butler_crooks の
+# line_097 で、ウエストアップを頼んでも3回中2回が全身だった）。体の下が写るポーズは全身を誘発する。
 
 
 def _is_unspecific(slot: dict) -> bool:
