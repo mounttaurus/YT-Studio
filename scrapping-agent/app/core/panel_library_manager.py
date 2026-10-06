@@ -30,6 +30,7 @@ import io
 import json
 import os
 import threading
+import time
 from datetime import datetime, timezone
 
 try:
@@ -126,6 +127,10 @@ def save_index(char_id: str, data: dict) -> None:
     atomic_write_text(index_file(char_id), json.dumps(data, ensure_ascii=False, indent=2))
 
 
+REPLACE_RETRIES = 6          # os.replace の一時的な PermissionError を待つ回数（Windows の bind マウント）
+REPLACE_BACKOFF_SEC = 0.15     # 待ち時間は 0.15, 0.3, 0.45 … 秒
+
+
 def atomic_write_text(path: Path, text: str) -> None:
     """同じフォルダの一時ファイルに書いてから置き換える（書きかけの4MBのJSONを残さない）。
 
@@ -135,7 +140,17 @@ def atomic_write_text(path: Path, text: str) -> None:
     """
     tmp = path.with_name(f".{path.name}.{os.getpid()}.tmp")
     tmp.write_text(text, encoding="utf-8")
-    os.replace(tmp, path)
+    # Windows の bind マウントでは、4MBのJSONを書き直すたびに、別のプロセス（スキャン等）が置き換え先を
+    # 一瞬握って `PermissionError` になる（2026-10-06 butler_crooks の在庫適用で断続・7回再実行が要った）。
+    # 一時的なものだけを待つ（0.1→0.2→…の短い再試行）。それでも駄目なら本物の権限エラーとして送出する。
+    for attempt in range(1, REPLACE_RETRIES + 1):
+        try:
+            os.replace(tmp, path)
+            return
+        except PermissionError:
+            if attempt == REPLACE_RETRIES:
+                raise
+            time.sleep(REPLACE_BACKOFF_SEC * attempt)
 
 
 @contextlib.contextmanager
