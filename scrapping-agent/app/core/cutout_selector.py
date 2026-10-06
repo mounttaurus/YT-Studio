@@ -38,6 +38,11 @@ DEFAULT_THRESHOLDS = {
     # 既存在庫の確認（`Docs/STOCK_LABEL_ACCURACY_PLAN.md` §5）が終わるまでは false（全部が依頼のまま）。
     # 終わったら true にする（不変条件 I1）。手動ピッカーは対象外（人が見て選ぶ）。
     "require_verified_label": False,
+    # 全身級の絵は自動選定から外す（2026-10-06・ユーザー判断）。部屋の背景は全身を受ける画角が無い（`wide` 10枚・
+    # `full_body` 0枚）ので、全身を bust 用の背景に置くと小さく立つだけの絵になる。使うのは、台本かユーザーが
+    # 明示した行（演出背景とセット）と、人が選ぶ手動ピッカーだけ。判定は `body_scope()`＝ラベルではなく実物の縦横比。
+    "exclude_full_body": True,
+    "full_body_aspect": 1.9,    # 切り抜きの高さ÷幅。全身ラベル（wide 2.39・full_body 2.35）とそれ以外（≤1.3）の間
 }
 
 
@@ -223,6 +228,27 @@ def _pose_conflicts(want: str | None, have: str | None) -> bool:
     return bool(want and have and want != have)
 
 
+def body_scope(e: dict, th: dict | None = None) -> str:
+    """絵に写っている体の範囲: "full"（全身級）か "upper"（上半身まで）。
+
+    ⚠️ **ラベル（shot）を信じない**: 実測で、ラベルが waist_up なのに実物は全身（高さ÷幅 2.47）の絵が8枚あった
+    （line_025 のルカ）。測定値の頭身も見下ろしで顔が大きく写ると外れる（face_closeup と出た）。
+    実物の**切り抜きの縦横比**（`mask.bbox`）は、全身のラベルとそれ以外をはっきり分ける（430枚で画像由来と完全一致）。
+    人が確かめた値（`body_scope_verified`＝"full"/"upper"）があれば、それが最優先（機械は上書きしない）。
+    """
+    v = e.get("body_scope_verified")
+    if v in ("full", "upper"):
+        return v
+    if e.get("shot") in ("wide", "full_body"):
+        return "full"
+    bb = (e.get("mask") or {}).get("bbox")
+    if bb and len(bb) == 4 and bb[2] > bb[0]:
+        limit = (th or DEFAULT_THRESHOLDS)["full_body_aspect"]
+        if (bb[3] - bb[1] + 1) / (bb[2] - bb[0] + 1) >= limit:
+            return "full"
+    return "upper"
+
+
 def effective_max_uses(o: dict, th: dict) -> int | None:
     """そのslotに有効な生涯上限。overrideがあればそれ（Noneなら無制限）、無ければ既定値。
 
@@ -301,7 +327,8 @@ def _upto(pool: list[dict], emotion: str | None, tag: str | None, level: int) ->
 def candidates(char_id: str, emotion: str | None, ov: dict | None = None,
                extra_uses: dict[str, int] | None = None,
                allow_unknown_emotion: bool = False,
-               pose: str | None = None, tag: str | None = None) -> list[dict]:
+               pose: str | None = None, tag: str | None = None,
+               allow_full_body: bool = False) -> list[dict]:
     """適格な在庫を返す（適格性＝キャラ・世代・承認・感情・banned・使用回数上限）。
 
     tag: 行の細かいタグ（§14）。主タグ・副タグ・系統のどれかで当たる絵を返す（段の順は呼び出し側が
@@ -309,6 +336,9 @@ def candidates(char_id: str, emotion: str | None, ov: dict | None = None,
 
     extra_uses: `char_id/slot_id` → 試算中に消費した回数。**上限判定に必ず含める**。
     含め忘れると、試算の中で同じ絵を無限に使い回せてしまう（実際に一度そのバグを出した）。
+
+    allow_full_body: 全身級の絵を候補に含めるか。**自動割当では False**（既定。部屋の背景が全身を受けられない）。
+      手動ピッカーと、台本・ユーザーが全身を明示した行では True（`body_scope`）。
 
     allow_unknown_emotion: 行の emotion が未指定（実データで196行中22行）の時に
       全候補を適格とするか。**自動割当では False**（感情の制約が外れると悲しい行に
@@ -339,6 +369,8 @@ def candidates(char_id: str, emotion: str | None, ov: dict | None = None,
         o = ov.get(_ref(char_id, e["slot_id"])) or {}
         if o.get("banned"):
             continue
+        if th.get("exclude_full_body") and not allow_full_body and body_scope(e, th) == "full":
+            continue  # 全身級は自動選定から外す（明示した行・手動ピッカーだけ）
         # 主タグ・副タグ・系統のどれかで当たること（段の順は呼び出し側が match_level で決める）
         if emotion and match_level(e, emotion, tag) is None:
             continue
@@ -439,7 +471,8 @@ def plan_episode(char_of_line: list[tuple[str | None, dict | None]],
         recent = [a for a in assigned[-th["recent_window"]:] if a]
         prev = assigned[-1] if assigned and assigned[-1] else None
         # 試算中の消費を上限判定ごと反映する（含めないと同じ絵を無限に使えてしまう）
-        cands = candidates(char_id, emotion, ov, used, pose=pose, **_tag_kw(tag))
+        cands = candidates(char_id, emotion, ov, used, pose=pose, allow_full_body=bool(slot.get("allow_full_body")),
+                           **_tag_kw(tag))
         # ⚠️ **1話の中では同じ絵を二度使わない**（2026-09-06・ユーザー判断）。
         # max_uses は「生涯の」上限（既定3）なので、17行離れた再使用を素通りさせていた
         # （本番 line_009 と line_026 に同一 slot_id。recent_window=5 の窓の外だった）。

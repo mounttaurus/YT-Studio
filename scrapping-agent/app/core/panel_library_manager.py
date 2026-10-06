@@ -52,7 +52,7 @@ SCHEMA_VERSION = "1.4.0"  # 1.3.0: mask を追加。1.4.0: facing軸の新設・
 #                          1.1.0: kind="cutout" / cutout / measured / fingerprint を追加
 
 BACKGROUND_FRAGMENT = panel_presets.BACKGROUND_MODES["flat"]  # 本籍は panel_presets
-PROMPT_SUFFIX = "No text, no letters, no speech bubbles, no watermark in the image."
+PROMPT_SUFFIX = panel_presets.PROMPT_SUFFIX  # 本籍は panel_presets
 
 
 def _now() -> str:
@@ -1308,6 +1308,11 @@ def register_from_image(
     # ⚠️ psassist の採寸（バブルの左右等）はここで測る mask を使う。詳細は
     # _generate_and_measure の同種コメント参照。
     mask = cutout_engine.analyze_alpha(rgba)
+    # 生成が作る「分身」（同じキャラが横に2人並ぶ）は積まない（2026-10-06 butler_crooks の line_178）。
+    # 2ショットは廃止（吹き出しと両立しない）なので、2人以上写る絵は在庫に入れてはいけない。
+    if cutout_engine.count_subjects(rgba) >= 2:
+        return {"registered": False, "reason_code": "multi_subject",
+                "reason": "2人以上（分身）が写っています。在庫には積みません。作り直してください"}
 
     ver = appearance_version(char_id)
     slot_id = _next_slot_id(emotion, shot, angle, {e["slot_id"] for e in idx["entries"]})

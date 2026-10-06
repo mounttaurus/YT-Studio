@@ -45,7 +45,7 @@ MIN_INTERVAL_SEC = float(os.getenv("AROLL_MIN_INTERVAL_SEC", "3"))
 RETRY_BACKOFF_SEC = [5, 15, 45]
 
 # 固定サフィックス: 吹き出しはユーザーが後乗せするため画像内の文字を禁止する
-PROMPT_SUFFIX = "No text, no letters, no speech bubbles, no watermark in the image."
+PROMPT_SUFFIX = panel_presets.PROMPT_SUFFIX  # 本籍は panel_presets
 
 # 背景はLLMに書かせず常にこれで統一する（時間帯/シチュエーションのブレを防ぐ）。
 # ユーザーが後から背景だけ別途生成して合成する運用が前提（2026-07-25方針）。
@@ -439,6 +439,7 @@ def update_line(
         if p.get("line_id") == line_id:
             if background_id is not None:
                 p["background_id"] = background_id or None
+                p["background_source"] = "user" if background_id else None   # 手で選んだ背景は自動の付け直しで壊さない
             if bubble_key is not None:
                 if bubble_key:
                     p["bubble_key"] = bubble_key
@@ -518,7 +519,7 @@ def _unit_reference_shot(members: list[dict]) -> tuple[str, bool]:
 
 
 def auto_assign_backgrounds(project_id: str, episode: int, only_missing: bool = True,
-                            line_ids: list[str] | None = None) -> dict:
+                            line_ids: list[str] | None = None, keep_user: bool = True) -> dict:
     """全行に背景を自動割当する（無料・画像は一切生成しない。既存backgroundsアーカイブから選ぶだけ）。
 
     行の(shot→framing, emotion→mood)から background_manager.suggest_background() で1件選び、
@@ -539,7 +540,8 @@ def auto_assign_backgrounds(project_id: str, episode: int, only_missing: bool = 
     適格条件そのものなので実物とほぼ一致し続ける（差し替えない・先頭行の値を使う）。
 
     only_missing=True（既定）: 既にbackground_idを持つ行はスキップ（手動で選んだ行を壊さない）。
-    False: 全行を割当し直す（既存の手動選択も上書きする）。
+    False: 全行を割当し直す。**ただし `keep_user=True`（既定）なら、手で選んだ背景（`background_source=="user"`）は残す**
+    （2026-10-06: 絵の選定の**後**に背景を付け直すため。手で選んだ背景まで壊さない）。
 
     line_ids: 指定した行だけを対象にする（コマ一覧の一括操作用）。
     ⚠️ **空リストは「対象ゼロ」**（省略＝None が「全行」）。falsy 判定にすると、
@@ -577,6 +579,11 @@ def auto_assign_backgrounds(project_id: str, episode: int, only_missing: bool = 
             recent[:] = recent[-AROLL_BG_RECENT_WINDOW:]
             skipped += len(members)
             continue
+        if keep_user and any(m.get("background_source") == "user" and m.get("background_id") for m in members):
+            recent.append(head.get("background_id"))
+            recent[:] = [r for r in recent if r][-AROLL_BG_RECENT_WINDOW:]
+            skipped += len(members)
+            continue
         shot, unit_from_actual = _unit_reference_shot(members)
         emotion = (head.get("slot") or {}).get("emotion") or ""
         bg = background_manager.suggest_background(shot, emotion, exclude_ids=set(recent))
@@ -585,6 +592,7 @@ def auto_assign_backgrounds(project_id: str, episode: int, only_missing: bool = 
             continue
         for m in members:
             m["background_id"] = bg["bg_id"]
+            m["background_source"] = "auto"
             assigned += 1
         background_manager.record_usage(bg["bg_id"])   # 消費は単位に1回
         recent.append(bg["bg_id"])
@@ -1613,6 +1621,14 @@ async def generate_line_image(
 
         chars = [c for c in (panel.get("characters") or []) if c]
         slot = panel.get("slot") or {}
+        if len(chars) == 1 and not (slot.get("emotion") and slot.get("shot") and slot.get("angle")):
+            # slot が空・不完全だと、下の在庫登録が**黙って飛ばされ**、絵は出来たのに行へ紐付かない
+            # （2026-10-06 butler_crooks: 7行が組版でキャラ欠落）。生成は止めず、ルールで補って登録する。
+            slot = dict(slot_rules.rule_slot(panel), **{k: v for k, v in slot.items() if v})
+            panel["slot"], panel["slot_source"] = slot, panel.get("slot_source") if panel.get("slot_source") == "user" else "rule"
+            panel["slot_key"] = compute_slot_key(chars, slot)
+            if log is not None:
+                log.append(f"ℹ️ {line_id} は slot が空だったので、ルールで補って在庫に登録します")
         emotion, shot, angle = slot.get("emotion"), slot.get("shot"), slot.get("angle")
         if len(chars) == 1 and emotion and shot and angle:
             char_id = chars[0]
@@ -1651,6 +1667,10 @@ async def generate_line_image(
                                                     target_status="pending")
                     if gate.get("message") and log is not None:
                         log.append(f"{line_id} {gate['message']}")
+                elif reg.get("reason_code") == "multi_subject":
+                    # 分身（2人以上）は使わない。行を失敗扱いにして知らせる（黙って使うと2ショットが出る）。
+                    # `only_missing` の再実行で、この行だけ作り直せる
+                    raise ValueError(f"{line_id}: {reg.get('reason')}")
                 elif log is not None:
                     log.append(f"⚠️ {line_id} 切り抜きに失敗し在庫登録できませんでした: {reg.get('reason')}")
         elif len(chars) > 1 and log is not None:
@@ -2181,7 +2201,10 @@ def cutout_plan(project_id: str, episode: int, reselect_line_ids: set[str] | Non
         # 先頭行の感情で引くことになる（実測ではランの18組中17組が同一感情なので実害は小さい）。
         head = panels_by_id.get(c["line_ids"][0], {})
         chars = head.get("characters") or []
-        seq.append((chars[0] if len(chars) == 1 else None, head.get("slot")))
+        hs = head.get("slot")
+        if hs and head.get("slot_source") in ("user", "script") and hs.get("shot") in ("wide", "full_body"):
+            hs = dict(hs, allow_full_body=True)   # 台本かユーザーが全身を明示した行だけ、全身級を許す
+        seq.append((chars[0] if len(chars) == 1 else None, hs))
 
     # ⚠️ **カメラプラン（U2）は「希望」を渡すだけ**。ハード制約にすると、その段の在庫が
     # 無いカットが新規生成へ落ちて課金が増える。選定は従来どおり指紋で決め、
@@ -2304,7 +2327,8 @@ def cutout_candidates(project_id: str, episode: int, line_id: str, limit: int = 
 
     items = []
     # 手動ピッカーなので感情未指定でも全候補を出す（人が見て選ぶなら制約は要らない）
-    for e in cutout_selector.candidates(char_id, emotion, allow_unknown_emotion=True, tag=tag):
+    for e in cutout_selector.candidates(char_id, emotion, allow_unknown_emotion=True, tag=tag,
+                                        allow_full_body=True):   # 人が見て選ぶ口＝全身も候補に出す
         d = min((cutout_selector.distance(e.get("fingerprint"), r.get("fingerprint")) for r in recent),
                 default=1.0)
         items.append({
@@ -2435,6 +2459,8 @@ def fix_duplicates(project_id: str, episode: int, protected_line_ids: list[str] 
         changes.append({"line_ids": a["line_ids"], "head": a["line_id"], "cut_id": a["cut_id"],
                         "char_id": a["char_id"], "from": a["from_slot"], "to": target, "before": before})
     if changes:
+        _reassign_backgrounds_after_selection(
+            project_id, episode, [l for c in changes if c.get("to") for l in c["line_ids"]])
         m2 = load_manifest(project_id, episode) or {}
         fix_id = "fix_" + _now().replace(":", "").replace("-", "")[:15]
         hist = list(m2.get("duplicate_fixes") or [])
@@ -3028,6 +3054,21 @@ def sync_structure(project_id: str, episode: int,
             "filled": filled, "warnings": warnings}
 
 
+def _reassign_backgrounds_after_selection(project_id: str, episode: int, line_ids: list[str]) -> None:
+    """絵を選んだ（選び直した）行の背景を、**実際に使う絵の画角**で付け直す（自動割当の背景だけ・手動は残す）。
+
+    背景を絵の選定より先に割り当てると、背景は希望の画角（rule の slot は常に bust）で決まり、選ばれた絵の実際の画角と
+    食い違う（2026-10-06 butler_crooks: 全身級9行すべてが bust 用の背景だった）。順序を人が覚えるのではなく、
+    選定の適用の直後にここで付け直す。失敗しても選定は止めない（背景は後からでも割り当てられる）。
+    """
+    if not line_ids:
+        return
+    try:
+        auto_assign_backgrounds(project_id, episode, only_missing=False, line_ids=line_ids, keep_user=True)
+    except Exception:  # noqa: BLE001
+        pass
+
+
 def apply_cutout_plan(project_id: str, episode: int, line_ids: list[str] | None = None) -> dict:
     """試算（cutout_plan）の結果を実際に書き込む。**在庫で賄える行だけ**。
 
@@ -3064,6 +3105,7 @@ def apply_cutout_plan(project_id: str, episode: int, line_ids: list[str] | None 
         cuts_done += 1
         applied.extend(res.get("line_ids") or [line["line_id"]])
     applied = list(dict.fromkeys(applied))   # カット共有で重複するので畳む
+    _reassign_backgrounds_after_selection(project_id, episode, applied)
     return {"applied": len(applied), "applied_cuts": cuts_done,
             "skipped": skipped, "kept_decided": kept, "line_ids": applied}
 

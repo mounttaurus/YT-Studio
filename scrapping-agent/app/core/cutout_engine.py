@@ -511,3 +511,34 @@ def analyze_alpha(rgba: Image.Image) -> dict[str, Any]:
             "right": bool(on[:, -1].sum() > h * 0.02),
         },
     }
+
+
+def count_subjects(rgba, *, min_height: float = 0.03, merge_gap: float = 0.06, min_width: float = 0.22) -> int:
+    """切り抜きに写っている**人物の塊**の数（横方向）。2以上＝2人以上（分身）が写っている疑い。
+
+    アルファの列ごとの高さを見て、十分な高さのある列が途切れずに続く範囲を1つの塊とする。幅の6%未満の隙間は
+    同じ塊（髪の房・腕など）、塊の幅が画像幅の22%未満なら塊に数えない（細かい破片）。
+    実測（2026-10-06）: 在庫430枚のうち2以上は、生成が作った分身1枚だけ（誤検出0）。
+    ⚠️ 前後に重なって立つ2人は数えられない（同じ列に重なる）。ここで拾うのは「横に並んだ分身」。
+    """
+    import numpy as np
+
+    a = np.asarray(rgba.convert("RGBA"))[:, :, 3] > 128
+    h, w = a.shape
+    col = a.sum(0) > max(3, min_height * h)
+    runs, start = [], None
+    for x, v in enumerate(col):
+        if v and start is None:
+            start = x
+        if (not v) and start is not None:
+            runs.append((start, x - 1))
+            start = None
+    if start is not None:
+        runs.append((start, w - 1))
+    merged = []
+    for r in runs:
+        if merged and r[0] - merged[-1][1] < merge_gap * w:
+            merged[-1] = (merged[-1][0], r[1])
+        else:
+            merged.append(r)
+    return sum(1 for m in merged if (m[1] - m[0] + 1) > min_width * w)

@@ -129,6 +129,9 @@ def summarize(char_id: str, entries: list[dict], *, current_version: str, overri
         if o.get("banned"):
             totals["banned"] += 1
             continue
+        if thresholds.get("exclude_full_body") and cutout_selector.body_scope(e, thresholds) == "full":
+            totals["full_body"] += 1        # 全身級＝自動選定に出ない（明示した行・手動ピッカーのみ）
+            continue
         tag = cutout_selector.entry_tag(e)
         fam = e.get("emotion")
         if tag == emotion_rubric.FACE_HIDDEN:
@@ -176,7 +179,7 @@ def summarize(char_id: str, entries: list[dict], *, current_version: str, overri
                      if k.startswith(char_id + "/") and k.split("/", 1)[1] not in slot_ids)
     return {
         "char_id": char_id,
-        "totals": {k: totals.get(k, 0) for k in ("entries", "eligible", "unverified", "no_emotion", "face_hidden",
+        "totals": {k: totals.get(k, 0) for k in ("entries", "eligible", "unverified", "no_emotion", "face_hidden", "full_body",
                                                    "pending", "stale", "banned", "no_cutout")},
         "families": families,
         "thin": [r["emotion"] for r in families if r["thin"]],

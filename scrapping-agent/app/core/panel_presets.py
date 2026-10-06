@@ -32,6 +32,13 @@ PRESETS_FILE = SHARED_DIR / "imagegen" / "panel_presets.json"
 # 抜け残り(leftover_ratio)が緑系の10倍以上に悪化することを実測（0.015〜0.023 vs 0.0000〜0.0018、
 # 2キャラ・flat/ai両方式で再現）。青紫を候補から外しミント/グリーン系に絞ったところ
 # leftover_ratioが0.0付近まで改善した。詳細は memory/pastel-hue-collides-with-eye-color。
+# 画像生成に常に付ける固定句（本籍）。Aロールの生成と在庫の補充生成が同じ文字列を使う。
+# 「小物・机・紙」は禁止: 2026-10-06 の通しで、手に持つ紙にキャラシートが描かれた（参照画像に引きずられる）・
+# 机を指示したら同じキャラが2人並んだ。生成で使うのは検証済みのポーズ語彙だけにして、小物は描かせない。
+PROMPT_SUFFIX = ("No text, no letters, no speech bubbles, no watermark in the image. "
+                 "Exactly one character, no duplicate or second person. Not a character sheet or turnaround. "
+                 "No props, furniture, tables, papers or other objects.")
+
 BACKGROUND_MODES = {
     "scene": "in a simple anime-style background scene",
     "flat": ("plain solid pastel background, flat single color, no scenery, "
