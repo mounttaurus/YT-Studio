@@ -46,6 +46,9 @@ RETRY_BACKOFF_SEC = [5, 15, 45]
 
 # 固定サフィックス: 吹き出しはユーザーが後乗せするため画像内の文字を禁止する
 PROMPT_SUFFIX = panel_presets.PROMPT_SUFFIX  # 本籍は panel_presets
+# 生成後ゲート（register_from_image の reason_code）。当たったら自動で作り直す（費用 +$0.04/回・最大 GATE_RETRIES 回）
+GATE_CODES = ("multi_subject", "unrequested_full_body")
+GATE_RETRIES = 2
 
 # 背景はLLMに書かせず常にこれで統一する（時間帯/シチュエーションのブレを防ぐ）。
 # ユーザーが後から背景だけ別途生成して合成する運用が前提（2026-07-25方針）。
@@ -1642,13 +1645,26 @@ async def generate_line_image(
                 if log is not None:
                     log.append(f"ℹ️ {line_id} は在庫に積めません（{why}）。絵はこの行にだけ使われます")
             else:
-                reg = panel_library_manager.register_from_image(
-                    char_id, data, emotion=emotion, shot=shot, angle=angle,
-                    pose=slot.get("pose") or "", prompt=full_prompt,
-                    style_name=manifest.get("style", "kamishibai"), provider="nanobanana",
-                    source={"project_id": project_id, "episode": episode, "line_id": line_id},
-                    review_status="pending", emotion_tag=slot.get("emotion_tag") or "",
-                )
+                attempt = 0
+                while True:
+                    reg = panel_library_manager.register_from_image(
+                        char_id, data, emotion=emotion, shot=shot, angle=angle,
+                        pose=slot.get("pose") or "", prompt=full_prompt,
+                        style_name=manifest.get("style", "kamishibai"), provider="nanobanana",
+                        source={"project_id": project_id, "episode": episode, "line_id": line_id},
+                        review_status="pending", emotion_tag=slot.get("emotion_tag") or "",
+                    )
+                    # 生成後ゲート（分身・頼んでいない全身）に当たったら、自動で作り直す（最大 GATE_RETRIES 回）。
+                    # 画像モデルは、ウエストアップを頼んでも全身で描くことがある（2026-10-06 butler_crooks の line_097）
+                    if reg.get("reason_code") in GATE_CODES and attempt < GATE_RETRIES:
+                        attempt += 1
+                        if log is not None:
+                            log.append(f"♻️ {line_id} {reg.get('reason')} → 作り直します（{attempt}/{GATE_RETRIES}）")
+                        data = await _generate_with_retry(
+                            full_prompt, refs, manifest.get("aspect", "16:9"), allow_paid_fallback, log)
+                        (out_dir / filename).write_bytes(data)
+                        continue
+                    break
                 if reg.get("slot_id"):
                     # set_cutout_selection() は review_status="approved" を要求するため使えない
                     # （他の行が在庫を借りる時の承認ゲートであって、この行が自分の生成物を
@@ -1668,10 +1684,10 @@ async def generate_line_image(
                                                     target_status="pending")
                     if gate.get("message") and log is not None:
                         log.append(f"{line_id} {gate['message']}")
-                elif reg.get("reason_code") == "multi_subject":
-                    # 分身（2人以上）は使わない。行を失敗扱いにして知らせる（黙って使うと2ショットが出る）。
-                    # `only_missing` の再実行で、この行だけ作り直せる
-                    raise ValueError(f"{line_id}: {reg.get('reason')}")
+                elif reg.get("reason_code") in GATE_CODES:
+                    # 分身（2人以上）・頼んでいない全身は使わない。行を失敗扱いにして知らせる（黙って使うと
+                    # 2ショットや、背景を受けられない全身が出る）。`only_missing` の再実行で、この行だけ作り直せる
+                    raise ValueError(f"{line_id}: {reg.get('reason')}（自動の作り直し {GATE_RETRIES} 回でも解消しませんでした）")
                 elif log is not None:
                     log.append(f"⚠️ {line_id} 切り抜きに失敗し在庫登録できませんでした: {reg.get('reason')}")
         elif len(chars) > 1 and log is not None:

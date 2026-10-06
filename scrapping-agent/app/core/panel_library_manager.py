@@ -1320,6 +1320,17 @@ def register_from_image(
         return {"registered": False, "reason_code": "multi_subject",
                 "reason": "2人以上（分身）が写っています。在庫には積みません。作り直してください"}
 
+    # 頼んでいない全身（ウエストアップ等を指示したのに全身で出た）は積まない。部屋の背景は全身を受けられず、
+    # 選定は全身級を除外する＝積んでもこの行専用の「背景に馴染まない絵」になるだけ（2026-10-06 の line_097）。
+    # 全身を頼んだ（shot が wide/full_body）時は通す。縦横比の閾値の本籍は cutout_selector。
+    from app.core import cutout_selector  # 遅延 import（循環を避ける）
+    _th = cutout_selector.thresholds()
+    _bb = (mask or {}).get("bbox")
+    if (_th.get("exclude_full_body") and shot not in ("wide", "full_body") and _bb and _bb[2] > _bb[0]
+            and (_bb[3] - _bb[1] + 1) / (_bb[2] - _bb[0] + 1) >= _th["full_body_aspect"]):
+        return {"registered": False, "reason_code": "unrequested_full_body",
+                "reason": "頼んでいない全身で出ました（%s を指示）。在庫には積みません" % shot}
+
     ver = appearance_version(char_id)
     slot_id = _next_slot_id(emotion, shot, angle, {e["slot_id"] for e in idx["entries"]})
     images_dir(char_id).mkdir(parents=True, exist_ok=True)
