@@ -60,7 +60,41 @@ def rule_slot(line: dict) -> dict:
 
 # --------------------------------------------------------------------- 定型の演出プロンプト（API を呼ばない）
 
-DEFAULT_POSE = "talking"   # slot の pose が無い（ルールの slot は pose=None）時の既定。解説口調の標準
+DEFAULT_POSE = "talking"   # slot の pose が無い時の既定。解説口調の標準
+
+# 画角・アングル・ポーズが未指定のルールの slot に、行IDから決定的に割り当てる組み合わせ。
+# 全て在庫の語彙（panel_presets）の中の値。すべて同じ「bust・eye_level・talking」だと、同じ感情の行に
+# そっくりな絵が並んで生成される（2026-10-06 butler_crooks で新規生成の4枚が互いに近いと検査された）。
+VARIANTS = (
+    ("bust", "eye_level", "talking"),
+    ("waist_up", "eye_level", "presenting"),
+    ("bust", "low_angle", "thinking"),
+    ("waist_up", "low_angle", "pointing"),
+    ("bust", "three_quarter", "talking"),
+    ("waist_up", "three_quarter", "arms_crossed"),
+    ("bust", "high_angle", "looking_down"),
+    ("waist_up", "high_angle", "standing"),
+)
+
+
+def _is_unspecific(slot: dict) -> bool:
+    """ルールの slot のまま（画角・アングルが既定で、ポーズも無い）か。"""
+    return (not slot.get("pose")) and slot.get("shot", DEFAULT_SHOT) == DEFAULT_SHOT         and slot.get("angle", DEFAULT_ANGLE) == DEFAULT_ANGLE
+
+
+def template_slot(slot: dict | None, line_id: str = "") -> dict:
+    """生成用に slot を具体化する。未指定のルールの slot だけ、行IDで決めた組み合わせを入れる（決定的）。
+
+    手で直した値・既に具体的な slot はそのまま返す。呼び出し側は戻り値を panel の slot に書き戻す
+    （生成の依頼と在庫のラベルを食い違わせない）。
+    """
+    import hashlib
+
+    s = dict(slot or {})
+    if line_id and _is_unspecific(s):
+        shot, angle, pose = VARIANTS[int(hashlib.md5(line_id.encode("utf-8")).hexdigest(), 16) % len(VARIANTS)]
+        s.update(shot=shot, angle=angle, pose=pose)
+    return s
 
 
 def template_prompt(slot: dict | None, name: str) -> str:
@@ -68,7 +102,7 @@ def template_prompt(slot: dict | None, name: str) -> str:
 
     在庫に積む絵は「再利用される汎用の絵」なので、行ごとの細かな動作（手に持つ物など）は要らない。
     断片は `panel_presets`（在庫バリアント生成と同じ語彙・本籍）から取る＝語彙を複製しない。
-    形は LLM 版と揃える: 「名前, 表情, ポーズ, 画角, アングル.」
+    形は LLM 版と揃える: 「名前, 表情, ポーズ, 画角, アングル.」 画角の変化は `template_slot` が担う。
     """
     from app.core import panel_presets as pp  # 遅延 import（slot_rules を軽く保つ）
 

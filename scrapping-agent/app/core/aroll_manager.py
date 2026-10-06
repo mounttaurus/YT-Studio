@@ -2830,12 +2830,16 @@ def _apply_template_prompts(project_id: str, episode: int, manifest: dict, scrip
         if lid not in wanted or not _panel_needs_prompt(p) or p.get("prompt_source") == "user":
             continue
         slot = p.get("slot") or slot_rules.rule_slot(lines.get(lid) or p)
+        if p.get("slot_source") != "user":
+            # 未指定のルールの slot は、行IDで決めた画角・ポーズを入れる（同じ絵ばかり生成しない）。書き戻す。
+            slot = slot_rules.template_slot(slot, lid)
+            if slot != (p.get("slot") or {}):
+                p["slot"] = slot
+                p["slot_source"] = p.get("slot_source") if p.get("slot_source") in ("rule", "derived", "inherited") else "rule"
+                p["slot_key"] = compute_slot_key(p.get("characters"), slot)
         p["prompt"] = slot_rules.template_prompt(slot, p.get("speaker_name") or "")
         p["prompt_source"] = "template"
         p["prompt_text_hash"] = text_hash((lines.get(lid) or p).get("text"))
-        if p.get("slot") is None:
-            p["slot"], p["slot_source"] = slot, "rule"
-            p["slot_key"] = compute_slot_key(p.get("characters"), slot)
         done.append(lid)
     if done:
         save_manifest(project_id, episode, manifest)
