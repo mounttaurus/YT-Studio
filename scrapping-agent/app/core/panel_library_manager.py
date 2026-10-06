@@ -357,7 +357,7 @@ def list_entries(char_id: str, *, emotion: str = "", shot: str = "", angle: str 
 
 
 def find_current(char_id: str, emotion: str, shot: str, angle: str,
-                 exclude_slot_ids: set[str] | None = None) -> dict | None:
+                 exclude_slot_ids: set[str] | None = None, allow_full_body: bool = False) -> dict | None:
     """slot(emotion/shot/angle)に一致し、appearance_versionが今と同じ・かつ承認済みのentryのうち
     「最も使われていない」1件を返す（ローテーション。2026-08-21）。
 
@@ -382,6 +382,11 @@ def find_current(char_id: str, emotion: str, shot: str, angle: str,
     """
     exclude_slot_ids = exclude_slot_ids or set()
     current = appearance_version(char_id)
+    # 全身級（実物の縦横比で判定）は配らない（2026-10-06）。ラベルの完全一致だけで引くこの経路が、
+    # waist_up ラベルの全身の絵（縦横比2.49）を2行に引用して、選定側の除外をすり抜けた。
+    from app.core import cutout_selector  # 遅延 import（cutout_selector が本モジュールを import しているため）
+    th = cutout_selector.thresholds()
+    skip_full = bool(th.get("exclude_full_body")) and not allow_full_body
     candidates = [
         e for e in load_index(char_id).get("entries", [])
         # ⚠️ 背景を抜いただけの合成素材（image を持たない）は配らない。そのまま渡すと
@@ -394,6 +399,7 @@ def find_current(char_id: str, emotion: str, shot: str, angle: str,
         and e.get("appearance_version") == current
         and e.get("review_status", "approved") == "approved"
         and e.get("slot_id") not in exclude_slot_ids
+        and not (skip_full and cutout_selector.body_scope(e, th) == "full")
     ]
     if not candidates:
         return None

@@ -122,8 +122,9 @@ def _library_lookup(panel: dict, exclude_slot_ids: set[str] | None = None) -> di
     emotion, shot, angle = slot.get("emotion"), slot.get("shot"), slot.get("angle")
     if not (emotion and shot and angle):
         return None
+    allow_full = panel.get("slot_source") in ("user", "script") and shot in ("wide", "full_body")
     entry = panel_library_manager.find_current(chars[0], emotion, shot, angle,
-                                                exclude_slot_ids=exclude_slot_ids)
+                                                exclude_slot_ids=exclude_slot_ids, allow_full_body=allow_full)
     if entry is None:
         return None
     return {"char_id": chars[0], **entry}
