@@ -1,0 +1,18 @@
+{
+  "variant": {"palette": "crimson", "montage_motion": "fly", "montage_tone": "mono", "grain": true},
+  "b1_first": [
+    {"text": "1999年7月4日", "kind": "date"},
+    {"text": "東京・湾岸地区", "kind": "place"}
+  ],
+  "b2_flow": ["消えた貨物船", "深夜の通報", "封鎖された埠頭", "残された記録"],
+  "b3_montage": [
+    {"src": "static/samples/img_01.png", "type": "image"},
+    {"src": "static/samples/vid_01.mp4", "type": "video", "in": 0.5},
+    {"src": "static/samples/img_02.png", "type": "image"},
+    {"src": "static/samples/img_03.png", "type": "image"},
+    {"src": "static/samples/vid_02.mp4", "type": "video", "in": 1.0},
+    {"src": "static/samples/img_04.png", "type": "image"}
+  ],
+  "b4_out": "white",
+  "b5_title": {"plate": null, "main": "見本調査室", "sub": "THE SAMPLE FILES"}
+}

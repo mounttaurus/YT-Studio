@@ -1,0 +1,98 @@
+{
+  "template_id": "kinetic_teaser",
+  "version": 1,
+  "composition_id": "kinetic-teaser-v1",
+  "title": "キネティック・ティーザー",
+  "summary": "①最初のキーワード → ②キーワードの流れ → ③素材のカット（だんだん速く）→ ④ホワイト／ブラックアウト → ⑤タイトルバック",
+  "fps": 30,
+  "width": 1920,
+  "height": 1080,
+  "max_total_sec": 20,
+  "beats": {
+    "b1_first": {
+      "label": "最初のキーワード",
+      "default_sec": 2.5,
+      "min_sec": 1.5,
+      "max_sec": 4.0,
+      "items": {"min": 1, "max": 3},
+      "max_chars": 16,
+      "kinds": ["word", "date", "place"]
+    },
+    "b2_flow": {
+      "label": "キーワードの流れ",
+      "default_sec": 6.0,
+      "min_sec": 3.0,
+      "max_sec": 9.0,
+      "keywords": {"min": 3, "max": 6},
+      "max_chars": 10
+    },
+    "b3_montage": {
+      "label": "素材のカット",
+      "default_sec": 5.0,
+      "min_sec": 2.5,
+      "max_sec": 7.0,
+      "materials": {"min": 3, "max": 12},
+      "types": ["image", "video"],
+      "cuts": {"start_sec": 0.8, "min_sec": 0.13, "decay": 0.8}
+    },
+    "b4_out": {
+      "label": "アウト",
+      "default_sec": 0.8,
+      "min_sec": 0.5,
+      "max_sec": 1.5,
+      "choices": ["white", "black"]
+    },
+    "b5_title": {
+      "label": "タイトルバック",
+      "default_sec": 3.5,
+      "min_sec": 2.0,
+      "max_sec": 5.0,
+      "max_chars_main": 20,
+      "max_chars_sub": 30
+    }
+  },
+  "sfx_cues": [
+    {"beat": "b1_first", "on": "start", "kind": "impact"},
+    {"beat": "b2_flow", "on": "switch", "kind": "whoosh"},
+    {"beat": "b3_montage", "on": "cut", "kind": "hit"},
+    {"beat": "b4_out", "on": "start", "kind": "flash"},
+    {"beat": "b5_title", "on": "start", "kind": "riser"}
+  ],
+  "variants": {
+    "palette": {
+      "default": "crimson",
+      "options": {
+        "crimson": {
+          "label": "赤と黒",
+          "base": "#0d0d0f",
+          "accent": "#e0281f",
+          "text": "#f5f1e8",
+          "flow": [["#e0281f", "#ffffff"], ["#0d0d0f", "#f5f1e8"], ["#f3c623", "#0d0d0f"], ["#f5f1e8", "#e0281f"], ["#1b2f6e", "#ffffff"], ["#0d0d0f", "#f3c623"]],
+          "title_bg": "#120e0b",
+          "title_fg": "#d9b56b"
+        },
+        "noir": {
+          "label": "黒と黄",
+          "base": "#0a0a0a",
+          "accent": "#f3c623",
+          "text": "#ffffff",
+          "flow": [["#f3c623", "#0a0a0a"], ["#0a0a0a", "#ffffff"], ["#ffffff", "#0a0a0a"], ["#2b2b2b", "#f3c623"]],
+          "title_bg": "#0a0a0a",
+          "title_fg": "#e8e3d3"
+        },
+        "toxic": {
+          "label": "毒々しい緑と紫",
+          "base": "#0b0f0a",
+          "accent": "#a6ff00",
+          "text": "#ecffe0",
+          "flow": [["#a6ff00", "#0b0f0a"], ["#5b1a8e", "#ecffe0"], ["#0b0f0a", "#a6ff00"], ["#ecffe0", "#5b1a8e"]],
+          "title_bg": "#0b0f0a",
+          "title_fg": "#b8f27a"
+        }
+      }
+    },
+    "montage_motion": {"default": "fly", "options": ["fly", "cut"]},
+    "montage_tone": {"default": "mono", "options": ["mono", "color"]},
+    "grain": {"default": true, "options": [true, false]}
+  }
+}

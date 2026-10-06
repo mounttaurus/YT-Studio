@@ -14,6 +14,7 @@ RESEARCH_AGENT_URL = os.getenv("RESEARCH_AGENT_URL", "http://research-agent:8001
 SCRIPTING_AGENT_URL = os.getenv("SCRIPTING_AGENT_URL", "http://scripting-agent:8002")
 SCRAPPING_AGENT_URL = os.getenv("SCRAPPING_AGENT_URL", "http://scrapping-agent:8003")
 EDITING_AGENT_URL = os.getenv("EDITING_AGENT_URL", "http://editing-agent:8006")
+MOTION_AGENT_URL = os.getenv("MOTION_AGENT_URL", "http://motion-agent:8007")
 
 PROJECT_PATH_RE = re.compile(r"^projects/([^/]+)")
 
@@ -598,6 +599,38 @@ async def proxy_editing(path: str, request: Request):
                 "path": path,
                 "status_code": res.status_code,
             })
+
+    content_type = res.headers.get("content-type", "")
+    if "application/json" in content_type:
+        return JSONResponse(content=res.json(), status_code=res.status_code)
+    return Response(content=res.content, status_code=res.status_code, media_type=content_type)
+
+
+# ─── motion-agent連携（汎用プロキシ） ───────────────────────────────────
+#
+# オープニング（モーショングラフィック）の制作（Docs/OPENING_MOTION_PLAN.md）。
+# ワークベンチ・MCP は motion-agent を直接叩かず、ここを通す。描画は非同期ジョブなので
+# 中継の待ち時間は短くてよいが、`/stills?wait=` は描き終わるまで待つので長めに取る。
+
+@router.api_route("/api/motion/{path:path}", methods=["GET", "POST", "PUT", "PATCH", "DELETE"])
+async def proxy_motion(path: str, request: Request):
+    url = f"{MOTION_AGENT_URL}/{path}"
+    body = await request.body()
+    headers = {}
+    if "content-type" in request.headers:
+        headers["content-type"] = request.headers["content-type"]
+
+    async with httpx.AsyncClient(timeout=330.0) as client:
+        try:
+            res = await client.request(
+                request.method,
+                url,
+                params=request.query_params,
+                content=body,
+                headers=headers,
+            )
+        except httpx.RequestError as e:
+            raise HTTPException(status_code=502, detail=f"motion-agent unreachable: {e}")
 
     content_type = res.headers.get("content-type", "")
     if "application/json" in content_type:

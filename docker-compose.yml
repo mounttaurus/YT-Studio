@@ -83,6 +83,7 @@ services:
       - TTS_AGENT_URL=http://tts-agent:8004
       - SCRAPPING_AGENT_URL=http://scrapping-agent:8003
       - EDITING_AGENT_URL=http://editing-agent:8006
+      - MOTION_AGENT_URL=http://motion-agent:8007
     volumes:
       - ./shared:/shared
     networks:
@@ -142,6 +143,26 @@ services:
       - SHARED_DIR=/shared
     volumes:
       - ./shared:/shared
+    networks:
+      - youtube-auto-net
+    restart: unless-stopped
+
+  # ─── オープニング（モーショングラフィック）の制作（Remotion。GPU不要）───
+  # 設計: Docs/OPENING_MOTION_PLAN.md。描画は CPU 上の Chrome。M0 の実測でピーク約2.7GiB
+  # なので mem_limit で他のサービスを守る。共有メモリ(shm_size)は既定の64MBで足りた。
+  motion-agent:
+    build: ./motion-agent
+    ports:
+      - "8007:8007"
+    env_file:
+      - .env
+    environment:
+      - SHARED_DIR=/shared
+      - MOTION_SELF_URL=http://127.0.0.1:8007
+      - MOTION_RENDER_CONCURRENCY=4
+    volumes:
+      - ./shared:/shared
+    mem_limit: 3g
     networks:
       - youtube-auto-net
     restart: unless-stopped

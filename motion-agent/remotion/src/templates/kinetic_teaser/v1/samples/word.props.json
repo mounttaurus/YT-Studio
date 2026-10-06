@@ -1,0 +1,286 @@
+{
+  "template": {
+    "id": "kinetic_teaser",
+    "version": 1
+  },
+  "variant": {
+    "palette": "noir",
+    "montage_motion": "cut",
+    "montage_tone": "color",
+    "grain": true
+  },
+  "b1_first": [
+    {
+      "text": "PROJECT ZERO",
+      "kind": "word"
+    }
+  ],
+  "b2_flow": [
+    "極秘計画",
+    "人体実験",
+    "記録の抹消",
+    "内部告発",
+    "沈黙"
+  ],
+  "b3_montage": [
+    {
+      "src": "static/samples/vid_02.mp4",
+      "type": "video",
+      "in": 0.0
+    },
+    {
+      "src": "static/samples/img_04.png",
+      "type": "image",
+      "in": 0.0
+    },
+    {
+      "src": "static/samples/img_02.png",
+      "type": "image",
+      "in": 0.0
+    },
+    {
+      "src": "static/samples/vid_01.mp4",
+      "type": "video",
+      "in": 2.0
+    },
+    {
+      "src": "static/samples/img_01.png",
+      "type": "image",
+      "in": 0.0
+    },
+    {
+      "src": "static/samples/img_03.png",
+      "type": "image",
+      "in": 0.0
+    }
+  ],
+  "b4_out": "black",
+  "b5_title": {
+    "plate": null,
+    "main": "見本チャンネル",
+    "sub": "サンプルの副題"
+  },
+  "asset_base": "",
+  "timing": {
+    "fps": 30,
+    "total_frames": 519,
+    "beats": {
+      "b1_first": {
+        "from": 0,
+        "to": 60
+      },
+      "b2_flow": {
+        "from": 60,
+        "to": 255
+      },
+      "b3_montage": {
+        "from": 255,
+        "to": 390
+      },
+      "b4_out": {
+        "from": 390,
+        "to": 414
+      },
+      "b5_title": {
+        "from": 414,
+        "to": 519
+      }
+    },
+    "b2_switches": [
+      60,
+      99,
+      138,
+      177,
+      216
+    ],
+    "b3_cuts": [
+      {
+        "from": 255,
+        "to": 279,
+        "material": 0
+      },
+      {
+        "from": 279,
+        "to": 298,
+        "material": 1
+      },
+      {
+        "from": 298,
+        "to": 313,
+        "material": 2
+      },
+      {
+        "from": 313,
+        "to": 325,
+        "material": 3
+      },
+      {
+        "from": 325,
+        "to": 335,
+        "material": 4
+      },
+      {
+        "from": 335,
+        "to": 343,
+        "material": 5
+      },
+      {
+        "from": 343,
+        "to": 349,
+        "material": 0
+      },
+      {
+        "from": 349,
+        "to": 354,
+        "material": 1
+      },
+      {
+        "from": 354,
+        "to": 358,
+        "material": 2
+      },
+      {
+        "from": 358,
+        "to": 362,
+        "material": 3
+      },
+      {
+        "from": 362,
+        "to": 366,
+        "material": 4
+      },
+      {
+        "from": 366,
+        "to": 370,
+        "material": 5
+      },
+      {
+        "from": 370,
+        "to": 374,
+        "material": 0
+      },
+      {
+        "from": 374,
+        "to": 378,
+        "material": 1
+      },
+      {
+        "from": 378,
+        "to": 382,
+        "material": 2
+      },
+      {
+        "from": 382,
+        "to": 386,
+        "material": 3
+      },
+      {
+        "from": 386,
+        "to": 390,
+        "material": 4
+      }
+    ],
+    "sfx": [
+      {
+        "frame": 0,
+        "kind": "impact"
+      },
+      {
+        "frame": 60,
+        "kind": "whoosh"
+      },
+      {
+        "frame": 99,
+        "kind": "whoosh"
+      },
+      {
+        "frame": 138,
+        "kind": "whoosh"
+      },
+      {
+        "frame": 177,
+        "kind": "whoosh"
+      },
+      {
+        "frame": 216,
+        "kind": "whoosh"
+      },
+      {
+        "frame": 255,
+        "kind": "hit"
+      },
+      {
+        "frame": 279,
+        "kind": "hit"
+      },
+      {
+        "frame": 298,
+        "kind": "hit"
+      },
+      {
+        "frame": 313,
+        "kind": "hit"
+      },
+      {
+        "frame": 325,
+        "kind": "hit"
+      },
+      {
+        "frame": 335,
+        "kind": "hit"
+      },
+      {
+        "frame": 343,
+        "kind": "hit"
+      },
+      {
+        "frame": 349,
+        "kind": "hit"
+      },
+      {
+        "frame": 354,
+        "kind": "hit"
+      },
+      {
+        "frame": 358,
+        "kind": "hit"
+      },
+      {
+        "frame": 362,
+        "kind": "hit"
+      },
+      {
+        "frame": 366,
+        "kind": "hit"
+      },
+      {
+        "frame": 370,
+        "kind": "hit"
+      },
+      {
+        "frame": 374,
+        "kind": "hit"
+      },
+      {
+        "frame": 378,
+        "kind": "hit"
+      },
+      {
+        "frame": 382,
+        "kind": "hit"
+      },
+      {
+        "frame": 386,
+        "kind": "hit"
+      },
+      {
+        "frame": 390,
+        "kind": "flash"
+      },
+      {
+        "frame": 414,
+        "kind": "riser"
+      }
+    ]
+  }
+}

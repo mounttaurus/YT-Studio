@@ -383,3 +383,21 @@ def test_otio_roundtrip_and_stats(tmp_path, monkeypatch):
     assert stats["video_clip_count"] == 19
     assert stats["marker_count"] == 5
     assert stats["duration_sec"] > 0
+
+
+# ── 台本と音声のズレの警告（2026-10-01 MKウルトラ回: 5行が抜け3行が古いまま繋がった） ──────
+
+def test_script_sync_warnings_reports_missing_and_stale_lines():
+    from app.core import timeline_builder as tb
+    script = {"lines": [{"id": "a", "text": "x"}, {"id": "b", "text": "新しい"}, {"id": "c", "text": "z"}]}
+    tts = {"audio_files": [{"line_id": "a", "text": "x"}, {"line_id": "b", "text": "古い"}]}
+    w = {x["code"]: x for x in tb.script_sync_warnings(script, tts)}
+    assert w[tb.TTS_LINES_MISSING]["line_ids"] == ["c"]
+    assert w[tb.TTS_TEXT_STALE]["line_ids"] == ["b"]
+
+
+def test_script_sync_warnings_quiet_when_in_sync_or_no_script():
+    from app.core import timeline_builder as tb
+    tts = {"audio_files": [{"line_id": "a", "text": "x"}]}
+    assert tb.script_sync_warnings({"lines": [{"id": "a", "text": "x"}]}, tts) == []
+    assert tb.script_sync_warnings(None, tts) == []

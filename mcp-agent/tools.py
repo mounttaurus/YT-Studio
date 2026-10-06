@@ -1587,6 +1587,212 @@ async def psassist_run(project_id: str, episode_number: int, kind: str,
         "POST", f"projects/{project_id}/episodes/{episode_number}/psassist/jobs", json=body)
 
 
+# ── オープニング（モーショングラフィック・motion-agent）─────────────────
+#
+# 設計: Docs/OPENING_MOTION_PLAN.md。director の汎用プロキシ /api/motion/* 経由で motion-agent(:8007)を叩く。
+# 型（テンプレート）の枠を埋めた「描画入力」を検査し、静止画で確かめ、本描画（音なしmp4）する。
+# 画像を返すツールは戻り値の "_images"（[{"name", "png": bytes, "format": "png"|"jpeg"}]）を server.py が画像として返す
+# （tools.py を FastMCP に依存させない）。
+
+def _motion_body(template_id: str, version: int, sample: str, render_input: Optional[dict],
+                 frames: Optional[list[dict]] = None) -> dict:
+    if not sample and render_input is None:
+        raise ValueError("sample（型に同梱の見本の名前）か render_input（描画入力）のどちらかを指定してください")
+    body: dict = {"template_id": template_id, "version": version}
+    if sample:
+        body["sample"] = sample
+    else:
+        body["input"] = render_input
+    if frames:
+        body["frames"] = frames
+    return body
+
+
+async def opening_templates() -> dict:
+    """オープニングの型（テンプレート）の一覧。各型の template_id・version・要約・見本の名前を返す。
+
+    次に opening_template_meta で枠（個数・字数・秒・選べるつまみ）を読み、描画入力を作る。
+    """
+    return await dc.get("api/motion/templates")
+
+
+async def opening_template_meta(template_id: str = "kinetic_teaser", version: int = 1,
+                                sample: str = "") -> dict:
+    """型の meta.json（枠の制約の本籍）。sample を指定するとその見本の描画入力も返す（書き方の例）。
+
+    meta: beats（①〜⑤の個数・字数・秒の範囲）・max_total_sec（20秒）・variants（選べるつまみ）。
+    描画入力はこの制約を満たして書く（満たさないと opening_validate が日本語で指摘する）。
+    """
+    out = await dc.get(f"api/motion/templates/{template_id}/v{version}")
+    if sample:
+        out["sample_input"] = await dc.get(f"api/motion/templates/{template_id}/v{version}/samples/{sample}")
+    return out
+
+
+async def opening_fonts() -> dict:
+    """書体の束の一覧（id・family・太さ・用途 role・用途タグ tags・日本語の有無 ja・ユーザーの書体か user）。
+    数百ある時は見本帳 opening_font_specimen（画像）で選ぶ。
+
+    演出プランや描画入力では書体を id で指定する。ユーザーの書体（購入したものなど）は
+    shared/motion/fonts/ に置くと自動で加わる（id は user_<ファイル名>）。
+    """
+    return await dc.get("api/motion/fonts")
+
+
+async def opening_validate(template_id: str = "kinetic_teaser", version: int = 1, sample: str = "",
+                           render_input: Optional[dict] = None) -> dict:
+    """描画入力を検査し、timing（ビートの秒・②の切り替え・③のカット・効果音の打点）を返す。描画はしない。
+
+    ok が false なら errors（field と日本語の message）を直してから opening_stills へ。
+    合計20秒を超える入力もここで指摘される。
+    """
+    return await dc.request("POST", "api/motion/validate",
+                            json=_motion_body(template_id, version, sample, render_input))
+
+
+async def opening_stills(template_id: str = "kinetic_teaser", version: int = 1, sample: str = "",
+                         render_input: Optional[dict] = None, frames: Optional[list[dict]] = None,
+                         focus: Optional[list[str]] = None, wait: int = 120) -> dict:
+    """確認用の静止画を描き、**画像として**返す（見本シート1枚＋focus で指定した静止画）。
+
+    既定はビートごとの見せ場9枚を3列の見本シートにしたもの（order の順に左上から）。
+    frames: [{"name": "...", "frame": 整数}] で見たいフレームを指定できる（名前は英数字・_・-）。
+    focus: 個別に大きく見たい静止画の名前（最大3つ。order の名前）。
+    描画はローカルCPUで数秒（課金なし）。型の見た目を直す時の確認に使う。
+    """
+    body = _motion_body(template_id, version, sample, render_input, frames)
+    job = await dc.request("POST", f"api/motion/stills?wait={max(0, min(int(wait), 300))}", json=body)
+    return await _stills_result(job, focus)
+
+
+async def _stills_result(job: dict, focus: Optional[list[str]]) -> dict:
+    """静止画ジョブの結果を、見本シート（＋focus）の画像つきの戻り値にする。"""
+    out = {"job_id": job["job_id"], "status": job["status"], "elapsed_sec": job.get("elapsed_sec"),
+           "error": job.get("error")}
+    if job["status"] != "done":
+        out["note"] = "まだ終わっていません。opening_status(job_id) で確かめてください" if not job.get("error") else "描画に失敗しました"
+        return out
+    res = job["result"]
+    images = []
+    sheet = res.get("sheet")
+    if sheet:
+        images.append({"name": "sheet", "format": "jpeg", "png": await dc.get_bytes("api/motion" + sheet["url"])})
+        out["order"], out["columns"] = sheet["order"], sheet["columns"]
+    by_name = {s["name"]: s for s in res["stills"]}
+    out["frames"] = {s["name"]: s["frame"] for s in res["stills"]}
+    for name in (focus or [])[:3]:
+        if name not in by_name:
+            out.setdefault("warnings", []).append(f"focus の {name} という静止画はありません")
+            continue
+        images.append({"name": name, "png": await dc.get_bytes("api/motion" + by_name[name]["url"])})
+    out["_images"] = images
+    return out
+
+
+async def opening_render(template_id: str = "kinetic_teaser", version: int = 1, sample: str = "",
+                         render_input: Optional[dict] = None) -> dict:
+    """本描画（1080p30・音なしの mp4）のジョブを投入する。進捗は opening_status(job_id)。
+
+    ローカルCPUで約1.5〜2分（課金なし）。ジョブは1本ずつ順に処理される。
+    注意: 現段階（M1）は作業用の置き場 shared/motion/_work/{job_id}/out.mp4 に出る。
+    話ごとの納品フォルダ（delivery/opening/）への書き出しは M2 から。
+    """
+    return await dc.request("POST", "api/motion/render",
+                            json=_motion_body(template_id, version, sample, render_input))
+
+
+async def opening_status(job_id: str) -> dict:
+    """描画・静止画ジョブの状態（queued/bundling/running/done/error・progress・result・error）。"""
+    return await dc.get(f"api/motion/jobs/{job_id}")
+
+
+# ── オープニングの演出プラン（型 kinetic_teaser v2・設計: Docs/OPENING_MOTION_PLAN.md §18） ──
+#
+# 演出プラン＝型 v1 の①〜⑤を土台に、ビートごとにギミック（ID で呼ぶ）へ差し替えるショットの並び。
+# 話ごとに保存される（episodes/epNN/opening/plan.json・履歴つき）。検査（尺・安全域・出典・書体・明滅）は
+# 保存と描画の前に必ず走る。手順は Skill yt-motion-design。
+
+async def opening_gimmicks() -> dict:
+    """ギミックの台帳: ID（カタログ ID＋名前）・効き方・秒の範囲・params の書き方・繋ぎ・重ねもの・別名。
+    ビートごとに使えるギミック（beats.*.allowed）と、K3 のカットの既定も返す。
+    演出プランを書く前に必ず読む（何が実装済みかの本籍はここ）。"""
+    return await dc.get("api/motion/gimmicks")
+
+
+def _plan_path(project_id: str, episode_number: int, tail: str = "") -> str:
+    return f"api/motion/plans/{project_id}/{int(episode_number)}{tail}"
+
+
+async def opening_plan_get(project_id: str, episode_number: int) -> dict:
+    """話の演出プランと検査の要約を返す。まだ無ければ exists: false（opening_plan_save で作る）。
+
+    analysis: errors（field と日本語の message）・warnings・shots（ショットごとの秒と「何小節目の何拍目」）・
+    flash_estimate（明滅の概算）・resolved_fonts（role: 指定で選ばれた書体）。"""
+    try:
+        return {"exists": True, **await dc.get(_plan_path(project_id, episode_number))}
+    except dc.DirectorError as e:
+        if "404" in str(e) and "演出プランがありません" in str(e):
+            return {"exists": False, "note": "まだ保存されていません。opening_plan_save で作ります（型 v1 のブリーフだけの plan でも描ける）"}
+        raise
+
+
+async def opening_plan_save(project_id: str, episode_number: int, plan: dict) -> dict:
+    """演出プランを保存して検査する（検査に落ちても JSON として読めれば保存される＝途中の状態を失わない。
+    直前の版は履歴に残る）。返り値の analysis.errors が空になるまで直してから stills・render へ。
+
+    plan: {"brief": {variant, b1_first, b2_flow, b3_montage（素材ごとに source＝出典）, b4_out, b5_title},
+           "direction": {"bpm": 120, "overlay": {hud, texture},
+                         "beats": {"b1_first": [{"id","gimmick","bars","params","enter"}], ...}},
+           "notes": "演出の意図"}
+    - direction に書かなかったビートは型 v1 の既定（K1〜K5）で描く。params を省くと brief から埋まる。
+    - 長さ bars は小節（0.25 の倍数）。繋ぎ enter: {"type": A1_portal|A3_light|A4_iris|morph, "bars", "x", "y"}。
+    - ギミックの ID と書き方は opening_gimmicks。書体は id か "role:<用途タグ>"（opening_fonts・opening_font_specimen）。
+    課金なし。"""
+    return await dc.request("PUT", _plan_path(project_id, episode_number), json={"plan": plan})
+
+
+async def opening_plan_history(project_id: str, episode_number: int, name: str = "") -> dict:
+    """保存の履歴。name を省くと名前の一覧（新しい順・最大20）、指定するとその版のプラン（戻したい時は opening_plan_save へ）。"""
+    if name:
+        return await dc.get(_plan_path(project_id, episode_number, f"/history/{name}"))
+    return await dc.get(_plan_path(project_id, episode_number, "/history"))
+
+
+async def opening_plan_stills(project_id: str, episode_number: int, frames: Optional[list[dict]] = None,
+                              focus: Optional[list[str]] = None, wait: int = 120) -> dict:
+    """保存済みのプランの確認用の静止画を**画像として**返す（ショットごとに1枚＋繋ぎの途中・最大12枚を4列の見本シート）。
+    order の順に左上から。frames: [{"name","frame"}] で見たいフレームを指定、focus: 大きく見たい静止画の名前（最大3）。
+    検査に誤りがあると 422。約6〜10秒・課金なし。"""
+    body = {"frames": frames} if frames else None
+    job = await dc.request("POST", _plan_path(project_id, episode_number, f"/stills?wait={max(0, min(int(wait), 300))}"),
+                           json=body)
+    return await _stills_result(job, focus)
+
+
+async def opening_plan_render(project_id: str, episode_number: int) -> dict:
+    """保存済みのプランを本描画（1080p30・音なしの mp4・約1〜2分・課金なし）。進捗と結果は opening_status(job_id)。
+    終わると result.flash に**明滅の実測**（ok・max_per_sec・worst_at_sec。画面の25%以上・毎秒3回まで）が入る。
+    ok が false なら、該当の秒付近を直して（K3 の min_sec を伸ばす・語の切り替えを遅くする・明るさの近い素材）描き直す。
+    検査に誤りがあると 422。"""
+    return await dc.request("POST", _plan_path(project_id, episode_number, "/render"))
+
+
+async def opening_font_specimen(text: str = "洗脳と記録 MK-ULTRA 2025", ids: Optional[list[str]] = None, tag: str = "",
+                                ja_only: bool = True, user_only: bool = False, query: str = "",
+                                limit: int = 24, offset: int = 0) -> dict:
+    """書体の見本帳（1行1書体の画像）を**画像として**返す。書体は数百あるので、名前でなく見て選ぶ。
+    絞り込み: ids（id か role:<タグ>）／tag（強調・不穏・機械・手書き・章題・毛筆・遊び・標準）／user_only（購入した書体だけ）／
+    query（id か家族名に含まれる語）。offset で続きを見る（total が全体の数）。
+    気に入った書体に用途タグを付けるには shared/motion/fonts/fonts.json に {"fonts": {"<id>": {"tags": ["不穏"]}}} と書く。"""
+    body = {"text": text, "ja_only": ja_only, "user_only": user_only, "limit": limit, "offset": offset}
+    for k, v in (("ids", ids), ("tag", tag), ("query", query)):
+        if v:
+            body[k] = v
+    res = await dc.request("POST", "api/motion/fonts/specimen", json=body)
+    res["_images"] = [{"name": "specimen", "format": "jpeg", "png": await dc.get_bytes("api/motion" + res.pop("url"))}]
+    return res
+
+
 # ── レジストリ（server.py / 後継ループ が参照する単一の出所） ──────────
 
 S = SideEffect
@@ -1702,4 +1908,19 @@ TOOLS = [
     # SEO キュレーション（厳選キーワード・台本反映用）
     {"fn": curate_seo_brief,     "side_effects": [S.WRITE]},
     {"fn": set_seo_brief,        "side_effects": [S.WRITE]},
+    # オープニング（モーショングラフィック・motion-agent。課金なし・CPU描画）
+    {"fn": opening_templates,    "side_effects": [S.READ]},
+    {"fn": opening_template_meta, "side_effects": [S.READ]},
+    {"fn": opening_fonts,        "side_effects": [S.READ]},
+    {"fn": opening_validate,     "side_effects": [S.READ]},
+    {"fn": opening_stills,       "side_effects": [S.WRITE, S.ASYNC]},
+    {"fn": opening_render,       "side_effects": [S.WRITE, S.ASYNC]},
+    {"fn": opening_status,       "side_effects": [S.READ]},
+    {"fn": opening_gimmicks,     "side_effects": [S.READ]},
+    {"fn": opening_plan_get,     "side_effects": [S.READ]},
+    {"fn": opening_plan_save,    "side_effects": [S.WRITE]},
+    {"fn": opening_plan_history, "side_effects": [S.READ]},
+    {"fn": opening_plan_stills,  "side_effects": [S.WRITE, S.ASYNC]},
+    {"fn": opening_plan_render,  "side_effects": [S.WRITE, S.ASYNC]},
+    {"fn": opening_font_specimen, "side_effects": [S.READ]},
 ]

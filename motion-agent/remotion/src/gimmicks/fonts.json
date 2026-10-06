@@ -1,0 +1,26 @@
+{
+  "note": "書体の束（B4 書体の描き替え・B7 強調・点群の字形）の本籍。family/weight は CSS（描画）、file/index は Python（点群）が使う。全て Debian main のパッケージ（motion-agent/Dockerfile）。役割 role は演出プランで書体を選ぶ時の手がかり",
+  "tags_vocabulary": ["強調", "不穏", "機械", "手書き", "章題", "毛筆", "遊び", "標準"],
+  "fonts": {
+    "gothic_black": {"family": "Noto Sans CJK JP", "weight": 900, "file": "/usr/share/fonts/opentype/noto/NotoSansCJK-Black.ttc", "index": 0, "role": "強調・叩きつけ", "pkg": "fonts-noto-cjk-extra", "tags": ["強調", "標準"]},
+    "gothic": {"family": "Noto Sans CJK JP", "weight": 700, "file": "/usr/share/fonts/opentype/noto/NotoSansCJK-Bold.ttc", "index": 0, "role": "標準のゴシック", "pkg": "fonts-noto-cjk", "tags": ["標準"]},
+    "gothic_thin": {"family": "Noto Sans CJK JP", "weight": 100, "file": "/usr/share/fonts/opentype/noto/NotoSansCJK-Thin.ttc", "index": 0, "role": "章題・抑制（細い）", "pkg": "fonts-noto-cjk-extra", "tags": ["章題"]},
+    "mincho_black": {"family": "Noto Serif CJK JP", "weight": 900, "file": "/usr/share/fonts/opentype/noto/NotoSerifCJK-Black.ttc", "index": 0, "role": "重厚・史実", "pkg": "fonts-noto-cjk-extra", "tags": ["強調", "不穏"]},
+    "mincho_light": {"family": "Noto Serif CJK JP", "weight": 200, "file": "/usr/share/fonts/opentype/noto/NotoSerifCJK-ExtraLight.ttc", "index": 0, "role": "章題・格調（細い明朝）", "pkg": "fonts-noto-cjk-extra", "tags": ["章題"]},
+    "mono": {"family": "Noto Sans Mono CJK JP", "weight": 700, "file": "/usr/share/fonts/opentype/noto/NotoSansCJK-Bold.ttc", "index": 5, "role": "機械・記録・HUD", "pkg": "fonts-noto-cjk", "tags": ["機械"]},
+    "geometric": {"family": "M PLUS 1", "weight": 900, "file": "/usr/share/fonts/opentype/mplus/Mplus1-Black.otf", "index": 0, "role": "幾何学・現代", "pkg": "fonts-mplus", "tags": ["強調", "遊び"]},
+    "round": {"family": "MotoyaLMaru", "weight": 400, "file": "/usr/share/fonts/truetype/motoya-l-maruberi/MTLmr3m.ttf", "index": 0, "role": "丸ゴシック・柔らかい", "pkg": "fonts-motoya-l-maruberi", "tags": ["遊び"]},
+    "rounded_gothic": {"family": "VL Gothic", "weight": 400, "file": "/usr/share/fonts/truetype/vlgothic/VL-Gothic-Regular.ttf", "index": 0, "role": "素朴なゴシック", "pkg": "fonts-vlgothic", "tags": ["標準"]},
+    "mincho_cedar": {"family": "MotoyaLCedar", "weight": 400, "file": "/usr/share/fonts/truetype/motoya-l-cedar/MTLc3m.ttf", "index": 0, "role": "明朝・端正", "pkg": "fonts-motoya-l-cedar", "tags": ["不穏", "章題"]},
+    "mincho_hanazono": {"family": "HanaMinA", "weight": 400, "file": "/usr/share/fonts/truetype/hanazono/HanaMinA.ttf", "index": 0, "role": "明朝・古風", "pkg": "fonts-hanazono", "tags": ["不穏", "章題"]},
+    "brush": {"family": "KouzanBrushFont", "weight": 400, "file": "/usr/share/fonts/truetype/kouzan-mouhitsu/kouzan-mouhitsu.ttf", "index": 0, "role": "毛筆・判子・和", "pkg": "fonts-kouzan-mouhitsu", "tags": ["毛筆", "強調", "不穏"]},
+    "brush_gyosho": {"family": "KouzanBrushFontGyousyo", "weight": 400, "file": "/usr/share/fonts/truetype/kouzan-mouhitsu/kouzan-mouhitsu-gyosho.ttf", "index": 0, "role": "毛筆・行書", "pkg": "fonts-kouzan-mouhitsu", "tags": ["毛筆", "手書き"]},
+    "brush_sosho": {"family": "KouzanBrushFontSousyo", "weight": 400, "file": "/usr/share/fonts/truetype/kouzan-mouhitsu/KouzanBrushFontSousyo.ttf", "index": 0, "role": "毛筆・草書（崩し）", "pkg": "fonts-kouzan-mouhitsu", "tags": ["毛筆", "手書き", "不穏"]},
+    "brush_soseki": {"family": "AoyagiSosekiFont2", "weight": 400, "file": "/usr/share/fonts/truetype/aoyagi-soseki/aoyagi-soseki.ttf", "index": 0, "role": "毛筆・荒々しい", "pkg": "fonts-aoyagi-soseki", "tags": ["毛筆", "手書き"]},
+    "pixel": {"family": "MisakiGothic2nd", "weight": 400, "file": "/usr/share/fonts/truetype/misaki/misaki_gothic_2nd.ttf", "index": 0, "role": "ドット・古い機械", "pkg": "fonts-misaki", "tags": ["機械", "遊び"]},
+    "pixel_mincho": {"family": "MisakiMincho", "weight": 400, "file": "/usr/share/fonts/truetype/misaki/misaki_mincho.ttf", "index": 0, "role": "ドットの明朝", "pkg": "fonts-misaki", "tags": ["機械", "章題"]},
+    "handwriting": {"family": "SetoFont", "weight": 400, "file": "/usr/share/fonts/truetype/seto/setofont.ttf", "index": 0, "role": "手書き・メモ", "pkg": "fonts-seto", "tags": ["手書き"]},
+    "pen": {"family": "YOzA", "weight": 400, "file": "/usr/share/fonts/truetype/yozvox-yozfont/YOzRA_.ttf", "index": 0, "role": "ペン字・手紙", "pkg": "fonts-yozvox-yozfont", "tags": ["手書き", "不穏"]},
+    "klee": {"family": "Klee One", "weight": 600, "file": "/usr/share/fonts/truetype/klee/KleeOne-SemiBold.ttf", "index": 0, "role": "教科書体・記録", "pkg": "fonts-klee", "tags": ["手書き", "章題"]}
+  }
+}

@@ -37,6 +37,18 @@ services:
       - ./editing-agent/app:/app/app
       - ./editing-agent/tests:/app/tests
 
+  # 型（remotion/src）を差し替えると、次の描画で render.mjs が更新日時を見てバンドルし直す。
+  # --reload-dir app: /app 全体を見張ると remotion/node_modules まで見て重くなるため。
+  # 3007 は Remotion Studio（型の制作用）。`docker compose exec motion-agent npx remotion studio --port 3007`
+  motion-agent:
+    command: ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8007", "--reload", "--reload-dir", "app"]
+    ports:
+      - "3007:3007"
+    volumes:
+      - ./motion-agent/app:/app/app
+      - ./motion-agent/tests:/app/tests
+      - ./motion-agent/remotion/src:/app/remotion/src
+
   tts-agent:
     command: ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8004", "--reload"]
     volumes:

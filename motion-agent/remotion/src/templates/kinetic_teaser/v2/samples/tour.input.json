@@ -1,0 +1,37 @@
+{
+  "brief": {
+    "variant": {"palette": "noir", "montage_motion": "cut", "montage_tone": "color", "grain": true},
+    "b1_first": [{"text": "MK-ULTRA", "kind": "word"}],
+    "b2_flow": ["洗脳", "LSD", "人体実験", "証拠隠滅"],
+    "b3_montage": [
+      {"src": "static/samples/img_01.png", "type": "image"},
+      {"src": "static/samples/img_02.png", "type": "image"},
+      {"src": "static/samples/img_03.png", "type": "image"}
+    ],
+    "b4_out": "white",
+    "b5_title": {"plate": null, "main": "極秘文献調査部", "sub": "繋ぎの見本"}
+  },
+  "direction": {
+    "bpm": 120,
+    "beats": {
+      "b2_flow": [
+        {"id": "t0", "gimmick": "K2_flow", "bars": 2}
+      ],
+      "b3_montage": [
+        {"id": "t1", "gimmick": "B4_font_cycle", "bars": 1,
+         "enter": {"type": "A4_iris", "bars": 0.25, "x": 0.5, "y": 0.5},
+         "params": {"text": "洗脳", "fonts": ["role:不穏", "role:毛筆", "gothic_black", "pixel"]}},
+        {"id": "t2", "gimmick": "C1_particle_morph", "bars": 2,
+         "enter": {"type": "morph", "bars": 0.5},
+         "params": {"colors": "rainbow", "n": 1200, "stages": [{"shape": "sphere"}, {"shape": "scatter"}]}},
+        {"id": "t3", "gimmick": "B4_font_cycle", "bars": 1,
+         "enter": {"type": "morph", "bars": 0.5},
+         "params": {"text": "記録", "fonts": ["mincho_black", "mono", "brush"]}},
+        {"id": "t4", "gimmick": "K3_montage", "bars": 0.75,
+         "enter": {"type": "A3_light", "bars": 0.25, "x": 0.5, "y": 0.5},
+         "params": {"materials": [0, 1, 2]}}
+      ]
+    }
+  },
+  "notes": "繋ぎの見本: K2 →（アイリス）→ 書体の描き替え →（形の受け渡し: 文字が点群へ）→ 点群 →（形の受け渡し: 点群が文字へ）→ 書体の描き替え →（光）→ 素材のカット → ④ホワイトアウト → ⑤。目視確認用"
+}

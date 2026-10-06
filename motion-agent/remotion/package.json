@@ -1,0 +1,20 @@
+{
+  "name": "motion-remotion",
+  "private": true,
+  "version": "0.0.0",
+  "description": "オープニング制作の描画エンジン（Remotion）。remotion 系は必ず同じ版に揃える",
+  "type": "module",
+  "dependencies": {
+    "@remotion/bundler": "4.0.533",
+    "@remotion/cli": "4.0.533",
+    "@remotion/layout-utils": "4.0.533",
+    "@remotion/renderer": "4.0.533",
+    "react": "^19.0.0",
+    "react-dom": "^19.0.0",
+    "remotion": "4.0.533"
+  },
+  "devDependencies": {
+    "@types/react": "^19.0.0",
+    "typescript": "^5.9.0"
+  }
+}

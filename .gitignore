@@ -92,3 +92,9 @@ scrapping-agent/scripts/*.progress.json
 # 切り抜きPS試験の出力とバックアップ（Docs/CUTOUT_PS_PRIMARY_PLAN.md §8・313MB）
 Cutout_PS/out/
 Cutout_PS/backup_20260923/
+
+# 在庫ラベル確認のコンタクトシート（再生成できる画像・Docs/STOCK_LABEL_ACCURACY_PLAN.md §5）
+Docs/stock_label_review/sheets/
+
+# オープニングの参考動画（他人の作品・分析専用。Docs/OPENING_GIMMICK_CATALOG.md）
+Docs/mockups/opening/ref/

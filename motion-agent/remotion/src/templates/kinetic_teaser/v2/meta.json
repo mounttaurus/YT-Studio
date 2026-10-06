@@ -1,0 +1,28 @@
+{
+  "template_id": "kinetic_teaser",
+  "version": 2,
+  "builder": "plan",
+  "composition_id": "kinetic-teaser-v2",
+  "title": "キネティック・ティーザー v2（演出プラン）",
+  "summary": "型 v1 の①〜⑤を部品（K1〜K5）にして、演出プランでビートごとにギミックへ差し替える。プランが空なら v1 と同じ映像。長さは拍（小節）で書き、繋ぎはポータル・光・アイリス・形の受け渡し",
+  "extends": {"template_id": "kinetic_teaser", "version": 1},
+  "fps": 30,
+  "width": 1920,
+  "height": 1080,
+  "max_total_sec": 20,
+  "bpm": {"default": 120, "min": 60, "max": 200},
+  "k3_cuts": {"start_sec": 0.8, "min_sec": 0.34, "decay": 0.8, "note": "v1 は最短 0.13 秒。実測で終盤が毎秒4〜5回の明滅になったので、v2 の既定は毎秒3カットまで（短くしたい時は params.min_sec。素材の明るさが近ければ通る＝描画後の実測で確かめる）"},
+  "beats": {
+    "b1_first": {"label": "最初のキーワード", "min_sec": 1.0, "max_sec": 5.0, "default_gimmick": "K1_first",
+                 "allowed": ["K1_first", "B3_decode", "B4_font_cycle", "C1_particle_morph"]},
+    "b2_flow": {"label": "キーワードの流れ", "min_sec": 2.0, "max_sec": 9.0, "default_gimmick": "K2_flow",
+                "allowed": ["K2_flow", "B3_decode", "B4_font_cycle", "C1_particle_morph"]},
+    "b3_montage": {"label": "素材のカット", "min_sec": 2.5, "max_sec": 8.0, "default_gimmick": "K3_montage",
+                   "allowed": ["K3_montage", "B3_decode", "B4_font_cycle", "C1_particle_morph"]},
+    "b4_out": {"label": "アウト", "min_sec": 0.25, "max_sec": 1.5, "default_gimmick": "K4_out",
+               "allowed": ["K4_out"]},
+    "b5_title": {"label": "タイトルバック", "min_sec": 1.5, "max_sec": 5.0, "default_gimmick": "K5_title",
+                 "allowed": ["K5_title"]}
+  },
+  "material_source_kinds": ["self", "public_domain", "cc0", "cc_by", "cc_by_sa", "licensed", "stock", "episode_broll"]
+}

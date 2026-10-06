@@ -1,0 +1,41 @@
+{
+  "brief": {
+    "variant": {"palette": "crimson", "montage_motion": "fly", "montage_tone": "mono", "grain": true},
+    "b1_first": [{"text": "MK-ULTRA", "kind": "word"}],
+    "b2_flow": ["洗脳", "LSD", "人体実験", "証拠隠滅"],
+    "b3_montage": [
+      {"src": "static/samples/img_01.png", "type": "image"},
+      {"src": "static/samples/img_02.png", "type": "image"},
+      {"src": "static/samples/vid_02.mp4", "type": "video", "in": 0.0},
+      {"src": "static/samples/img_03.png", "type": "image"},
+      {"src": "static/samples/vid_01.mp4", "type": "video", "in": 1.0},
+      {"src": "static/samples/img_04.png", "type": "image"}
+    ],
+    "b4_out": "black",
+    "b5_title": {"plate": null, "main": "極秘文献調査部", "sub": "FILE: MK-ULTRA"}
+  },
+  "direction": {
+    "bpm": 120,
+    "overlay": {"hud": {"label": "FILE 1953-04 // CLASSIFIED"}, "texture": {"grain": true, "scanlines": true, "vignette": true}},
+    "beats": {
+      "b1_first": [
+        {"id": "s1", "gimmick": "B3_decode", "bars": 1.5,
+         "params": {"lines": [{"text": "MK-ULTRA", "font": "mono", "size": 150}], "stamp": "極秘"}}
+      ],
+      "b2_flow": [
+        {"id": "s2", "gimmick": "K2_flow", "bars": 2}
+      ],
+      "b3_montage": [
+        {"id": "s3", "gimmick": "K3_montage", "bars": 1, "params": {"materials": [0, 1, 2]}},
+        {"id": "s4", "gimmick": "C1_particle_morph", "bars": 2,
+         "enter": {"type": "A1_portal", "bars": 0.5, "x": 0.5, "y": 0.55},
+         "params": {"colors": "rainbow", "n": 1400,
+                    "stages": [{"shape": "scatter"}, {"shape": "image", "src": "static/samples/brain.png"}, {"shape": "sphere"}]}},
+        {"id": "s5", "gimmick": "K3_montage", "bars": 1,
+         "enter": {"type": "A4_iris", "bars": 0.5, "x": 0.5, "y": 0.5},
+         "params": {"materials": [3, 4, 5], "start_sec": 0.35}}
+      ]
+    }
+  },
+  "notes": "MK ウルトラ回の試作。①解読＋判子（機密）→②語の流れ→③素材→ポータルで入る虹色の点群（LSD）が脳の形を経て球になり、アイリスで素材の加速へ→④黒→⑤タイトル板。全編に HUD と質感"
+}

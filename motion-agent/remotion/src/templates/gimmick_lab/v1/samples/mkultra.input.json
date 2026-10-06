@@ -1,0 +1,48 @@
+{
+  "hud": {"label": "FILE 0047 // 極秘文献調査部"},
+  "texture": {"grain": true, "scanlines": true, "vignette": true},
+  "shots": [
+    {
+      "id": "s1",
+      "gimmick": "decode",
+      "sec": 3.4,
+      "params": {
+        "lines": [
+          {"text": "PROJECT MK-ULTRA", "size": 118, "font": "mono"},
+          {"text": "1953 — 1973", "size": 64, "font": "mono"},
+          {"text": "CIA // 洗脳・自白剤・人体実験", "size": 46, "font": "gothic"}
+        ],
+        "stamp": "極秘",
+        "stamp_font": "brush"
+      }
+    },
+    {
+      "id": "s2",
+      "gimmick": "font_cycle",
+      "sec": 3.0,
+      "params": {
+        "text": "洗脳",
+        "sub": "BRAINWASHING",
+        "every": 3,
+        "fonts": ["gothic_black", "mincho_black", "brush", "brush_soseki", "pixel", "handwriting", "pen", "round", "mincho_cedar", "geometric", "mincho_hanazono", "klee"]
+      }
+    },
+    {
+      "id": "s3",
+      "gimmick": "particle_morph",
+      "sec": 6.0,
+      "enter": {"type": "portal", "sec": 1.4, "x": 0.5, "y": 0.86, "r": 14},
+      "params": {
+        "n": 1600,
+        "colors": "rainbow",
+        "spin": 0.8,
+        "stages": [
+          {"shape": "scatter", "hold": 0.8},
+          {"shape": "glyph", "text": "LSD", "font": "gothic_black", "hold": 1.0},
+          {"shape": "glyph", "text": "脳", "font": "mincho_black", "hold": 1.0},
+          {"shape": "sphere", "hold": 1.2}
+        ]
+      }
+    }
+  ]
+}

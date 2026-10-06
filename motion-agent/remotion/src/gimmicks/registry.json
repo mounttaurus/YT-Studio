@@ -1,0 +1,133 @@
+{
+  "note": "ギミックの台帳（本籍）。Python（検査・props・明滅の概算）と、Claude Code（opening_gimmicks）が読む。何が実装済みかはここだけに書く。ID は「カタログ ID＋名前」（Docs/OPENING_GIMMICK_CATALOG.md の A〜E）。見た目を大きく変える時は新しい ID にする（型 v2 は古い ID を使い続けるので、過去の話の見た目は変わらない）。",
+  "aliases": {
+    "decode": "B3_decode",
+    "font_cycle": "B4_font_cycle",
+    "particle_morph": "C1_particle_morph",
+    "portal": "A1_portal",
+    "light": "A3_light",
+    "iris": "A4_iris",
+    "K1": "K1_first",
+    "K2": "K2_flow",
+    "K3": "K3_montage",
+    "K4": "K4_out",
+    "K5": "K5_title"
+  },
+  "gimmicks": {
+    "K1_first": {
+      "cid": "K1",
+      "name": "最初のキーワード（型 v1 ①）",
+      "effect": "文字が飛び込みゆっくりズーム。word＝叩きつけ・date＝数字が落ちる・place＝ピン。掴みの定番",
+      "min_sec": 1.0, "max_sec": 4.0,
+      "brief": ["b1_first"],
+      "params": "items（省略で brief.b1_first）",
+      "backdrop": "palette.base"
+    },
+    "K2_flow": {
+      "cid": "K2",
+      "name": "キーワードの流れ（型 v1 ②）",
+      "effect": "語が色面ごとに次々切り替わり煽る。語は拍に吸着して切り替わる",
+      "min_sec": 2.0, "max_sec": 9.0,
+      "brief": ["b2_flow"],
+      "params": "words（省略で brief.b2_flow）",
+      "backdrop": "palette.flow0",
+      "flash": "k2_switch"
+    },
+    "K3_montage": {
+      "cid": "K3",
+      "name": "素材のカット（型 v1 ③）",
+      "effect": "写真・動画が矢継ぎ早に飛び込み、だんだん速くなる。素材の出典 source が要る",
+      "min_sec": 1.5, "max_sec": 7.0,
+      "brief": ["b3_montage"],
+      "params": "materials（brief.b3_montage の番号の並び・省略で全部）・start_sec（最初のカットの長さ）・min_sec（最短のカット）",
+      "backdrop": "palette.base",
+      "flash": "k3_cuts"
+    },
+    "K4_out": {
+      "cid": "K4",
+      "name": "アウト（型 v1 ④）",
+      "effect": "直前のショットの上から白か黒へ溶ける。直前のショットは④の終わりまで描き続ける",
+      "min_sec": 0.25, "max_sec": 1.5,
+      "brief": ["b4_out"],
+      "params": "out（white / black・省略で brief.b4_out）",
+      "overlay": true,
+      "flash": "k4_out"
+    },
+    "K5_title": {
+      "cid": "K5",
+      "name": "タイトルバック（型 v1 ⑤）",
+      "effect": "アウトの色から現れ、ゆっくり意味深にズーム。チャンネルのタイトル板",
+      "min_sec": 1.5, "max_sec": 5.0,
+      "brief": ["b5_title"],
+      "params": "title（省略で brief.b5_title）",
+      "backdrop": "palette.title_bg"
+    },
+    "B3_decode": {
+      "cid": "B3",
+      "name": "デコード＋判子",
+      "effect": "化けた文字が1字ずつ正しい字に収まり、最後に判子（極秘 など）が叩きつけられる。機密・解読・記録。判子はチャンネルのモチーフ（E1）の候補",
+      "min_sec": 1.5, "max_sec": 8.0,
+      "params": "lines[{text,font,size}]（省略で brief.b1_first の文字）・stamp・stamp_font",
+      "limits": {"lines_max": 4, "max_chars": 24},
+      "backdrop": "#07080a"
+    },
+    "B4_font_cycle": {
+      "cid": "B4",
+      "name": "書体の描き替え",
+      "effect": "同じ語を数フレームごとに別の書体・装飾で描き替える。混沌・陶酔・多面性（洗脳・催眠）。装飾の切り替えは毎秒3回未満に抑えてある",
+      "min_sec": 1.0, "max_sec": 8.0,
+      "params": "text（省略で brief.b1_first の1つ目）・sub・fonts（書体の id か role:<用途タグ> を2〜16個）・every（フレーム）",
+      "limits": {"max_chars": 6, "every_min": 2},
+      "backdrop": "#050506"
+    },
+    "C1_particle_morph": {
+      "cid": "C1",
+      "name": "点群の変形",
+      "effect": "同じ数の点が形（散らばり・文字・画像のシルエット・球）を渡り歩く。虹色は LSD・めまい。画像のシルエットから脳や人影を点群にできる。回る球は抽象→構造",
+      "min_sec": 2.0, "max_sec": 10.0,
+      "params": "stages[{shape,text,font,src,hold}]（2〜5個）・n・colors・spin・morph_sec",
+      "limits": {"n_max": 2400, "shapes": ["scatter", "glyph", "sphere", "image"]},
+      "backdrop": "#030206"
+    }
+  },
+  "enters": {
+    "cut": {
+      "name": "切り替え",
+      "effect": "そのまま切り替わる（既定）",
+      "min_bars": 0, "max_bars": 0
+    },
+    "A1_portal": {
+      "cid": "A1",
+      "name": "ポータルズーム",
+      "effect": "前のショットの点へ寄っていくと、その中が次の世界になる。切らずに世界が変わる＝没入",
+      "min_bars": 0.25, "max_bars": 1.5,
+      "needs_point": true
+    },
+    "A3_light": {
+      "cid": "A3",
+      "name": "光に飛び込んで白、白が次の画面",
+      "effect": "点から光が広がって画面が白になり、白が引くと次の場面。切れ目を光で隠す。白へ向かう明滅を2回数える",
+      "min_bars": 0.25, "max_bars": 0.5,
+      "needs_point": true,
+      "flash": 2
+    },
+    "A4_iris": {
+      "cid": "A4",
+      "name": "アイリス（縁が網点の円）",
+      "effect": "点から円が開いて次の場面が見える。柔らかい切り替え。杜若（アイリス）のチャンネルの決まり手の候補",
+      "min_bars": 0.25, "max_bars": 0.75,
+      "needs_point": true
+    },
+    "morph": {
+      "cid": "P2",
+      "name": "形の受け渡し（文字⇄点群）",
+      "effect": "文字が点群に崩れて次へ、または点群が集まって文字になる。片側が C1_particle_morph で、もう片側が文字を持つ部品（K1・K2・B3・B4）の時だけ使える。文字は6字まで",
+      "min_bars": 0.25, "max_bars": 1.0,
+      "needs_point": false
+    }
+  },
+  "overlays": {
+    "hud": {"cid": "D5", "name": "HUD の枠", "effect": "隅のカギ括弧・REC・タイムコード。監視・解析・機密資料の目線", "params": "label"},
+    "texture": {"cid": "D3", "name": "映像の質感", "effect": "粒子・走査線・周辺減光。画面の全てを動かす（P8）。指定すると型 v1 の既定の質感に替わる", "params": "grain / scanlines / vignette"}
+  }
+}

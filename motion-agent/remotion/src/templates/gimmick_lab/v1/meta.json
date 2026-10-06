@@ -1,0 +1,20 @@
+{
+  "template_id": "gimmick_lab",
+  "version": 1,
+  "builder": "lab",
+  "composition_id": "gimmick-lab-v1",
+  "title": "ギミックの試作場",
+  "summary": "ショットの並び（演出プランの原型）を描く。ギミック: decode（B3＋判子）・font_cycle（B4）・particle_morph（C1）。繋ぎ: portal（A1）。HUD の枠（D5）",
+  "fps": 30,
+  "width": 1920,
+  "height": 1080,
+  "max_total_sec": 20,
+  "gimmicks": {
+    "decode": {"label": "B3 デコード（化けた文字が収まる）＋判子", "min_sec": 1.5, "max_sec": 8, "lines_max": 4, "max_chars": 24},
+    "font_cycle": {"label": "B4 書体の描き替え", "min_sec": 1.0, "max_sec": 8, "max_chars": 6, "every_min": 2},
+    "particle_morph": {"label": "C1 点群の変形（散らばり・文字・画像のシルエット・球）", "min_sec": 2.0, "max_sec": 10, "n_max": 2400, "shapes": ["scatter", "glyph", "sphere", "image"]}
+  },
+  "enters": {
+    "portal": {"label": "A1 ポータルズーム（前のショットの点へ寄って入る）", "min_sec": 0.6, "max_sec": 3}
+  }
+}

@@ -41,3 +41,16 @@ async def request(method: str, path: str, params: dict | None = None,
         raise DirectorError(f"{method} {path} -> {res.status_code}: {res.text[:300]}")
     ctype = res.headers.get("content-type", "")
     return res.json() if "application/json" in ctype else {"raw": res.text}
+
+
+async def get_bytes(path: str, params: dict | None = None, timeout: float | None = None) -> bytes:
+    """director 経由でバイナリ（画像など）を取る。"""
+    url = f"{DIRECTOR_URL}/{path.lstrip('/')}"
+    async with httpx.AsyncClient(timeout=timeout or HTTP_TIMEOUT_READ) as client:
+        try:
+            res = await client.get(url, params=params)
+        except httpx.RequestError as e:
+            raise DirectorError(f"director unreachable ({url}): {e}") from e
+    if res.status_code >= 400:
+        raise DirectorError(f"GET {path} -> {res.status_code}: {res.text[:300]}")
+    return res.content

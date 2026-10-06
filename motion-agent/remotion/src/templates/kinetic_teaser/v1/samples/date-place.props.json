@@ -1,0 +1,311 @@
+{
+  "template": {
+    "id": "kinetic_teaser",
+    "version": 1
+  },
+  "variant": {
+    "palette": "crimson",
+    "montage_motion": "fly",
+    "montage_tone": "mono",
+    "grain": true
+  },
+  "b1_first": [
+    {
+      "text": "1999年7月4日",
+      "kind": "date"
+    },
+    {
+      "text": "東京・湾岸地区",
+      "kind": "place"
+    }
+  ],
+  "b2_flow": [
+    "消えた貨物船",
+    "深夜の通報",
+    "封鎖された埠頭",
+    "残された記録"
+  ],
+  "b3_montage": [
+    {
+      "src": "static/samples/img_01.png",
+      "type": "image",
+      "in": 0.0
+    },
+    {
+      "src": "static/samples/vid_01.mp4",
+      "type": "video",
+      "in": 0.5
+    },
+    {
+      "src": "static/samples/img_02.png",
+      "type": "image",
+      "in": 0.0
+    },
+    {
+      "src": "static/samples/img_03.png",
+      "type": "image",
+      "in": 0.0
+    },
+    {
+      "src": "static/samples/vid_02.mp4",
+      "type": "video",
+      "in": 1.0
+    },
+    {
+      "src": "static/samples/img_04.png",
+      "type": "image",
+      "in": 0.0
+    }
+  ],
+  "b4_out": "white",
+  "b5_title": {
+    "plate": null,
+    "main": "見本調査室",
+    "sub": "THE SAMPLE FILES"
+  },
+  "asset_base": "",
+  "timing": {
+    "fps": 30,
+    "total_frames": 534,
+    "beats": {
+      "b1_first": {
+        "from": 0,
+        "to": 75
+      },
+      "b2_flow": {
+        "from": 75,
+        "to": 255
+      },
+      "b3_montage": {
+        "from": 255,
+        "to": 405
+      },
+      "b4_out": {
+        "from": 405,
+        "to": 429
+      },
+      "b5_title": {
+        "from": 429,
+        "to": 534
+      }
+    },
+    "b2_switches": [
+      75,
+      120,
+      165,
+      210
+    ],
+    "b3_cuts": [
+      {
+        "from": 255,
+        "to": 280,
+        "material": 0
+      },
+      {
+        "from": 280,
+        "to": 300,
+        "material": 1
+      },
+      {
+        "from": 300,
+        "to": 316,
+        "material": 2
+      },
+      {
+        "from": 316,
+        "to": 328,
+        "material": 3
+      },
+      {
+        "from": 328,
+        "to": 338,
+        "material": 4
+      },
+      {
+        "from": 338,
+        "to": 346,
+        "material": 5
+      },
+      {
+        "from": 346,
+        "to": 352,
+        "material": 0
+      },
+      {
+        "from": 352,
+        "to": 357,
+        "material": 1
+      },
+      {
+        "from": 357,
+        "to": 361,
+        "material": 2
+      },
+      {
+        "from": 361,
+        "to": 365,
+        "material": 3
+      },
+      {
+        "from": 365,
+        "to": 369,
+        "material": 4
+      },
+      {
+        "from": 369,
+        "to": 373,
+        "material": 5
+      },
+      {
+        "from": 373,
+        "to": 377,
+        "material": 0
+      },
+      {
+        "from": 377,
+        "to": 381,
+        "material": 1
+      },
+      {
+        "from": 381,
+        "to": 385,
+        "material": 2
+      },
+      {
+        "from": 385,
+        "to": 389,
+        "material": 3
+      },
+      {
+        "from": 389,
+        "to": 393,
+        "material": 4
+      },
+      {
+        "from": 393,
+        "to": 397,
+        "material": 5
+      },
+      {
+        "from": 397,
+        "to": 401,
+        "material": 0
+      },
+      {
+        "from": 401,
+        "to": 405,
+        "material": 1
+      }
+    ],
+    "sfx": [
+      {
+        "frame": 0,
+        "kind": "impact"
+      },
+      {
+        "frame": 75,
+        "kind": "whoosh"
+      },
+      {
+        "frame": 120,
+        "kind": "whoosh"
+      },
+      {
+        "frame": 165,
+        "kind": "whoosh"
+      },
+      {
+        "frame": 210,
+        "kind": "whoosh"
+      },
+      {
+        "frame": 255,
+        "kind": "hit"
+      },
+      {
+        "frame": 280,
+        "kind": "hit"
+      },
+      {
+        "frame": 300,
+        "kind": "hit"
+      },
+      {
+        "frame": 316,
+        "kind": "hit"
+      },
+      {
+        "frame": 328,
+        "kind": "hit"
+      },
+      {
+        "frame": 338,
+        "kind": "hit"
+      },
+      {
+        "frame": 346,
+        "kind": "hit"
+      },
+      {
+        "frame": 352,
+        "kind": "hit"
+      },
+      {
+        "frame": 357,
+        "kind": "hit"
+      },
+      {
+        "frame": 361,
+        "kind": "hit"
+      },
+      {
+        "frame": 365,
+        "kind": "hit"
+      },
+      {
+        "frame": 369,
+        "kind": "hit"
+      },
+      {
+        "frame": 373,
+        "kind": "hit"
+      },
+      {
+        "frame": 377,
+        "kind": "hit"
+      },
+      {
+        "frame": 381,
+        "kind": "hit"
+      },
+      {
+        "frame": 385,
+        "kind": "hit"
+      },
+      {
+        "frame": 389,
+        "kind": "hit"
+      },
+      {
+        "frame": 393,
+        "kind": "hit"
+      },
+      {
+        "frame": 397,
+        "kind": "hit"
+      },
+      {
+        "frame": 401,
+        "kind": "hit"
+      },
+      {
+        "frame": 405,
+        "kind": "flash"
+      },
+      {
+        "frame": 429,
+        "kind": "riser"
+      }
+    ]
+  }
+}

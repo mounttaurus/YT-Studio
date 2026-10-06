@@ -1,0 +1,18 @@
+{
+  "variant": {"palette": "noir", "montage_motion": "cut", "montage_tone": "color", "grain": true},
+  "b1_first": [
+    {"text": "PROJECT ZERO", "kind": "word"}
+  ],
+  "b2_flow": ["極秘計画", "人体実験", "記録の抹消", "内部告発", "沈黙"],
+  "b3_montage": [
+    {"src": "static/samples/vid_02.mp4", "type": "video", "in": 0.0},
+    {"src": "static/samples/img_04.png", "type": "image"},
+    {"src": "static/samples/img_02.png", "type": "image"},
+    {"src": "static/samples/vid_01.mp4", "type": "video", "in": 2.0},
+    {"src": "static/samples/img_01.png", "type": "image"},
+    {"src": "static/samples/img_03.png", "type": "image"}
+  ],
+  "b4_out": "black",
+  "b5_title": {"plate": null, "main": "見本チャンネル", "sub": "サンプルの副題"},
+  "beat_sec": {"b1_first": 2.0, "b2_flow": 6.5, "b3_montage": 4.5}
+}
