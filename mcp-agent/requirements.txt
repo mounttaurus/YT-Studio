@@ -1,2 +1,2 @@
-mcp>=1.2.0
+mcp>=1.2.0,<2  # 2.x は FastMCP が MCPServer に改名され mcp.server.fastmcp が無い（CI で発覚 2026-10-06）
 httpx>=0.27

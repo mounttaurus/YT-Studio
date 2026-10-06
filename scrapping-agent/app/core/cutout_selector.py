@@ -26,7 +26,9 @@ OVERRIDES_NAME = "character_overrides.json"
 # 較正できていない環境でも動くための既定値（正は character_overrides.json の thresholds）
 DEFAULT_THRESHOLDS = {
     "repetitive_below": 0.073,  # これ未満＝使い回しに見える（完成コマで較正・§10-6）
-    "max_uses": 3,              # 生涯の使用回数上限（times_used累計・1話内ではない）
+    # 生涯の使用回数上限（times_used累計・1話内ではない）。**暫定4**（2026-10-06）: 3だとアオイ serious は承認済み89枚中
+    # 使えるのが36枚に落ちた（50枚が3回到達）。話をまたぐ使用と話内の再使用を別の数にする本改修までのつなぎ。
+    "max_uses": 4,
     "recent_window": 5,         # 直近何行を「近く」とみなすか（§10-7でK=4が違反0の窓）
     # ⚠️ **合成距離ではなくポーズだけを見る閾値**（2026-09-06追加・下の pose_distance 参照）。
     # ユーザーが「似すぎ」と指摘した実データの shape_rel 実測が 0.070 / 0.165 / 0.187 だったので、

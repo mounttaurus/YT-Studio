@@ -47,9 +47,37 @@ def rule_emotion(line: dict) -> str:
         return "question"
     if "！" in text or "!" in text:
         return "excited" if any(w in text for w in _EXCITED_WORDS) else "surprised"
-    return "serious"   # 解説口調の平叙文（本番の多数派）
+    # 解説口調の平叙文は neutral のまま（2026-10-06）。以前は serious へ寄せていたが、アオイ138行中121行が
+    # serious に集中して在庫が枯渇し、neutral の在庫56枚が手つかずだった（butler_crooks 通し）。
+    # 足りない分は選定の段（主タグ→副タグ→系統）に任せる。
+    return "neutral"
 
 
 def rule_slot(line: dict) -> dict:
     """行（script.json の1行）から演技スロットを作る。pose は分類器を持たないので None。"""
     return {"emotion": rule_emotion(line), "pose": None, "shot": DEFAULT_SHOT, "angle": DEFAULT_ANGLE}
+
+
+# --------------------------------------------------------------------- 定型の演出プロンプト（API を呼ばない）
+
+DEFAULT_POSE = "talking"   # slot の pose が無い（ルールの slot は pose=None）時の既定。解説口調の標準
+
+
+def template_prompt(slot: dict | None, name: str) -> str:
+    """slot（感情・ポーズ・画角・アングル）から、英語の演出プロンプトを**決定的に**作る。LLM を呼ばない。
+
+    在庫に積む絵は「再利用される汎用の絵」なので、行ごとの細かな動作（手に持つ物など）は要らない。
+    断片は `panel_presets`（在庫バリアント生成と同じ語彙・本籍）から取る＝語彙を複製しない。
+    形は LLM 版と揃える: 「名前, 表情, ポーズ, 画角, アングル.」
+    """
+    from app.core import panel_presets as pp  # 遅延 import（slot_rules を軽く保つ）
+
+    s = slot or {}
+    parts = [
+        (name or "the character").strip(),
+        pp.fragment("emotion", s.get("emotion") or "neutral"),
+        pp.fragment("pose", s.get("pose") or DEFAULT_POSE),
+        pp.fragment("shot", s.get("shot") or DEFAULT_SHOT),
+        pp.fragment("angle", s.get("angle") or DEFAULT_ANGLE),
+    ]
+    return ", ".join(p for p in parts if p) + "."

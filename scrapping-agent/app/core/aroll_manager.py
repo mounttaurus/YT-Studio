@@ -1719,7 +1719,7 @@ def select_targets(
     カット内のどれか1行でも未決定なら、カット全体をやり直し対象として先頭行を返す。
     「決まっている」の定義は以前と同じ ── ``status=="done"``（実生成済み）または
     ``cutout_slot_id`` あり（在庫の切り抜きを適用済み。実測: 承認3行のつもりが11行課金・
-    約$0.32過剰だった事故の再発防止。詳細 memory/aroll-batch-ignores-cutout-plan）。
+    約$0.32過剰だった事故の再発防止。詳細 memory/image-gen-guard-single-source）。
 
     台本から消えた行（orphan）は ``cut_report`` が最初から除外する。line_ids を明示した
     場合、カットのどの行が指定されていてもそのカット（の先頭）が対象になる。
@@ -2816,6 +2816,33 @@ def _panel_needs_prompt(panel: dict | None) -> bool:
     return panel is not None and not panel.get("orphan") and not (panel.get("prompt") or "").strip()
 
 
+def _apply_template_prompts(project_id: str, episode: int, manifest: dict, script: dict,
+                            line_ids: list[str], out: dict) -> None:
+    """プロンプトの無いコマに、slot から定型の演出プロンプトを書く（LLM なし・保存まで行う）。
+
+    手で直した行（prompt_source=="user"）・既にプロンプトのある行は触らない。slot が無ければ既定の slot で作る。
+    `out["generated"]` に書いた行を足し、`out["models"]["template"]` に "template" を記す。
+    """
+    lines = {l.get("id"): l for l in script.get("lines", [])}
+    wanted, done = set(line_ids), []
+    for p in manifest.get("panels", []):
+        lid = p.get("line_id")
+        if lid not in wanted or not _panel_needs_prompt(p) or p.get("prompt_source") == "user":
+            continue
+        slot = p.get("slot") or slot_rules.rule_slot(lines.get(lid) or p)
+        p["prompt"] = slot_rules.template_prompt(slot, p.get("speaker_name") or "")
+        p["prompt_source"] = "template"
+        p["prompt_text_hash"] = text_hash((lines.get(lid) or p).get("text"))
+        if p.get("slot") is None:
+            p["slot"], p["slot_source"] = slot, "rule"
+            p["slot_key"] = compute_slot_key(p.get("characters"), slot)
+        done.append(lid)
+    if done:
+        save_manifest(project_id, episode, manifest)
+        out["generated"] = list(dict.fromkeys(list(out.get("generated", [])) + done))
+        out.setdefault("models", {})["template"] = "template"
+
+
 async def ensure_prompts(project_id: str, episode: int, line_ids: list[str],
                          model: str | None = None, log: list[str] | None = None) -> dict:
     """**新しく絵を生成する行のうち、プロンプトの無い行だけ** LLM で英語の演出プロンプトを作る
@@ -2837,6 +2864,14 @@ async def ensure_prompts(project_id: str, episode: int, line_ids: list[str],
     panels = {p.get("line_id"): p for p in manifest.get("panels", [])}
     need = [lid for lid in dict.fromkeys(line_ids) if _panel_needs_prompt(panels.get(lid))]
     if not need:
+        return out
+
+    # 既定は定型（API を呼ばない・2026-10-06 ユーザー方針）。LLM は AROLL_PROMPT_MODE=llm の時だけ。
+    # 在庫に積む絵は再利用される汎用の絵なので、行ごとの細かな動作は要らない。
+    if os.getenv("AROLL_PROMPT_MODE", "template").strip().lower() != "llm":
+        _apply_template_prompts(project_id, episode, manifest, script, need, out)
+        if log is not None and out["generated"]:
+            log.append(f"✍ {len(out['generated'])}行の演出プロンプトを定型で作りました（API なし）")
         return out
 
     by_section: dict[str, list[dict]] = {}
@@ -2879,6 +2914,11 @@ async def ensure_prompts(project_id: str, episode: int, line_ids: list[str],
                                  aspect=manifest.get("aspect") or "16:9",
                                  style=manifest.get("style") or "kamishibai", overwrite=False)
         out["generated"] = [lid for lid in need if lid in prompts_by_line]
+    # LLM が拒否・失敗した行も、定型で埋める（「prompt is empty」で生成が止まらないように）
+    left = [lid for lid in need if lid not in prompts_by_line]
+    if left:
+        manifest = load_manifest(project_id, episode) or manifest
+        _apply_template_prompts(project_id, episode, manifest, script, left, out)
     if log is not None:
         for section, used in out["models"].items():
             log.append(f"✍ 章 '{section}' の演出プロンプトを {used} で作りました")

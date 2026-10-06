@@ -8,7 +8,7 @@ LLMで生成する。章（section）単位で1回のLLM呼び出しにまとめ
 - 保存されるプロンプトは「演出部分（表情/ポーズ/ショット/構図）」のみ。
   スタイル接頭辞とキャラ外見は画像生成時に aroll_manager 側で合成する
   （後からスタイルを替えてもプロンプト再生成が不要）。
-- LLMチェーン: 既定 gemini/gemini-2.5-flash（無料枠）→ OpenRouter Free Models Router。
+- LLMチェーン: 既定 gemini/gemini-3.5-flash-lite（無料枠・思考0で素直にJSONを返す。2.5-flash は前置き付き・途中で壊れたJSONを返し、2026-10-06に失敗した）→ OpenRouter Free Models Router。
   query_generator と同じ _parse_llm_json パターンでJSONを取り出す。
 """
 import json
@@ -100,7 +100,7 @@ PROMPT_TEMPLATE = """以下はYouTube動画の台本の1章分です。各セリ
 """
 
 # プロンプト生成LLMのチェーン（先頭から順に試す）。テキストのみなので無料枠で足りる。
-DEFAULT_MODEL = os.getenv("AROLL_PROMPT_LLM", "gemini/gemini-2.5-flash")
+DEFAULT_MODEL = os.getenv("AROLL_PROMPT_LLM", "gemini/gemini-3.5-flash-lite")
 FALLBACK_MODEL = os.getenv("AROLL_PROMPT_LLM_FALLBACK", "openrouter/openrouter/free")
 
 
@@ -329,11 +329,11 @@ def _normalize_characters(
       1人も解決できなかった時だけ話者へフォールバックしていたため、**LLMが聞き手
       だけを返すと話者不在のコマが作れてしまった**。静止画マンガでは「喋っている
       人物が写っていない」表現は成立しないので、ここは自然文の指示に頼らず機械で担保する
-      （memory ``aroll-two-shot-subchar-failure``: 自然文指示は信用しない）。
+      （memory ``aroll-two-shot-banned-by-design``: 自然文指示は信用しない）。
 
     ★**2人目は常に捨てる**（2026-09-21・方針転換）。吹き出しが画面の30〜50%を占めるため
       完全な2ショットは成立せず、参照元動画も相手は画面端の見切れでしか写していない
-      （memory ``aroll-two-shot-is-cropped-composition``）。どうしても2ショットが要る場合は
+      （memory ``aroll-two-shot-banned-by-design``）。どうしても2ショットが要る場合は
       ユーザーが手動合成する運用とし、自動生成・自動選定からは2ショットを排除する
       （memory ``aroll-two-shot-banned-by-design``）。``raw`` にLLMが2人目を含めて返して
       来ても無視する（PROMPT_TEMPLATE側でも1人指定に変更済みだが、自然文指示は信用しない
