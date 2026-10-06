@@ -18,6 +18,7 @@ YouTube動画の制作プロセス（リサーチ → 台本 → 素材収集 �
 | tts-agent | 8004 | | テキスト→音声変換（APIレイヤー） |
 | director-agent | 8005 | | 各エージェントへの命令中継・進捗表示（司令塔） |
 | editing-agent | 8006 | | 編集情報（コマ割り・尺・字幕・OTIO）生成 |
+| motion-agent | 8007 | | オープニング（モーショングラフィック・20秒以内）の制作。Remotion（CPU描画）＋ffmpeg。演出プランで型のビートをギミックに差し替えて描く |
 | irodori-tts-server | 8088 | ✓ | TTS実推論エンジン（`--profile gpu`） |
 | imagegen-agent | 8188 | ✓ | AI画像生成 ComfyUI（`--profile gpu`） |
 
@@ -102,3 +103,10 @@ python psassist/scripts/host_worker.py   # ホスト常駐（起動しっぱな�
 ## ライセンス
 
 [MIT](LICENSE)
+
+### 依存ライブラリのライセンスに関する注意（motion-agent）
+
+オープニング制作（`motion-agent`）は [Remotion](https://www.remotion.dev/) で動画を描画します。Remotion は、個人・従業員3人以下の営利組織・非営利は無料ですが、
+**従業員4人以上の会社で使う場合は Remotion の Company License（有料）が必要**です。詳細は [Remotion のライセンス](https://github.com/remotion-dev/remotion/blob/main/LICENSE.md) を確認してください。
+このリポジトリの MIT ライセンスは Remotion には及びません。オープニング制作を使わない場合は `motion-agent` を起動しなければ影響はありません。
+書体はイメージに同梱する OFL 等のもののほか、`shared/motion/fonts/` に置いた書体を使えます（ライセンスは書体ごとに利用者が確認してください）。
