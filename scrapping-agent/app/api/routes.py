@@ -735,6 +735,42 @@ async def remeasure_panel_library_entry(char_id: str, slot_id: str):
     return entry
 
 
+class EditApplyRequest(BaseModel):
+    dry_run: bool = False
+    note: str = ""
+
+
+@router.post("/characters/{char_id}/panel_library/{slot_id}/edit/open")
+async def open_panel_library_edit(char_id: str, slot_id: str, reset: bool = False):
+    """手直し用の作業コピーを用意し、ホストで開けるパスを返す（本物は適用するまで変わらない）。"""
+    try:
+        return panel_library_manager.open_edit_copy(char_id, slot_id, reset=reset)
+    except KeyError:
+        raise HTTPException(status_code=404, detail=f"panel library entry not found: {slot_id}")
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+@router.post("/characters/{char_id}/panel_library/{slot_id}/edit/apply")
+async def apply_panel_library_edit(char_id: str, slot_id: str, req: EditApplyRequest | None = None):
+    """作業コピーを本物へ適用する（原本退避・再計測・自動再切り抜きから保護）。
+    dry_run=true で検査と影響行だけ返す。影響行（affected_lines）は要・再合成になる。"""
+    req = req or EditApplyRequest()
+    try:
+        return panel_library_manager.apply_edit_copy(
+            char_id, slot_id, dry_run=req.dry_run, note=req.note)
+    except KeyError:
+        raise HTTPException(status_code=404, detail=f"panel library entry not found: {slot_id}")
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+@router.delete("/characters/{char_id}/panel_library/{slot_id}/edit")
+async def discard_panel_library_edit(char_id: str, slot_id: str):
+    """作業コピーを捨てる（本物は無傷）。"""
+    return {"slot_id": slot_id, "discarded": panel_library_manager.discard_edit_copy(char_id, slot_id)}
+
+
 @router.get("/characters/{char_id}/panel_library/{slot_id}/similar")
 async def similar_panel_library_entries(char_id: str, slot_id: str, limit: int = 5):
     """その絵と**指紋が近い順**に在庫を返す（近い＝見た目が似ている）。

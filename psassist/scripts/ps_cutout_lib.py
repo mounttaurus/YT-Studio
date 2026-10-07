@@ -63,5 +63,5 @@ def needs_ps_cutout(entry: dict) -> bool:
     return (
         bool(entry.get("image"))
         and entry.get("kind") != "cutout"
-        and entry.get("cutout_method") != "ps_select_subject"
+        and entry.get("cutout_method") not in ("ps_select_subject", "user_edit")
     )

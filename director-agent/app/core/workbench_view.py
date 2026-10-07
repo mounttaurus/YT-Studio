@@ -110,7 +110,7 @@ def _lib_versions(chars_dir: Path, cid: str, cache: dict) -> dict:
     """在庫の {slot_id: recut_ps_at||created_at}。PS取り込みで中身だけ差し替わったことの検知に使う。"""
     if cid not in cache:
         doc = _read(chars_dir / cid / "panel_library" / "library.json") or {}
-        cache[cid] = {e.get("slot_id"): e.get("recut_ps_at") or e.get("created_at") for e in doc.get("entries", [])}
+        cache[cid] = {e.get("slot_id"): e.get("edited_at") or e.get("recut_ps_at") or e.get("created_at") for e in doc.get("entries", [])}
     return cache[cid]
 
 

@@ -697,7 +697,7 @@ def build(paths: Paths | None = None) -> dict[str, Any]:
                     # 一致だけでは中身の差し替えを検知できない。director側のarollBuildStateが
                     # 現在の版と突き合わせる（lib_entryが無い=在庫を貼らない行はnull）。
                     "cutout_version": (
-                        (lib_entry.get("recut_ps_at") or lib_entry.get("created_at"))
+                        (lib_entry.get("edited_at") or lib_entry.get("recut_ps_at") or lib_entry.get("created_at"))
                         if lib_entry is not None else None
                     ),
                 },

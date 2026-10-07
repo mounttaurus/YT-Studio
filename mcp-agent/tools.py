@@ -1045,6 +1045,34 @@ async def approve_panel_library_entry(char_id: str, slot_id: str) -> dict:
     return await dc.request("POST", f"api/scrapping/characters/{char_id}/panel_library/{slot_id}/approve")
 
 
+async def panel_library_edit_open(char_id: str, slot_id: str, reset: bool = False) -> dict:
+    """在庫の切り抜きを人が手直しするための**作業コピー**を用意し、ホストで開けるパスを返す。
+
+    本物は適用(panel_library_edit_apply)するまで変わらない。既に作業コピーがあればそのまま返す
+    (reset=trueで今の切り抜きから作り直す)。返る `work_copy_host_path` をPhotoshop等で開いて直し、
+    **同じキャンバスサイズのPNGのまま上書き保存**してもらう。`source_image_host_path`は背景付きの元画像(参考)。
+    """
+    return await dc.request("POST", f"api/scrapping/characters/{char_id}/panel_library/{slot_id}/edit/open",
+                            params={"reset": str(bool(reset)).lower()})
+
+
+async def panel_library_edit_apply(char_id: str, slot_id: str, dry_run: bool = True, note: str = "") -> dict:
+    """作業コピーを本物の切り抜きへ適用する。**dry_run=trueが既定**(検査と影響行だけ返す)。
+
+    適用すると: 原本を cutouts_orig/ へ退避 → 指紋・マスク・実測を測り直し → `cutout_method="user_edit"`
+    (自動の再切り抜きから保護)。ラベル・使用回数・承認状態は変えない。
+    返る `affected_lines` はこの絵を使っている行で、**全て要・再合成**(psassist_run kind=resync・
+    Photoshop占有なので実行前にユーザーへ一言)。
+    """
+    return await dc.request("POST", f"api/scrapping/characters/{char_id}/panel_library/{slot_id}/edit/apply",
+                            json={"dry_run": dry_run, "note": note})
+
+
+async def panel_library_edit_discard(char_id: str, slot_id: str) -> dict:
+    """手直しの作業コピーを捨てる(本物は無傷)。"""
+    return await dc.request("DELETE", f"api/scrapping/characters/{char_id}/panel_library/{slot_id}/edit")
+
+
 # ── リサーチ（research / 別件1: 探索→蒸留→ラフ台本） ─────────────────
 #
 # research-agent(:8001) は当初 MCP から外す方針だったが、頭脳とMCPが分離している以上、
@@ -1885,6 +1913,9 @@ TOOLS = [
     {"fn": generate_panel_library_entry, "side_effects": [S.COST]},
     {"fn": generate_panel_library_variants, "side_effects": [S.COST]},
     {"fn": approve_panel_library_entry,  "side_effects": [S.WRITE]},
+    {"fn": panel_library_edit_open,      "side_effects": [S.WRITE]},
+    {"fn": panel_library_edit_apply,     "side_effects": [S.WRITE]},
+    {"fn": panel_library_edit_discard,   "side_effects": [S.WRITE]},
     {"fn": delete_panel_library_entry,   "side_effects": [S.WRITE]},
     # 自由生成（台本非依存）
     {"fn": list_imagegen_styles, "side_effects": [S.READ]},

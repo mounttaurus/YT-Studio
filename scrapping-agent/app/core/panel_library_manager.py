@@ -843,6 +843,153 @@ def remeasure_entry(char_id: str, slot_id: str) -> dict | None:
     return None
 
 
+# ---------------------------------------------------------------- 在庫の手直し（人が切り抜きを直す）
+#
+# 案: 作業コピーを開く → ユーザーが（Photoshop等で）直す → 適用。
+#   - 作業コピー `edits/{slot_id}.png` は今の切り抜きの複製。本物（cutouts/）は適用するまで触らない。
+#   - 適用で原本を `cutouts_orig/{slot_id}__{stamp}.png` へ退避（毎回残す＝何度直しても戻れる）。
+#   - 指紋・マスク・実測を測り直し、`cutout_method="user_edit"`・`edited_at` を記録。
+#   - `edited_at` は「その絵の版」として director／psassist のプランが読む＝その絵を使う全話の行は
+#     自動的に「要・再合成」になる（recut_ps_at と同じ仕組み。slot_id は変えない）。
+#   - `user_edit` の絵は自動の再切り抜き（PSスイープ・取り込み）の対象外（人の手直しを上書きしない）。
+
+USER_EDIT_METHOD = "user_edit"
+
+
+def edits_dir(char_id: str) -> Path:
+    return library_dir(char_id) / "edits"
+
+
+def cutouts_orig_dir(char_id: str) -> Path:
+    return library_dir(char_id) / "cutouts_orig"
+
+
+def _write_bytes_atomic(path: Path, data: bytes) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_name(f".{path.name}.{os.getpid()}.tmp")
+    tmp.write_bytes(data)
+    for attempt in range(1, REPLACE_RETRIES + 1):
+        try:
+            os.replace(tmp, path)
+            return
+        except PermissionError:
+            if attempt == REPLACE_RETRIES:
+                raise
+            time.sleep(REPLACE_BACKOFF_SEC * attempt)
+
+
+def _find_entry(data: dict, slot_id: str) -> dict | None:
+    return next((e for e in data.get("entries", []) if e.get("slot_id") == slot_id), None)
+
+
+def open_edit_copy(char_id: str, slot_id: str, *, reset: bool = False) -> dict:
+    """手直し用の作業コピーを用意して、ホストで開けるパスを返す。
+
+    既に作業コピーがあれば**そのまま返す**（途中の手直しを消さない）。作り直したい時だけ reset=True
+    （今の切り抜きから複製し直す）。元画像（背景付き）のパスも返す＝見比べ・選択範囲の参考用。
+    """
+    entry = get_entry(char_id, slot_id)
+    if entry is None:
+        raise KeyError(slot_id)
+    rel = entry.get("cutout")
+    if not rel:
+        raise ValueError("この絵には✂️切り抜きが無く、手直しできません")
+    src = library_dir(char_id) / rel
+    if not src.is_file():
+        raise ValueError(f"切り抜きのファイルが見つかりません: {rel}")
+    work = edits_dir(char_id) / f"{slot_id}.png"
+    created = reset or not work.is_file()
+    if created:
+        _write_bytes_atomic(work, src.read_bytes())
+    image_rel = entry.get("image")
+    image_path = library_dir(char_id) / image_rel if image_rel else None
+    return {
+        "slot_id": slot_id,
+        "created": created,
+        "work_copy": f"edits/{slot_id}.png",
+        "work_copy_host_path": host_paths.to_host_path(work),
+        "source_image_host_path": (host_paths.to_host_path(image_path)
+                                   if image_path and image_path.is_file() else None),
+        "used_by": entry.get("used_by") or [],
+        "note": "作業コピーを直して保存し、適用（apply）してください。適用するまで本物は変わりません",
+    }
+
+
+def discard_edit_copy(char_id: str, slot_id: str) -> bool:
+    work = edits_dir(char_id) / f"{slot_id}.png"
+    if work.is_file():
+        _unlink_quiet(work)
+        return True
+    return False
+
+
+def apply_edit_copy(char_id: str, slot_id: str, *, dry_run: bool = False,
+                    note: str = "") -> dict:
+    """作業コピーを本物の切り抜きへ適用する。
+
+    検査（寸法一致・アルファが空でない・作業コピーが元から変わっている）→ 原本退避 → 差し替え →
+    再計測 → 記録。ラベル・times_used・review_status は触らない（remeasure_entry と同じ約束）。
+    返り値の ``affected_lines`` は、この絵を使っている行（used_by）＝**要・再合成になる行**。
+    """
+    work = edits_dir(char_id) / f"{slot_id}.png"
+    with (index_lock(char_id) if not dry_run else contextlib.nullcontext()):
+        data = load_index(char_id)
+        entry = _find_entry(data, slot_id)
+        if entry is None:
+            raise KeyError(slot_id)
+        rel = entry.get("cutout")
+        if not rel:
+            raise ValueError("この絵には✂️切り抜きが無く、手直しできません")
+        cur_path = library_dir(char_id) / rel
+        if not work.is_file():
+            raise ValueError("作業コピーがありません（先に open_edit_copy で作業コピーを開いてください）")
+        if not cur_path.is_file():
+            raise ValueError(f"切り抜きのファイルが見つかりません: {rel}")
+        new_bytes = work.read_bytes()
+        cur_bytes = cur_path.read_bytes()
+        if new_bytes == cur_bytes:
+            raise ValueError("作業コピーが元から変わっていません（直して保存してから適用してください）")
+        try:
+            rgba = Image.open(io.BytesIO(new_bytes)).convert("RGBA")
+        except Exception as e:  # noqa: BLE001
+            raise ValueError(f"作業コピーのPNGを開けません: {e}") from e
+        with Image.open(io.BytesIO(cur_bytes)) as cur_img:
+            cur_size = cur_img.size
+        if rgba.size != cur_size:
+            raise ValueError(
+                f"寸法が違います（元 {cur_size} / 作業コピー {rgba.size}）。"
+                "キャンバスサイズは変えずに保存してください（組版の位置合わせが狂う）")
+        fp = fingerprint.for_entry(rgba)
+        if not fp.get("dhash") or _too_empty(fp):
+            raise ValueError("作業コピーのアルファがほぼ空です（切り抜きが消えています）")
+        affected = [dict(u) for u in (entry.get("used_by") or []) if isinstance(u, dict)]
+        result = {
+            "slot_id": slot_id, "dry_run": dry_run, "applied": False,
+            "affected_lines": affected, "backup": None,
+            "note": "この絵を使う行は要・再合成になります（psassist_run kind=resync）",
+        }
+        if dry_run:
+            return result
+
+        stamp = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
+        backup = cutouts_orig_dir(char_id) / f"{slot_id}__{stamp}.png"
+        _write_bytes_atomic(backup, cur_bytes)
+        _write_bytes_atomic(cur_path, new_bytes)
+        entry["fingerprint"] = fp
+        entry["mask"] = cutout_engine.analyze_alpha(rgba)
+        entry["measured"] = shot_meter.measure(rgba)
+        entry["measured_source"] = "mask"
+        entry["measured_at"] = _now()
+        entry["cutout_method"] = USER_EDIT_METHOD
+        entry["edited_at"] = _now()
+        entry.setdefault("edit_log", []).append(
+            {"at": entry["edited_at"], "backup": f"cutouts_orig/{backup.name}", "note": note})
+        save_index(char_id, data)
+        _unlink_quiet(work)
+        result.update(applied=True, backup=f"cutouts_orig/{backup.name}")
+        return result
+
+
 def _next_slot_id(emotion: str, shot: str, angle: str, existing: set[str]) -> str:
     base = f"{emotion}_{shot}_{angle}"
     n = 1
@@ -915,6 +1062,7 @@ def needs_ps_cutout(entry: dict) -> bool:
 
     元画像(`image`)があり、psassist取り込み由来（`kind == "cutout"`）ではなく、
     まだPS版に置き換わっていない（`cutout_method != "ps_select_subject"`）もの。
+    ただし人が手直しした絵（`cutout_method == "user_edit"`）は**常に対象外**（上書きして手直しを消さない）。
 
     ⚠️ **`psassist/scripts/ps_cutout_lib.needs_ps_cutout` と同じ定義を保つこと。**
     ホスト（host_worker）はこのモジュールをimportできないため複製している。
@@ -924,7 +1072,7 @@ def needs_ps_cutout(entry: dict) -> bool:
     return (
         bool(entry.get("image"))
         and entry.get("kind") != "cutout"
-        and entry.get("cutout_method") != "ps_select_subject"
+        and entry.get("cutout_method") not in ("ps_select_subject", "user_edit")
     )
 
 
@@ -977,6 +1125,11 @@ def adopt_ps_cutouts(char_id: str) -> dict:
             # 対応するentryが無い＝孤立（削除された後に取り残された等）。索引には触れない。
             _unlink_quiet(png_path)
             result["orphaned"].append(slot_id)
+            continue
+        if entry.get("cutout_method") == USER_EDIT_METHOD:
+            # 人の手直し済み（edit_apply）。自動の再切り抜きで上書きしない。
+            _unlink_quiet(png_path)
+            result.setdefault("protected", []).append(slot_id)
             continue
 
         try:

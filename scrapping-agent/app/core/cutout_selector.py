@@ -615,7 +615,7 @@ def _select_from(cands: list[dict], recent: list[dict], th: dict,
     # Docs/CUTOUT_PS_PRIMARY_PLAN.md P2） → 直近から遠い → slot_id
     near, best = min(ok, key=lambda x: (
         off_plan(x[1]), monotony(x[1]), x[1].get("times_used", 0),
-        0 if x[1].get("cutout_method") == "ps_select_subject" else 1,
+        0 if x[1].get("cutout_method") in ("ps_select_subject", "user_edit") else 1,
         -x[0], x[1].get("slot_id", "")))
     why = "距離 %.3f・使用 %d回" % (near, best.get("times_used", 0))
     if prev_tags and _tags(best) == prev_tags:
