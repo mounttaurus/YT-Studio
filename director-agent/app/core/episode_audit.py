@@ -193,12 +193,19 @@ def _stock_issues(report: dict | None) -> list[dict]:
     """この話で薄い在庫（Docs/STOCK_LABEL_ACCURACY_PLAN.md §4-7 L6）。判定の本体は scrapping-agent の `stock_health`。
     薄い＝その感情の絵（主タグの系統）で使える枚数 < この話の要求行数＝重複なしに賄えず、再使用か新規生成（課金）に落ちる。
     直すのは在庫の補充（別計画 L7）なので info（この話の工程は止めない）。行IDは付けない（感情ごとの集計）。"""
+    out = []
+    full = (report.get("full_body_lines") if isinstance(report, dict) else None) or []
+    if full:
+        ids = [f["line_id"] for f in full if f.get("line_id")]
+        out.append(_issue("AROLL_FULL_BODY", "warn",
+                          f"頼んでいないのに全身級の絵が当たっている行（背景に馴染まず小さく立つ）: {_short(ids)}"
+                          "（差し替えるか、そのまま使うか人が判断する。機械は外さない）", ids))
     thin = (report.get("thin") if isinstance(report, dict) else None) or []
-    if not thin:
-        return []
-    return [_issue("AROLL_THIN_STOCK", "info",
-                   "この話で在庫が薄い感情: " + "／".join(t["message"] for t in thin)
-                   + "（足りない分は再使用か新規生成になる）", thin=thin)]
+    if thin:
+        out.append(_issue("AROLL_THIN_STOCK", "info",
+                          "この話で在庫が薄い感情: " + "／".join(t["message"] for t in thin)
+                          + "（足りない分は再使用か新規生成になる）", thin=thin))
+    return out
 
 
 # ── 仕上がり（Photoshop 組版） ──────────────────────────────────────────────

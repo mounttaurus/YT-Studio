@@ -332,6 +332,8 @@ def list_entries(char_id: str, *, emotion: str = "", shot: str = "", angle: str 
     2026-08-27以降の entry は `image` と `cutout` を両方持つ＝どちらの用途にも使える。
     統合在庫タブは `kind=""` で全種別を取り、`usable` で見せ分ける。
     """
+    from app.core import cutout_selector  # 遅延 import（cutout_selector が本モジュールを import しているため）
+    th = cutout_selector.thresholds()
     current = appearance_version(char_id)
     out = []
     for e in load_index(char_id).get("entries", []):
@@ -348,6 +350,7 @@ def list_entries(char_id: str, *, emotion: str = "", shot: str = "", angle: str 
             "is_stale": e.get("appearance_version") != current,
             "review_status": e.get("review_status", "approved"),
             "usable": usable_as(e),
+            "body_scope": cutout_selector.body_scope(e, th),   # 計算フィールド（全身級の警告バッジ用・保存しない）
             "image_host_path": (host_paths.to_host_path(library_dir(char_id) / e["image"])
                                 if e.get("image") else None),
             "cutout_host_path": (host_paths.to_host_path(library_dir(char_id) / e["cutout"])

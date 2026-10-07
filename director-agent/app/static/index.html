@@ -3212,6 +3212,11 @@
                 <button class="btn btn-sm" x-show="charLibCounts.needsReview"
                         :style="charLib.status === 'needs_review' ? 'background:#7f1d1d;color:#fecaca' : ''"
                         @click="charLibSetFilter('status', 'needs_review')" x-text="`⚠️向き要目視 ${charLibCounts.needsReview}`"></button>
+                <button class="btn btn-sm" x-show="charLibCounts.fullBody"
+                        :style="charLib.status === 'full_body' ? 'background:#78350f;color:#fde68a' : ''"
+                        @click="charLibSetFilter('status', 'full_body')"
+                        title="全身級の絵（警告のみ・自動選定からは外していません）"
+                        x-text="`⚠️全身級 ${charLibCounts.fullBody}`"></button>
               </div>
 
               <!-- 感情 -->
@@ -3259,6 +3264,9 @@
                       <span x-show="e.facing_needs_review"
                             title="facing軸の移行で向きが機械では決められませんでした（要目視）"
                             style="position:absolute;top:3px;right:3px;font-size:9px;padding:1px 6px;border-radius:99px;background:#7f1d1d;color:#fecaca">⚠️向き</span>
+                      <span x-show="e.body_scope === 'full'"
+                            title="全身級の絵です（実物の縦横比で判定）。部屋の背景は全身を受けられず、小さく立つだけになりがち。自動選定からは外していません（警告のみ）"
+                            style="position:absolute;bottom:3px;left:3px;font-size:9px;padding:1px 6px;border-radius:99px;background:#78350f;color:#fde68a">⚠️全身</span>
                     </div>
                     <div style="padding:4px 6px;display:flex;align-items:center;gap:4px;background:#0f172a">
                       <span style="font-size:11px" x-text="e.review_status === 'pending' ? '⏳' : '✔'"></span>
@@ -3923,6 +3931,11 @@
             ラベル（その場で直せます）
             <span x-show="charLib.detail.label_source === 'user'"
                   style="color:#86efac;text-transform:none;letter-spacing:0">— 手で直し済み</span>
+          </div>
+          <div x-show="charLib.detail.body_scope === 'full'"
+               style="font-size:10px;color:#fde68a;background:#451a03;border-radius:6px;padding:6px 8px;margin-bottom:8px;line-height:1.6">
+            ⚠️ <b>全身級</b>：実物の縦横比で判定した全身の絵です。部屋の背景は全身を受けられず、小さく立つだけになりがちです。
+            自動選定からは<b>外していません</b>（警告のみ）。使うかどうかは行ごとに見て判断してください。
           </div>
           <div x-show="charLib.detail.facing_needs_review"
                style="font-size:10px;color:#fca5a5;background:#450a0a;border-radius:6px;padding:6px 8px;margin-bottom:8px;line-height:1.6">
@@ -8558,6 +8571,7 @@ function app() {
           // 上限は✂️切り抜きとしての消費にのみ意味を持つ（find_current(🖼️パネル)に上限は無い）
           if (st === 'exhausted' && !(e.usable?.cutout && (e.times_used || 0) >= cap)) return false;
           if (st === 'needs_review' && !e.facing_needs_review) return false;
+          if (st === 'full_body' && e.body_scope !== 'full') return false;
         }
         if (exclude !== 'emotion' && this.charLib.emotion !== 'all'
             && (e.emotion || '感情なし') !== this.charLib.emotion) return false;
@@ -8615,6 +8629,7 @@ function app() {
         unused: it.filter(e => !(e.times_used || 0)).length,
         exhausted: it.filter(e => e.usable?.cutout && (e.times_used || 0) >= cap).length,
         needsReview: it.filter(e => e.facing_needs_review).length,
+        fullBody: it.filter(e => e.body_scope === 'full').length,
         panelUsable: it.filter(e => e.usable?.panel).length,
         cutoutUsable: it.filter(e => e.usable?.cutout).length,
       };

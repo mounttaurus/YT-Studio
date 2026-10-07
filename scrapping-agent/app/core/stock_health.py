@@ -132,6 +132,8 @@ def summarize(char_id: str, entries: list[dict], *, current_version: str, overri
         if thresholds.get("exclude_full_body") and cutout_selector.body_scope(e, thresholds) == "full":
             totals["full_body"] += 1        # 全身級＝自動選定に出ない（明示した行・手動ピッカーのみ）
             continue
+        if not thresholds.get("exclude_full_body") and cutout_selector.body_scope(e, thresholds) == "full":
+            totals["full_body_warn"] += 1   # 警告だけ（選定には出る）。除外するのは exclude_full_body=true の時
         tag = cutout_selector.entry_tag(e)
         fam = e.get("emotion")
         if tag == emotion_rubric.FACE_HIDDEN:
@@ -180,7 +182,7 @@ def summarize(char_id: str, entries: list[dict], *, current_version: str, overri
     return {
         "char_id": char_id,
         "totals": {k: totals.get(k, 0) for k in ("entries", "eligible", "unverified", "no_emotion", "face_hidden", "full_body",
-                                                   "pending", "stale", "banned", "no_cutout")},
+                                                   "full_body_warn", "pending", "stale", "banned", "no_cutout")},
         "families": families,
         "thin": [r["emotion"] for r in families if r["thin"]],
         "thin_at_peak": [r["emotion"] for r in families if r["thin_at_peak"]],
@@ -244,6 +246,31 @@ def all_health() -> dict:
     return {"characters": items, "thin_messages": [m for it in items for m in it["thin_messages"]]}
 
 
+def full_body_lines(panels: list[dict]) -> list[dict]:
+    """この話で、頼んでいないのに**全身級の絵**が当たっている行（警告用・2026-10-07）。
+
+    部屋の背景は全身を受ける画角が無く、bust 用の背景に全身を置くと小さく立つだけの絵になる。選定は黙って外さない
+    （`exclude_full_body` は既定 false）ので、人が見て直せるよう行を挙げる。台本かユーザーが全身（wide/full_body）を
+    明示した行は意図どおりなので挙げない（`aroll_manager` の allow_full_body と同じ条件）。
+    """
+    th = cutout_selector.thresholds()
+    entries: dict[str, dict] = {}
+    out = []
+    for p in panels:
+        cid, sid = p.get("cutout_char_id"), p.get("cutout_slot_id")
+        if p.get("orphan") or not cid or not sid:
+            continue
+        hs = p.get("slot") or {}
+        if p.get("slot_source") in ("user", "script") and hs.get("shot") in ("wide", "full_body"):
+            continue
+        if cid not in entries:
+            entries[cid] = {e.get("slot_id"): e for e in panel_library_manager.load_index(cid).get("entries", [])}
+        e = entries[cid].get(sid)
+        if e is not None and cutout_selector.body_scope(e, th) == "full":
+            out.append({"line_id": p.get("line_id"), "char_id": cid, "slot_id": sid})
+    return out
+
+
 def episode_health(panels: list[dict]) -> dict:
     """1話の監査。要求はその話の `aroll.json` の行数（話数を回す前の事前警告に使う）。"""
     own = own_uses(panels)
@@ -254,4 +281,4 @@ def episode_health(panels: list[dict]) -> dict:
              "demand": r["demand"], "usable": r["usable"], "sub_usable": r["sub_usable"],
              "message": thin_message(it["name"], r)}
             for it in items for r in it["families"] if r["thin"]]
-    return {"characters": items, "thin": thin}
+    return {"characters": items, "thin": thin, "full_body_lines": full_body_lines(panels)}
