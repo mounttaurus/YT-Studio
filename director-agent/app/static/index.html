@@ -3784,15 +3784,18 @@
                 <div>
                   <label x-text="row.label"></label>
                   <div style="display:flex;gap:6px;align-items:stretch">
-                    <div class="file-path" style="flex:1;min-width:0" x-text="row.path"></div>
-                    <button class="btn" style="white-space:nowrap" :disabled="!row.path"
-                            title="パスをクリップボードへコピー（エクスプローラーのアドレスバーに貼ると開けます）"
-                            @click="copyEditPath(row.key, row.path)"
-                            x-text="editCopyLabel[row.key] || '📋 コピー'"></button>
+                    <div class="file-path" style="flex:1;min-width:0;cursor:pointer" title="クリックでコピー"
+                         @click="copyEditPath(row.key, row.path)" x-text="row.path"></div>
+                    <button class="btn" style="white-space:nowrap" x-show="psassistAvailable"
+                            :disabled="!!editRevealBlock || !row.path"
+                            :title="editRevealBlock || 'エクスプローラーでこの場所を開きます（ホストの host_worker 経由）'"
+                            @click="revealEditPath(row)">📂 場所を開く</button>
                   </div>
-                  <div x-show="row.hint" style="font-size:11px;color:#94a3b8;margin-top:2px" x-text="row.hint"></div>
+                  <div x-show="editCopyLabel[row.key] || row.hint" style="font-size:11px;color:#94a3b8;margin-top:2px"
+                       x-text="editCopyLabel[row.key] || row.hint"></div>
                 </div>
               </template>
+              <div x-show="psassistAvailable && editRevealBlock" style="font-size:11px;color:#fbbf24" x-text="'📂 場所を開くボタン: ' + editRevealBlock"></div>
             </div>
 
             <template x-if="editResult.warnings && editResult.warnings.length > 0">
@@ -6901,7 +6904,7 @@ function app() {
     // ─── 🎞️ 編集情報タブ ────────────────────────────────────────
     async refreshEditingTab() {
       if (!this.currentProject) return;
-      await Promise.all([this.checkEditHealth(), this.loadLocales()]);
+      await Promise.all([this.checkEditHealth(), this.loadLocales(), this.loadPsassistWorker()]);
       await this.loadEditResult();
       await this.loadEditSpeakersAndStyle();
     },
@@ -7034,13 +7037,22 @@ function app() {
       if (!r) return [];
       const f = r.files || {};
       const editDir = (f.otio || '').replace(/\/[^/]*$/, '') || `episodes/ep${String(this.activeEpisodeNumber).padStart(2, '0')}/edit`;
+      const lang = r.lang || '';
+      const epNum = String(this.activeEpisodeNumber).padStart(2, '0');
+      const audioRel = lang ? `episodes/ep${epNum}/locales/${lang}/audio` : `episodes/ep${epNum}/audio`;
       const rows = [
-        { key: 'otio', label: 'timeline.otio（ホスト側パス）', path: this.editHostFilePath(f.otio) },
-        f.srt && { key: 'srt', label: 'subtitles.srt（ホスト側パス）', path: this.editHostFilePath(f.srt) },
-        f.fcpxml && { key: 'fcpxml', label: 'subtitles.fcpxml（Text+ / ホスト側パス）', path: this.editHostFilePath(f.fcpxml) },
+        { key: 'otio', label: 'timeline.otio（ホスト側パス）', path: this.editHostFilePath(f.otio),
+          reveal: { target: 'edit', file: 'timeline.otio' } },
+        f.srt && { key: 'srt', label: 'subtitles.srt（ホスト側パス）', path: this.editHostFilePath(f.srt),
+          reveal: { target: 'edit', file: 'subtitles.srt' } },
+        f.fcpxml && { key: 'fcpxml', label: 'subtitles.fcpxml（Text+ / ホスト側パス）', path: this.editHostFilePath(f.fcpxml),
+          reveal: { target: 'edit', file: 'subtitles.fcpxml' } },
         { key: 'png', label: '納品PNG フォルダ（ホスト側パス）', path: this.editHostFilePath(this.editDeliveryPngRel()),
-          hint: 'DaVinci でクリップを読み込む時はこのフォルダを指定（panel_{行ID}.png）。' },
-        { key: 'json', label: 'edit.json（ホスト側パス）', path: this.editHostFilePath(`${editDir}/edit.json`) },
+          hint: 'DaVinci でクリップを読み込む時はこのフォルダを指定（panel_{行ID}.png）。', reveal: { target: 'export' } },
+        { key: 'audio', label: 'TTS 音声フォルダ（ホスト側パス）', path: this.editHostFilePath(audioRel),
+          hint: 'DaVinci で音声を読み込む時はこのフォルダを指定（{行ID}.wav）。', reveal: { target: 'audio' } },
+        { key: 'json', label: 'edit.json（ホスト側パス）', path: this.editHostFilePath(`${editDir}/edit.json`),
+          reveal: { target: 'edit', file: 'edit.json' } },
       ];
       return rows.filter(Boolean);
     },
@@ -7049,11 +7061,48 @@ function app() {
       if (!text) return;
       try {
         await navigator.clipboard.writeText(text);
-        this.editCopyLabel = { ...this.editCopyLabel, [key]: '✅ コピー済み' };
+        this.editCopyLabel = { ...this.editCopyLabel, [key]: '✅ コピーしました' };
       } catch {
         this.editCopyLabel = { ...this.editCopyLabel, [key]: '⚠ 手で選択してください' };
       }
       setTimeout(() => { this.editCopyLabel = { ...this.editCopyLabel, [key]: '' }; }, 1500);
+    },
+
+    // 📂 場所を開く。ブラウザからはエクスプローラーを開けないので、host_worker（ホスト常駐）に頼む。
+    get editRevealBlock() {
+      const w = this.psassistWorker;
+      if (!w) return '';
+      if (!w.alive) return 'ホスト工程（host_worker）が止まっています。start-psassist-worker.ps1 で起動してください';
+      if (!(w.capabilities || []).includes('reveal_path')) return 'host_worker が古い版です（再起動すると使えます）';
+      return '';
+    },
+
+    async revealEditPath(row) {
+      if (!row?.reveal || this.editRevealBlock) return;
+      const say = (m, ms = 6000) => {
+        this.editCopyLabel = { ...this.editCopyLabel, [row.key]: m };
+        setTimeout(() => { this.editCopyLabel = { ...this.editCopyLabel, [row.key]: '' }; }, ms);
+      };
+      const args = { ...row.reveal };
+      if (this.editResult?.lang && args.target !== 'export') args.lang = this.editResult.lang;
+      try {
+        const r = await fetch(`${this.qaBase}/jobs`, {
+          method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ kind: 'reveal_path', args }),
+        });
+        if (!r.ok) { say(`⚠ 頼めませんでした（HTTP ${r.status}）`); return; }
+        const job = await r.json();
+        say('📂 エクスプローラーで開くよう頼みました…', 3000);
+        // ワーカーは約1.5秒おきに見る。失敗（まだフォルダが無い等）はジョブの状態にしか出ないので拾って見せる
+        for (let i = 0; i < 6; i++) {
+          await new Promise(res => setTimeout(res, 1000));
+          const jr = await fetch(`${this.qaBase}/jobs`);
+          if (!jr.ok) continue;
+          const st = ((await jr.json()).jobs || []).find(j => j.job_id === job.job_id);
+          if (st?.status === 'done') { say('✅ 開きました', 2500); return; }
+          if (st?.status === 'failed') { say('⚠ ' + ((st.log || []).slice(-1)[0] || '開けませんでした')); return; }
+        }
+      } catch (e) { say(`⚠ 通信エラー: ${e}`); }
     },
 
     get currentEpisodeStatus() {

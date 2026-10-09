@@ -58,7 +58,7 @@ sys.path.insert(0, os.path.join(PSASSIST_ROOT, "psassist-agent"))
 # Phase 5 で組版の全工程を載せた。director はこの文字列だけを知る（§2-6）。
 # ★Photoshop を占有するものと、しないものを分けて持つ。UI が警告を出し分けるため。
 # resync（T3）は①③④⑤を1ジョブで連鎖する複合工程。lines必須（対象を明示する設計）。
-_JOB_KINDS_LIST = ["build_plan", "cutout", "build_panel", "qa_check", "export_png", "resync", "open_psd"]
+_JOB_KINDS_LIST = ["build_plan", "cutout", "build_panel", "qa_check", "export_png", "resync", "open_psd", "reveal_path"]
 JOB_KINDS = set(_JOB_KINDS_LIST)  # jobs/queue/ 経由で受け付ける実際のジョブ種別
 
 # P1（Docs/CUTOUT_PS_PRIMARY_PLAN.md）: 在庫スイープ。jobs/queue/ を経由しない常駐機能
@@ -610,6 +610,54 @@ def run_open_psd_job(ep_dir: str, job: dict, log: list[str]) -> dict:
     return {"opened": path, "reveal": False}
 
 
+# reveal_path（2026-10-09）: 編集に使う成果物の場所を、ホストのエクスプローラーで開く（DaVinci に読ませる場所）。
+# 開けるのは下の表の場所だけ。パスは target/file/lang から**ここで組み立てる**（ジョブから任意のパスは受けない）。
+# ⚠️ 納品PNGを delivery/aroll/ へ写す計画（Docs/OPENING_MOTION_PLAN.md §7 D2）が動いたら、この表と
+#    director の _REVEAL_TARGETS と editDeliveryPngRel()（index.html）を揃えて直す。
+_REVEAL_DIRS = {"edit": "edit", "export": os.path.join("psassist", "export"), "audio": "audio"}
+_REVEAL_LOCALIZED = {"edit", "audio"}  # 多言語は locales/{lang}/ 配下（納品PNGは言語に依らない）
+_REVEAL_FILES = {"timeline.otio", "subtitles.srt", "subtitles.fcpxml", "edit.json"}  # target=edit のとき選択できるファイル
+_REVEAL_LANG_RE = re.compile(r"^[A-Za-z0-9_\-]+$")
+
+
+def resolve_reveal_target(ep_dir: str, args: dict) -> tuple[str, bool]:
+    """(開く絶対パス, ファイルか) を返す。話数フォルダの外・表に無い場所・存在しない場所は開かない。"""
+    target = args.get("target")
+    if target not in _REVEAL_DIRS:
+        raise ValueError("開けない場所です: %r" % (target,))
+    sub = _REVEAL_DIRS[target]
+    lang = args.get("lang")
+    if lang:
+        if target not in _REVEAL_LOCALIZED or not _REVEAL_LANG_RE.match(str(lang)):
+            raise ValueError("不正な言語です: %r" % (lang,))
+        sub = os.path.join("locales", str(lang), sub)
+    ep_real = os.path.realpath(ep_dir)
+    base = os.path.realpath(os.path.join(ep_real, sub))
+    if os.path.commonpath([ep_real, base]) != ep_real:
+        raise ValueError("話数フォルダの外は開けません: %s" % base)
+    fname = args.get("file")
+    if fname:
+        if target != "edit" or fname not in _REVEAL_FILES:
+            raise ValueError("開けないファイルです: %r" % (fname,))
+        path = os.path.join(base, fname)
+        if not os.path.isfile(path):
+            raise FileNotFoundError("まだ生成されていません: %s" % path)
+        return path, True
+    if not os.path.isdir(base):
+        raise FileNotFoundError("まだフォルダがありません: %s" % base)
+    return base, False
+
+
+def run_reveal_path_job(ep_dir: str, job: dict, log: list[str]) -> dict:
+    """成果物の場所をエクスプローラーで開く。ファイルは選択状態で、フォルダはそのフォルダを開く。"""
+    path, is_file = resolve_reveal_target(ep_dir, job.get("args") or {})
+    if os.name != "nt":
+        raise RuntimeError("このホスト（%s）ではファイルを開けません（Windows 専用）" % os.name)
+    subprocess.Popen(["explorer", "/select,", path] if is_file else ["explorer", path])
+    log.append("エクスプローラーで開きました: %s" % path)
+    return {"opened": path, "file": is_file}
+
+
 def run_export_png_job(ep_dir: str, job: dict, log: list[str]) -> dict:
     lines = job.get("lines") or []
     if not lines:
@@ -730,6 +778,8 @@ def process_job(ep_dir: str, job_path: str) -> None:
             result = run_resync_job(ep_dir, job, log, on_line=on_line)
         elif kind == "open_psd":
             result = run_open_psd_job(ep_dir, job, log)
+        elif kind == "reveal_path":
+            result = run_reveal_path_job(ep_dir, job, log)
         status = "cancelled" if result.get("cancelled") else "done"
     except Exception as e:
         log.append("エラー: %s" % e)

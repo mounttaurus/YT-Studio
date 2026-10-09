@@ -6,6 +6,8 @@ import json
 import os
 import sys
 
+import pytest
+
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import build_records as br  # noqa: E402
@@ -189,3 +191,55 @@ def test_open_psd_job_uses_startfile_or_explorer(monkeypatch, tmp_path):
     assert r["reveal"] is False and opened == [r["opened"]]
     r = hw.run_open_psd_job(str(ep), {"lines": ["line_001"], "args": {"reveal": True}}, log)
     assert popen == [["explorer", "/select,", r["opened"]]]
+
+
+# ── reveal_path: 編集に使う成果物の場所だけ開く（2026-10-09） ──────────────
+def _reveal_ep(tmp_path):
+    ep = tmp_path / "ep01"
+    for sub in ("edit", "audio", os.path.join("psassist", "export"), os.path.join("locales", "en", "edit")):
+        (ep / sub).mkdir(parents=True)
+    (ep / "edit" / "subtitles.srt").write_text("x", encoding="utf-8")
+    return ep
+
+
+def test_reveal_target_resolves_only_known_places(tmp_path):
+    hw = _import_host_worker()
+    ep = _reveal_ep(tmp_path)
+    p, is_file = hw.resolve_reveal_target(str(ep), {"target": "export"})
+    assert p.endswith(os.path.join("psassist", "export")) and not is_file
+    assert hw.resolve_reveal_target(str(ep), {"target": "audio"})[0].endswith("audio")
+    p, is_file = hw.resolve_reveal_target(str(ep), {"target": "edit", "file": "subtitles.srt"})
+    assert p.endswith("subtitles.srt") and is_file
+    assert hw.resolve_reveal_target(str(ep), {"target": "edit", "lang": "en"})[0].endswith(os.path.join("locales", "en", "edit"))
+
+
+@pytest.mark.parametrize("args", [
+    {}, {"target": "psd_final"}, {"target": "../.."}, {"target": "edit", "file": "../script.json"},
+    {"target": "audio", "file": "line_001.wav"}, {"target": "edit", "lang": "../x"}, {"target": "export", "lang": "en"},
+])
+def test_reveal_target_rejects_anything_else(tmp_path, args):
+    hw = _import_host_worker()
+    with pytest.raises(ValueError):
+        hw.resolve_reveal_target(str(_reveal_ep(tmp_path)), args)
+
+
+def test_reveal_target_missing_is_a_clear_error(tmp_path):
+    hw = _import_host_worker()
+    ep = _reveal_ep(tmp_path)
+    with pytest.raises(FileNotFoundError):
+        hw.resolve_reveal_target(str(ep), {"target": "edit", "file": "timeline.otio"})
+    with pytest.raises(FileNotFoundError):
+        hw.resolve_reveal_target(str(ep), {"target": "audio", "lang": "fr"})
+
+
+def test_reveal_path_job_runs_explorer(monkeypatch, tmp_path):
+    hw = _import_host_worker()
+    ep = _reveal_ep(tmp_path)
+    popen = []
+    monkeypatch.setattr(hw.os, "name", "nt")
+    monkeypatch.setattr(hw.subprocess, "Popen", lambda argv: popen.append(argv))
+    r = hw.run_reveal_path_job(str(ep), {"args": {"target": "export"}}, [])
+    assert popen == [["explorer", r["opened"]]] and r["file"] is False
+    r = hw.run_reveal_path_job(str(ep), {"args": {"target": "edit", "file": "subtitles.srt"}}, [])
+    assert popen[-1] == ["explorer", "/select,", r["opened"]] and r["file"] is True
+    assert "reveal_path" in hw.CAPABILITIES

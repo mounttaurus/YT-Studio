@@ -106,7 +106,13 @@ async def get_psassist_file(project_id: str, episode_number: int, rel: str):
 # host_worker.py が実行できる工程。director はこの文字列だけを知り、Photoshop 固有の
 # 詳細（COM・JSX・PSD）には触れない（AROLL_TAB_REDESIGN_PLAN.md §2-6）。
 # resync（T3）は①③④⑤を1ジョブで連鎖する複合工程。AROLL_UNIFIED_FLOW_PLAN.md §17。
-_PSASSIST_JOB_KINDS = {"build_plan", "cutout", "build_panel", "qa_check", "export_png", "resync", "open_psd"}
+_PSASSIST_JOB_KINDS = {"build_plan", "cutout", "build_panel", "qa_check", "export_png", "resync", "open_psd", "reveal_path"}
+# reveal_path（2026-10-09）: 編集に使う成果物の場所（edit/・納品PNG・audio/）をエクスプローラーで開く。行には関係しない
+# （lines は不要＝空で積む）。パスは host_worker が target/file/lang から組み立てる。ここでは値の形だけ先に弾く。
+# ⚠️ 納品PNGの本籍が動いたら host_worker の _REVEAL_DIRS と揃える（Docs/OPENING_MOTION_PLAN.md §7 D2）。
+_REVEAL_TARGETS = {"edit", "export", "audio"}
+_REVEAL_FILES = {"timeline.otio", "subtitles.srt", "subtitles.fcpxml", "edit.json"}
+_REVEAL_LANG_RE = re.compile(r"[A-Za-z0-9_\-]+")
 # open_psd（2026-09-30）: 手直しのため、1行の合成PSDをホストの Photoshop で開く（args.reveal=true はエクスプローラーで
 # 場所を開く）。開けるのは psd_final/panel_{line_id}.psd だけ（パスは host_worker が行IDから組み立てる＝任意のパスは受けない）
 _PSASSIST_SINGLE_LINE_KINDS = {"open_psd"}
@@ -114,7 +120,7 @@ _LINE_ID_RE = re.compile(r"[A-Za-z0-9_\-]+")
 # lines 省略で「全件」を意味する工程。export_png と resync は対象行の明示を必須にする
 #（--resume が mtime を見ないため、全件指定だと直した行が飛ばされる。Phase 0-c。
 # resync も「要組み直しの行だけ」を明示させる設計のため同じ扱い）。
-_PSASSIST_KINDS_ALLOW_ALL = {"build_plan", "cutout", "build_panel", "qa_check"}
+_PSASSIST_KINDS_ALLOW_ALL = {"build_plan", "cutout", "build_panel", "qa_check", "reveal_path"}
 
 # P3（Docs/CUTOUT_PS_PRIMARY_PLAN.md）: 最終出力に近い3工程だけ、PS切り抜きの
 # 未処理を確認してから積む。build_plan/cutout/qa_checkはゲートしない
@@ -208,6 +214,13 @@ async def create_psassist_job(project_id: str, episode_number: int, request: Req
         raise HTTPException(status_code=400, detail="lines is required (empty = no target)")
     if kind in _PSASSIST_SINGLE_LINE_KINDS and (len(lines) != 1 or not _LINE_ID_RE.fullmatch(str(lines[0]))):
         raise HTTPException(status_code=400, detail=f"{kind} は行IDを1つだけ指定します")
+
+    if kind == "reveal_path":
+        a = body.get("args") or {}
+        if (a.get("target") not in _REVEAL_TARGETS
+                or (a.get("file") and (a["target"] != "edit" or a["file"] not in _REVEAL_FILES))
+                or (a.get("lang") and (a["target"] == "export" or not _REVEAL_LANG_RE.fullmatch(str(a["lang"]))))):
+            raise HTTPException(status_code=400, detail="reveal_path: 開けない場所です")
 
     skipped_unconfirmed: list[str] = []
     if kind in _PS_CONFIRM_GATE_KINDS:
