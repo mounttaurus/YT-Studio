@@ -3780,22 +3780,19 @@
             </div>
 
             <div style="display:flex;flex-direction:column;gap:8px;margin-bottom:12px">
-              <div>
-                <label>timeline.otio（ホスト側パス）</label>
-                <div class="file-path" x-text="editHostFilePath(editResult.files?.otio)"></div>
-              </div>
-              <div x-show="editResult.files?.srt">
-                <label>subtitles.srt（ホスト側パス）</label>
-                <div class="file-path" x-text="editHostFilePath(editResult.files?.srt)"></div>
-              </div>
-              <div x-show="editResult.files?.fcpxml">
-                <label>subtitles.fcpxml（Text+ / ホスト側パス）</label>
-                <div class="file-path" x-text="editHostFilePath(editResult.files?.fcpxml)"></div>
-              </div>
-              <div>
-                <label>edit.json（ホスト側パス）</label>
-                <div class="file-path" x-text="editHostFilePath('edit/edit.json')"></div>
-              </div>
+              <template x-for="row in editPathRows" :key="row.key">
+                <div>
+                  <label x-text="row.label"></label>
+                  <div style="display:flex;gap:6px;align-items:stretch">
+                    <div class="file-path" style="flex:1;min-width:0" x-text="row.path"></div>
+                    <button class="btn" style="white-space:nowrap" :disabled="!row.path"
+                            title="パスをクリップボードへコピー（エクスプローラーのアドレスバーに貼ると開けます）"
+                            @click="copyEditPath(row.key, row.path)"
+                            x-text="editCopyLabel[row.key] || '📋 コピー'"></button>
+                  </div>
+                  <div x-show="row.hint" style="font-size:11px;color:#94a3b8;margin-top:2px" x-text="row.hint"></div>
+                </div>
+              </template>
             </div>
 
             <template x-if="editResult.warnings && editResult.warnings.length > 0">
@@ -5053,6 +5050,7 @@ function app() {
     // 🎞️ 編集情報タブ
     editOk: false,
     editHostMediaRoot: '',
+    editCopyLabel: {},
     editResult: null,
     editRunning: false,
     editLang: '',
@@ -7016,12 +7014,46 @@ function app() {
       }
     },
 
+    // relPath は「プロジェクト基準」（edit.json の files は `episodes/ep01/edit/…` の形）。
     editHostFilePath(relPath) {
       if (!this.editResult || !relPath || !this.currentProject) return '';
-      const root = this.editResult.host_media_root || this.editHostMediaRoot || '';
-      const epNum = String(this.activeEpisodeNumber).padStart(2, '0');
+      const root = (this.editResult.host_media_root || this.editHostMediaRoot || '').replace(/[\\/]+$/, '');
       const rel = relPath.replace(/\//g, '\\');
-      return `${root}\\projects\\${this.currentProject.id}\\episodes\\ep${epNum}\\${rel}`;
+      return `${root}\\projects\\${this.currentProject.id}\\${rel}`;
+    },
+
+    // 納品PNG（DaVinci に読ませるフォルダ）の場所。本籍は当面 psassist/export/。
+    // ⚠️ 将来 delivery/aroll/ へ写す計画がある（Docs/OPENING_MOTION_PLAN.md §7 D2）。移す時はここだけ直す。
+    editDeliveryPngRel() {
+      return `episodes/ep${String(this.activeEpisodeNumber).padStart(2, '0')}/psassist/export`;
+    },
+
+    // 生成結果パネルに出す「ホスト側の場所」の一覧（コピーボタン付き）
+    get editPathRows() {
+      const r = this.editResult;
+      if (!r) return [];
+      const f = r.files || {};
+      const editDir = (f.otio || '').replace(/\/[^/]*$/, '') || `episodes/ep${String(this.activeEpisodeNumber).padStart(2, '0')}/edit`;
+      const rows = [
+        { key: 'otio', label: 'timeline.otio（ホスト側パス）', path: this.editHostFilePath(f.otio) },
+        f.srt && { key: 'srt', label: 'subtitles.srt（ホスト側パス）', path: this.editHostFilePath(f.srt) },
+        f.fcpxml && { key: 'fcpxml', label: 'subtitles.fcpxml（Text+ / ホスト側パス）', path: this.editHostFilePath(f.fcpxml) },
+        { key: 'png', label: '納品PNG フォルダ（ホスト側パス）', path: this.editHostFilePath(this.editDeliveryPngRel()),
+          hint: 'DaVinci でクリップを読み込む時はこのフォルダを指定（panel_{行ID}.png）。' },
+        { key: 'json', label: 'edit.json（ホスト側パス）', path: this.editHostFilePath(`${editDir}/edit.json`) },
+      ];
+      return rows.filter(Boolean);
+    },
+
+    async copyEditPath(key, text) {
+      if (!text) return;
+      try {
+        await navigator.clipboard.writeText(text);
+        this.editCopyLabel = { ...this.editCopyLabel, [key]: '✅ コピー済み' };
+      } catch {
+        this.editCopyLabel = { ...this.editCopyLabel, [key]: '⚠ 手で選択してください' };
+      }
+      setTimeout(() => { this.editCopyLabel = { ...this.editCopyLabel, [key]: '' }; }, 1500);
     },
 
     get currentEpisodeStatus() {
