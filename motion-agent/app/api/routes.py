@@ -14,6 +14,8 @@
 - POST /plans/{pid}/{ep}/stills|render    保存済みのプランの静止画・本描画
 - POST /fonts/specimen                    書体の見本帳（画像）
 - GET  /files/{path}                      shared/ のファイルを返す（描画中の Chrome が素材を取りに来る口でもある）
+- GET  /hf/info・/hf/projects/{pid}/{ep}  HyperFrames の版・見本・話のコンポジション
+- POST /hf/check|stills|render            HyperFrames の検査・静止画・描画（target を本文で渡す）
 """
 from __future__ import annotations
 
@@ -267,3 +269,69 @@ async def plan_stills(project_id: str, episode: int, wait: float = Query(0, ge=0
 @router.post("/plans/{project_id}/{episode}/render", status_code=202)
 async def plan_render(project_id: str, episode: int):
     return await render(_plan_request(project_id, episode))
+
+
+# ----- HyperFrames（新しい組み立て方・Docs/MOTION_UNIFIED_PLAN.md §11-3） ----------------------
+# target は samples/{name} か projects/{pid}/{ep}/{comp_id}。CLI はコンテナの中だけで動く。
+
+class HfTarget(BaseModel):
+    target: str
+
+
+class HfStillsRequest(HfTarget):
+    frames: int = Field(6, ge=1, le=12)
+    at: list[float] | None = None
+
+
+class HfRenderRequest(HfTarget):
+    quality: str = "standard"
+
+
+def _hf_call(fn, *a, **kw):
+    from app.core import hf
+    try:
+        return fn(*a, **kw)
+    except hf.TargetError as e:
+        raise HTTPException(status_code=400, detail=str(e)) from e
+    except FileNotFoundError as e:
+        raise HTTPException(status_code=404, detail=str(e)) from e
+
+
+@router.get("/hf/info")
+async def hf_info():
+    from app.core import hf
+    return {"hyperframes": hf.version(), "samples": hf.list_samples(), "fps": 30,
+            "qualities": sorted(hf.QUALITIES), "default_quality": hf.DEFAULT_QUALITY}
+
+
+@router.get("/hf/projects/{project_id}/{episode}")
+async def hf_project_list(project_id: str, episode: int):
+    from app.core import hf
+    return {"compositions": _hf_call(hf.list_project, project_id, episode)}
+
+
+@router.post("/hf/check")
+async def hf_check(req: HfTarget):
+    import asyncio
+    from app.core import hf
+    return await asyncio.to_thread(_hf_call, hf.check, req.target)
+
+
+@router.post("/hf/stills")
+async def hf_stills(req: HfStillsRequest, wait: float = Query(0, ge=0, le=300)):
+    job = _hf_call(jobs.submit_hf, "stills", req.target, frames=req.frames, at=req.at)
+    if wait:
+        import asyncio
+        job = await asyncio.to_thread(jobs.wait, job["job_id"], wait)
+    return job
+
+
+@router.post("/hf/render", status_code=202)
+async def hf_render(req: HfRenderRequest):
+    """検査（lint・ネットワーク・長さ）に誤りがあれば描かない（422）。"""
+    import asyncio
+    from app.core import hf
+    res = await asyncio.to_thread(_hf_call, hf.check, req.target)
+    if not res["ok"]:
+        raise HTTPException(status_code=422, detail={"message": "検査に誤りがあるので描かない", "check": res})
+    return _hf_call(jobs.submit_hf, "render", req.target, quality=req.quality)

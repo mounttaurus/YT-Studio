@@ -1,0 +1,192 @@
+<!doctype html>
+<html lang="ja">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=1920, height=1080" />
+    <title>見本: 人物の初出（HyperFrames）</title>
+    <!-- GSAP は motion-agent が vendor/ に置く（描画中にネットワークを使わない＝MOTION_UNIFIED_PLAN M3） -->
+    <script src="vendor/gsap.min.js"></script>
+    <style>
+      /* 見た目の束（look）の見本。I1 で look.css として motion-agent が作るものを、ここでは手で書いている。
+         書体は家族名を CSS の変数で渡す（コンテナの fontconfig が実体を持つ。同梱の書体の束は remotion/src/gimmicks/fonts.json） */
+      :root {
+        --ink: #f1ebe0;
+        --ink-dim: #b9ad9a;
+        --accent: #c8282e;
+        --desk: #120e0b;
+        --paper: #d9cdb6;
+        --font-name: "Noto Serif CJK JP";
+        --font-sub: "Noto Sans CJK JP";
+        --font-mono: "Noto Sans Mono CJK JP";
+        --font-hand: "SetoFont";
+      }
+      body { margin: 0; background: var(--desk); }
+      #root { position: relative; width: 100%; height: 100%; overflow: hidden; background: var(--desk); }
+      .clip { position: absolute; inset: 0; }
+      .full { position: absolute; inset: 0; }
+
+      /* 机の上の光 */
+      #desk-light {
+        background: radial-gradient(ellipse 70% 80% at 32% 42%, rgba(255, 214, 160, 0.16) 0%, rgba(0, 0, 0, 0) 70%);
+      }
+
+      /* カメラ（写真の寄り）。中身はカメラと一緒に拡大する */
+      #camera { position: absolute; inset: 0; }
+
+      /* 調書の台紙（F4_dossier） */
+      #card {
+        position: absolute; left: 210px; top: 92px; width: 760px; height: 900px;
+        background: linear-gradient(170deg, #e2d7c1 0%, var(--paper) 55%, #c9bb9f 100%);
+        box-shadow: 0 30px 80px rgba(0, 0, 0, 0.6), 0 0 0 1px rgba(60, 40, 20, 0.25);
+        rotate: -2.2deg;
+      }
+      #file-no {
+        position: absolute; left: 56px; top: 34px;
+        font-family: var(--font-mono), monospace; font-weight: 700; font-size: 26px; letter-spacing: 0.12em; color: #4a3b2b;
+      }
+      #hand-note {
+        position: absolute; right: 58px; top: 22px; rotate: 4deg;
+        font-family: var(--font-hand), cursive; font-size: 46px; color: var(--accent);
+      }
+      #photo {
+        position: absolute; left: 100px; top: 100px; width: 560px; height: 700px; object-fit: cover;
+        box-shadow: 0 6px 18px rgba(0, 0, 0, 0.45);
+        filter: contrast(1.05);
+      }
+      #clip-metal {
+        position: absolute; left: 330px; top: 60px; width: 100px; height: 120px;
+        border: 9px solid #8d8f93; border-bottom: none; border-radius: 50px 50px 0 0;
+      }
+
+      /* 注目の円（F6_spotlight）: 顔の周りだけ明るく残す */
+      #spotlight {
+        opacity: 0;
+        background: radial-gradient(circle 210px at 588px 470px, rgba(0, 0, 0, 0) 0%, rgba(0, 0, 0, 0) 62%, rgba(4, 3, 2, 0.72) 100%);
+      }
+
+      /* 引き出し線の注記（L3_callout）。カメラの中に置き、写真に付いて動く */
+      #callout-svg { position: absolute; left: 0; top: 0; width: 1920px; height: 1080px; overflow: visible; }
+      #callout-line { stroke: var(--ink); stroke-width: 3; fill: none; stroke-dasharray: 520; stroke-dashoffset: 520; }
+      #callout-dot {
+        position: absolute; left: 584px; top: 754px; width: 22px; height: 22px; border-radius: 50%;
+        background: var(--accent); box-shadow: 0 0 0 6px rgba(200, 40, 46, 0.25); opacity: 0;
+      }
+      #callout-text {
+        position: absolute; left: 1086px; top: 600px; width: 720px; opacity: 0;
+        font-family: var(--font-sub), sans-serif; font-weight: 700; font-size: 44px; line-height: 1.3; color: var(--ink);
+        text-shadow: 0 2px 10px rgba(0, 0, 0, 0.8);
+      }
+
+      /* 名前と肩書き（L1_name・出し方 decode）。カメラの外＝寄っても動かない */
+      #name-block { position: absolute; left: 1060px; top: 196px; width: 800px; }
+      #name {
+        font-family: var(--font-name), serif; font-weight: 900; font-size: 104px; line-height: 1.1; color: var(--ink);
+        letter-spacing: 0.04em; white-space: nowrap; text-shadow: 0 4px 24px rgba(0, 0, 0, 0.7);
+      }
+      #name .ch { display: inline-block; width: 1em; text-align: center; opacity: 0; }
+      #rule { width: 620px; height: 6px; margin-top: 18px; background: var(--accent); transform-origin: 0 50%; }
+      #sub {
+        margin-top: 22px; font-family: var(--font-sub), sans-serif; font-weight: 700; font-size: 40px; letter-spacing: 0.06em;
+        color: var(--ink-dim); white-space: nowrap;
+      }
+
+      /* 質感（D3）: 粒子は種を固定した乱流。動かし続ける（画面の全ては動く＝原理 P8） */
+      #grain-wrap { position: absolute; inset: -60px; opacity: 0.09; mix-blend-mode: screen; }
+      #grain { position: absolute; left: 0; top: 0; width: 2040px; height: 1200px; }
+      #vignette { background: radial-gradient(ellipse 75% 75% at 50% 46%, rgba(0, 0, 0, 0) 55%, rgba(0, 0, 0, 0.55) 100%); }
+    </style>
+  </head>
+  <body>
+    <div id="root" data-composition-id="person_intro" data-start="0" data-width="1920" data-height="1080" data-duration="5">
+      <div id="scene" class="full">
+        <div id="desk-light" class="full"></div>
+
+        <div id="camera" data-gimmick="F2_photo" data-variant="push">
+          <div id="card" data-gimmick="F4_dossier">
+            <div id="file-no">FILE No. 0347</div>
+            <div id="hand-note">要注意</div>
+            <img id="photo" src="assets/_gen/portrait.png" alt="" />
+            <div id="clip-metal"></div>
+          </div>
+          <div id="spotlight" class="full" data-gimmick="F6_spotlight"></div>
+          <div id="callout" data-gimmick="L3_callout">
+            <svg id="callout-svg" viewBox="0 0 1920 1080">
+              <polyline id="callout-line" points="595,765 820,640 1070,640" />
+            </svg>
+            <div id="callout-dot"></div>
+            <div id="callout-text">事件当夜、現場の近くにいた</div>
+          </div>
+        </div>
+
+        <div id="name-block" data-gimmick="L1_name" data-variant="decode">
+          <div id="name"></div>
+          <div id="rule"></div>
+          <div id="sub">架空の証言者｜1963</div>
+        </div>
+
+        <div id="grain-wrap">
+          <svg id="grain" viewBox="0 0 2040 1200">
+            <filter id="grain-f"><feTurbulence type="fractalNoise" baseFrequency="0.85" numOctaves="2" seed="7" /></filter>
+            <rect width="2040" height="1200" filter="url(#grain-f)" />
+          </svg>
+        </div>
+        <div id="vignette" class="full"></div>
+      </div>
+    </div>
+
+    <script>
+      // 種つきの乱数（Math.random は使わない＝決定性）
+      function mulberry32(a) {
+        return function () {
+          a |= 0; a = (a + 0x6d2b79f5) | 0;
+          let t = Math.imul(a ^ (a >>> 15), 1 | a);
+          t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+          return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+        };
+      }
+      const rand = mulberry32(20261011);
+      const GLYPHS = "アカサタナハマヤラワヰヱ#%&*+=<>/0123456789※";
+      const NAME = "ジョン・ドウ";
+      const nameEl = document.getElementById("name");
+      const chars = Array.from(NAME).map((ch) => {
+        const s = document.createElement("span");
+        s.className = "ch";
+        s.textContent = ch;
+        nameEl.appendChild(s);
+        return s;
+      });
+
+      const tl = gsap.timeline({ paused: true });
+
+      // F2_photo: 顔へゆっくり寄る（5秒かけて 1.0→1.10）
+      tl.fromTo("#camera", { scale: 1, x: 0 }, { scale: 1.1, x: -18, duration: 5, ease: "sine.inOut", transformOrigin: "588px 470px" }, 0);
+
+      // F6_spotlight: 0.5秒から周りを暗くする
+      tl.fromTo("#spotlight", { opacity: 0 }, { opacity: 1, duration: 0.9, ease: "power2.out" }, 0.5);
+
+      // L1_name（decode）: 1字ずつ記号が回ってから名前に落ち着く。字ごとの記号の並びは種で決まる
+      const STEP = 1 / 15;
+      chars.forEach((s, i) => {
+        const start = 0.8 + 0.06 * i;
+        const settle = 1.15 + 0.11 * i;
+        tl.set(s, { opacity: 1, color: "#c8282e" }, start);
+        for (let t = start; t < settle - 1e-6; t += STEP) {
+          tl.set(s, { textContent: GLYPHS[Math.floor(rand() * GLYPHS.length)] }, t);
+        }
+        tl.set(s, { textContent: NAME[i], color: "#f1ebe0" }, settle);
+      });
+      tl.fromTo("#rule", { scaleX: 0 }, { scaleX: 1, duration: 0.5, ease: "power3.out" }, 1.75);
+      tl.fromTo("#sub", { clipPath: "inset(0% 100% 0% 0%)" }, { clipPath: "inset(0% 0% 0% 0%)", duration: 0.6, ease: "power2.out" }, 1.95);
+
+      // L3_callout: 点 → 線が伸びる → 注記
+      tl.fromTo("#callout-dot", { opacity: 0, scale: 0 }, { opacity: 1, scale: 1, duration: 0.3, ease: "back.out(2)" }, 2.6);
+      tl.fromTo("#callout-line", { strokeDashoffset: 520 }, { strokeDashoffset: 0, duration: 0.5, ease: "power2.inOut" }, 2.72);
+      tl.fromTo("#callout-text", { opacity: 0, x: -16 }, { opacity: 1, x: 0, duration: 0.45, ease: "power2.out" }, 3.15);
+
+      // D3 質感: 粒子をこま送りで動かし続ける
+      tl.fromTo("#grain", { x: 0, y: 0 }, { x: -48, y: 31, duration: 5, ease: "steps(30)" }, 0);
+
+      window.__timelines["person_intro"] = tl;
+    </script>
+  </body>
+</html>

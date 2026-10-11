@@ -44,6 +44,17 @@ COPY remotion/ ./
 # バンドルを作っておく（dev で src を差し替えたら render.mjs が更新日時を見て作り直す）
 RUN node render.mjs --bundle
 
+# HyperFrames（新しい組み立て方・Docs/MOTION_UNIFIED_PLAN.md）。版は lock で固定する。
+# 自動更新（npm で入れると自分を書き換える）・テレメトリ・init の Skill 確認（GitHub へ通信）を切る＝M9
+ENV HYPERFRAMES_NO_UPDATE_CHECK=1 HYPERFRAMES_NO_TELEMETRY=1 HYPERFRAMES_SKIP_SKILLS=1
+# chrome-headless-shell の展開に unzip が要る（上の apt の層を作り直さないよう、ここで足す）
+RUN apt-get update && apt-get install -y --no-install-recommends unzip && rm -rf /var/lib/apt/lists/*
+WORKDIR /app/hyperframes
+COPY hyperframes/package.json hyperframes/package-lock.json ./
+RUN npm ci --no-audit --no-fund
+RUN npx hyperframes browser ensure
+COPY hyperframes/ ./
+
 WORKDIR /app
 COPY app/ ./app/
 COPY tests/ ./tests/

@@ -17,3 +17,9 @@ RENDER_CONCURRENCY = int(os.getenv("MOTION_RENDER_CONCURRENCY", "4"))
 RENDER_TIMEOUT_SEC = int(os.getenv("MOTION_RENDER_TIMEOUT_SEC", "900"))
 STILL_SCALE = float(os.getenv("MOTION_STILL_SCALE", "0.5"))
 NODE_BIN = os.getenv("NODE_BIN", "node")
+
+# HyperFrames（新しい組み立て方・Docs/MOTION_UNIFIED_PLAN.md）。CLI はコンテナの中だけで動かす
+HF_DIR = Path(os.getenv("HF_DIR", "/app/hyperframes"))
+HF_SAMPLES_DIR = HF_DIR / "samples"
+HF_BIN = HF_DIR / "node_modules" / ".bin" / "hyperframes"
+HF_CHECK_TIMEOUT_SEC = int(os.getenv("MOTION_HF_CHECK_TIMEOUT_SEC", "180"))

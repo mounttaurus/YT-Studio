@@ -4,3 +4,8 @@ remotion/build
 remotion/public
 **/__pycache__
 **/.pytest_cache
+hyperframes/node_modules
+hyperframes/samples/*/vendor
+hyperframes/samples/*/snapshots
+hyperframes/samples/*/renders
+hyperframes/samples/*/.hyperframes

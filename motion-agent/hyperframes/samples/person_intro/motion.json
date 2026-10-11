@@ -1,0 +1,17 @@
+{
+  "schema_version": "1.0.0",
+  "engine": {"name": "hyperframes", "version": "0.8.140"},
+  "profile": "insert",
+  "seed": "sample_person_intro",
+  "fit": {"sec": 5.0},
+  "look": "sample",
+  "materials": {
+    "portrait": {"path": "assets/_gen/portrait.png", "source": "自作（motion-agent/app/tools/make_portrait.py・架空の人物）"}
+  },
+  "generated": [
+    {"tool": "portrait", "out": "assets/_gen/portrait.png", "seed": 1963}
+  ],
+  "slug": "person-intro",
+  "poster_sec": 3.0,
+  "notes": "見本（MOTION_UNIFIED_PLAN U-D4）。人物の初出: 調書に留めた古い肖像へ寄りながら、名前が解読の動きで現れ、肩書き・注目の円・引き出し線の注記が続く。字幕の帯（下から20%）には文字を置かない。名前・肩書きは架空。"
+}

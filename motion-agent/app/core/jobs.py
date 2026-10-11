@@ -76,6 +76,24 @@ def submit(kind: str, composition: str, inp: dict, props: dict, frames: list[dic
     return dict(job)
 
 
+def submit_hf(kind: str, target: str, **opts) -> dict:
+    """HyperFrames の静止画（kind=stills）・描画（kind=render）のジョブ。同じ作業者（1本ずつ）が回す。"""
+    from app.core import hf  # 循環 import を避ける
+    job_id = datetime.now().strftime("%Y%m%d-%H%M%S-") + uuid.uuid4().hex[:6]
+    d = _job_dir(job_id)
+    d.mkdir(parents=True, exist_ok=True)
+    spec = hf.job_spec(kind, target, d, **opts)
+    (d / "spec.json").write_text(json.dumps(spec, ensure_ascii=False, indent=2), encoding="utf-8")
+    job = {"job_id": job_id, "kind": kind, "engine": "hyperframes", "composition": target, "status": "queued",
+           "progress": 0.0, "result": None, "error": None, "created_at": _now(), "finished_at": None}
+    with _lock:
+        _jobs[job_id] = job
+        _save(job)
+    _ensure_worker()
+    _queue.put(job_id)
+    return dict(job)
+
+
 def get(job_id: str) -> dict | None:
     with _lock:
         if job_id in _jobs:
@@ -146,6 +164,11 @@ def _run(job_id: str) -> None:
     d = _job_dir(job_id)
     spec = json.loads((d / "spec.json").read_text(encoding="utf-8"))
     _update(job_id, status="running", started_at=_now())
+    if spec.get("engine") == "hyperframes":
+        from app.core import hf
+        hf.run_job(job_id, d, spec, lambda jid, **f: _update(jid, **({"finished_at": _now()} if f.get("status") in ("done", "error") else {}), **f),
+                   rel, _make_sheet)
+        return
     stills: list[dict] = []
     tail: list[str] = []
     started = time.monotonic()

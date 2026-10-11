@@ -1,0 +1,11 @@
+{
+  "name": "motion-hyperframes",
+  "private": true,
+  "version": "0.0.0",
+  "description": "新しい組み立て方の描画エンジン（HyperFrames）。版は固定し、自動更新は切る（Docs/MOTION_UNIFIED_PLAN.md §2-2・§12-3）",
+  "type": "module",
+  "dependencies": {
+    "gsap": "3.14.2",
+    "hyperframes": "0.8.140"
+  }
+}

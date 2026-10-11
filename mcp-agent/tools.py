@@ -1707,7 +1707,7 @@ async def _stills_result(job: dict, focus: Optional[list[str]]) -> dict:
         images.append({"name": "sheet", "format": "jpeg", "png": await dc.get_bytes("api/motion" + sheet["url"])})
         out["order"], out["columns"] = sheet["order"], sheet["columns"]
     by_name = {s["name"]: s for s in res["stills"]}
-    out["frames"] = {s["name"]: s["frame"] for s in res["stills"]}
+    out["frames"] = {s["name"]: s.get("frame", s.get("sec")) for s in res["stills"]}  # HyperFrames は秒
     for name in (focus or [])[:3]:
         if name not in by_name:
             out.setdefault("warnings", []).append(f"focus の {name} という静止画はありません")
@@ -1819,6 +1819,66 @@ async def opening_font_specimen(text: str = "洗脳と記録 MK-ULTRA 2025", ids
     res = await dc.request("POST", "api/motion/fonts/specimen", json=body)
     res["_images"] = [{"name": "specimen", "format": "jpeg", "png": await dc.get_bytes("api/motion" + res.pop("url"))}]
     return res
+
+
+# ── HyperFrames（新しい組み立て方・設計: Docs/MOTION_UNIFIED_PLAN.md §11・§12） ──
+#
+# コンポジション＝HTML＋GSAP の1本分のプロジェクト。見本は sample="person_intro"、話のものは
+# project_id・episode_number・comp_id（shared/projects/{pid}/episodes/epNN/motion/hf/{comp_id}/）。
+# 書き方は公式の Skill（hyperframes-core・hyperframes-animation）に従う。ただし CLI はホストで叩かず、
+# このツール（コンテナの中で動く）か motion-agent/scripts/hf.sh を通す。GSAP は vendor/gsap.min.js（motion-agent が置く）。
+# 外部 URL・通信は検査で止まる。課金なし（ローカルCPU）。Remotion の型（opening_*）とは別の口。
+
+def _hf_target(sample: str, project_id: str, episode_number: int, comp_id: str) -> str:
+    if sample:
+        return f"samples/{sample}"
+    if project_id and episode_number and comp_id:
+        return f"projects/{project_id}/{int(episode_number)}/{comp_id}"
+    raise ValueError("sample か (project_id, episode_number, comp_id) を指定してください")
+
+
+async def motion_hf_info() -> dict:
+    """HyperFrames の版・見本の一覧（target と notes）・画質の選択肢。"""
+    return await dc.get("api/motion/hf/info")
+
+
+async def motion_hf_list(project_id: str, episode_number: int) -> dict:
+    """話のコンポジションの一覧（comp_id・用途・長さの合わせ方・意図）。"""
+    return await dc.get(f"api/motion/hf/projects/{project_id}/{int(episode_number)}")
+
+
+async def motion_hf_check(sample: str = "", project_id: str = "", episode_number: int = 0, comp_id: str = "") -> dict:
+    """描く前の検査: HyperFrames の lint ＋ ネットワーク禁止（外部 URL・fetch など）＋ 長さ（ルートの data-duration と
+    motion.json の fit）。ok が false なら描けない。errors の code・file・line を見て直す。
+    vendor/ の GSAP と見本の素材はこの時に置かれる。"""
+    return await dc.request("POST", "api/motion/hf/check",
+                            json={"target": _hf_target(sample, project_id, episode_number, comp_id)})
+
+
+async def motion_hf_stills(sample: str = "", project_id: str = "", episode_number: int = 0, comp_id: str = "",
+                           frames: int = 6, at: Optional[list[float]] = None, focus: Optional[list[str]] = None,
+                           wait: int = 180) -> dict:
+    """確認用の静止画を**画像として**返す（hyperframes snapshot。等間隔に frames 枚、または at の秒。最大12枚を3列の見本シート）。
+    order の順に左上から。focus: 大きく見たい静止画の名前（s01…・最大3）。約10〜30秒・課金なし。"""
+    body: dict = {"target": _hf_target(sample, project_id, episode_number, comp_id), "frames": frames}
+    if at:
+        body["at"] = at
+    job = await dc.request("POST", f"api/motion/hf/stills?wait={max(0, min(int(wait), 300))}", json=body)
+    return await _stills_result(job, focus)
+
+
+async def motion_hf_render(sample: str = "", project_id: str = "", episode_number: int = 0, comp_id: str = "",
+                           quality: str = "standard") -> dict:
+    """本描画（1080p30 の mp4）のジョブ。描く前に motion_hf_check と同じ検査が走り、誤りがあれば 422。
+    進捗と結果は motion_status(job_id)。終わると result.flash に**明滅の実測**（毎秒3回まで）が入り、
+    result.summary に描き方の要約（capture の方式・GPU・段ごとの秒）が入る。課金なし。"""
+    return await dc.request("POST", "api/motion/hf/render",
+                            json={"target": _hf_target(sample, project_id, episode_number, comp_id), "quality": quality})
+
+
+async def motion_status(job_id: str) -> dict:
+    """motion-agent のジョブ（HyperFrames・Remotion どちらも）の状態（queued/running/done/error・progress・result・error）。"""
+    return await dc.get(f"api/motion/jobs/{job_id}")
 
 
 # ── レジストリ（server.py / 後継ループ が参照する単一の出所） ──────────
@@ -1954,4 +2014,11 @@ TOOLS = [
     {"fn": opening_plan_stills,  "side_effects": [S.WRITE, S.ASYNC]},
     {"fn": opening_plan_render,  "side_effects": [S.WRITE, S.ASYNC]},
     {"fn": opening_font_specimen, "side_effects": [S.READ]},
+    # HyperFrames（新しい組み立て方・motion-agent。課金なし・CPU描画）
+    {"fn": motion_hf_info,       "side_effects": [S.READ]},
+    {"fn": motion_hf_list,       "side_effects": [S.READ]},
+    {"fn": motion_hf_check,      "side_effects": [S.WRITE]},
+    {"fn": motion_hf_stills,     "side_effects": [S.WRITE, S.ASYNC]},
+    {"fn": motion_hf_render,     "side_effects": [S.WRITE, S.ASYNC]},
+    {"fn": motion_status,        "side_effects": [S.READ]},
 ]
