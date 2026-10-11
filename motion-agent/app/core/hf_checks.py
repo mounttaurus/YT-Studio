@@ -72,6 +72,12 @@ def root_info(index_html: str) -> dict:
     return {"id": _ID_RE.search(tag).group(1), "duration": float(dur.group(1)) if dur else None}
 
 
+def root_open_end(index_html: str) -> int | None:
+    """index.html の最初のルート（data-composition-id を持つ要素）の開始タグの終わりの位置。"""
+    m = _ROOT_RE.search(index_html)
+    return m.end() if m else None
+
+
 def check_length(root: Path, motion: dict | None) -> tuple[list[dict], float | None]:
     """返り値: (指摘, ルートの秒)。fit.sec と1フレーム以上ずれていれば誤り。"""
     index = root / "index.html"

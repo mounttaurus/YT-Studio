@@ -16,13 +16,15 @@
 - GET  /files/{path}                      shared/ のファイルを返す（描画中の Chrome が素材を取りに来る口でもある）
 - GET  /hf/info・/hf/projects/{pid}/{ep}  HyperFrames の版・見本・話のコンポジション
 - POST /hf/check|stills|render            HyperFrames の検査・静止画・描画（target を本文で渡す）
+- GET  /audio/sfx・/audio/sfx/{kind}.wav  効果音の部品の一覧・試聴用の WAV（手続き合成・A0）
+- POST /jobs/{job_id}/sfx                 終わった Remotion の描画ジョブに効果音を足した out_sfx.mp4 を作る（A0）
 """
 from __future__ import annotations
 
 from typing import Any
 
 from fastapi import APIRouter, HTTPException, Query
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, Response
 from pydantic import BaseModel, Field
 
 from app.core import builders, config, jobs, plan as plan_mod, plan_store, registry, specimen
@@ -335,3 +337,47 @@ async def hf_render(req: HfRenderRequest):
     if not res["ok"]:
         raise HTTPException(status_code=422, detail={"message": "検査に誤りがあるので描かない", "check": res})
     return _hf_call(jobs.submit_hf, "render", req.target, quality=req.quality)
+
+
+# ----- 音（効果音の手続き合成・Docs/MOTION_UNIFIED_PLAN.md §9・A0） --------------------------------
+
+@router.get("/audio/sfx")
+async def audio_sfx():
+    """部品の一覧（名前・既定の引数・基準点・pitch の意味）。"""
+    from app.core.audio import sfx_synth
+    return {"sample_rate": sfx_synth.SR, "version": sfx_synth.VERSION, "parts": sfx_synth.describe()}
+
+
+@router.get("/audio/sfx/{kind}.wav")
+async def audio_sfx_wav(kind: str, length: float | None = None, pitch: float | None = None,
+                        gain: float | None = None, seed: int | None = None):
+    """試聴用の WAV。引数を省けば部品の既定。同じ引数なら同じバイト列（M2）。"""
+    from app.core.audio import sfx_synth
+    params = {k: v for k, v in (("length", length), ("pitch", pitch), ("gain", gain), ("seed", seed)) if v is not None}
+    try:
+        data = sfx_synth.make_wav(kind, **params)
+    except ValueError as e:
+        raise HTTPException(status_code=422, detail=str(e)) from e
+    return Response(content=data, media_type="audio/wav")
+
+
+class SfxMuxRequest(BaseModel):
+    min_gap_sec: float = Field(0.1, ge=0.0, le=2.0, description="同じ部品の打点がこれより近ければ後ろを間引く")
+    seed: int = 0
+
+
+@router.post("/jobs/{job_id}/sfx")
+async def job_sfx(job_id: str, req: SfxMuxRequest | None = None):
+    """終わった Remotion の本描画ジョブ（無音の out.mp4）に、props の効果音の打点から作った音を足す。
+    映像は触らない（-c:v copy）。結果は同じジョブのフォルダの out_sfx.mp4。"""
+    import asyncio
+    from app.core.audio import mix
+    req = req or SfxMuxRequest()
+    try:
+        return await asyncio.to_thread(mix.mux_job, job_id, req.min_gap_sec, req.seed)
+    except FileNotFoundError as e:
+        raise HTTPException(status_code=404, detail=str(e)) from e
+    except ValueError as e:
+        raise HTTPException(status_code=422, detail=str(e)) from e
+    except mix.MixError as e:
+        raise HTTPException(status_code=500, detail=str(e)) from e

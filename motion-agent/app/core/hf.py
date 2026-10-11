@@ -18,7 +18,7 @@ import subprocess
 import time
 from pathlib import Path
 
-from app.core import config, flash, hf_checks
+from app.core import config, flash, hf_checks, hf_sfx
 
 NAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$")
 VENDOR_FILES = {"gsap.min.js": Path("node_modules/gsap/dist/gsap.min.js")}
@@ -113,6 +113,8 @@ def prepare(d: Path) -> list[str]:
             out.parent.mkdir(parents=True, exist_ok=True)
             tool(out, spec)
             made.append(out_rel)
+    # 効果音（motion.json の sounds・sfx）: WAV を assets/sfx/ に作り、index.html に <audio> を書く（A0・§9-1）
+    made += hf_sfx.prepare(d, motion)
     return made
 
 
@@ -167,6 +169,7 @@ def check(target: str) -> dict:
     ours = hf_checks.check_network(d)
     length_issues, duration = hf_checks.check_length(d, motion)
     ours += length_issues
+    ours += hf_sfx.check(d, motion, duration)
     lr = lint(d)
     errors = [i for i in ours if i["level"] == "error"] + [{"code": f.get("code", "lint"), "level": "error",
                                                               "message": f.get("message", ""), "source": "lint",
@@ -261,6 +264,8 @@ def run_job(job_id: str, job_dir: Path, spec: dict, update, rel, make_sheet) -> 
         result = {"file": rel(out), "url": f"/files/{rel(out)}", "summary": _render_summary(log)}
         # 描いた映像の明滅を実測する（画面の25%以上・毎秒3回まで）。落ちたら箱に入れない（M6）
         result["flash"] = flash.analyze_video(str(out), float(spec["fps"]))
+        # 音: 効果音を宣言しているのに音が入っていなければ ok: false（id 無しの <audio> は無音で描かれる）
+        result["audio"] = _audio_report(out, hf_sfx.has_sfx(read_motion(d)))
     else:
         result = _collect_stills(d, Path(spec["out"]), rel)
         if not result["stills"]:
@@ -271,6 +276,19 @@ def run_job(job_id: str, job_dir: Path, spec: dict, update, rel, make_sheet) -> 
             result["sheet"] = {"file": rel(sheet), "url": f"/files/{rel(sheet)}",
                                "order": [s["name"] for s in result["stills"]], "columns": 3}
     update(job_id, status="done", progress=1.0, result=result, elapsed_sec=elapsed)
+
+
+def _audio_report(video: Path, expected: bool) -> dict:
+    """描いた mp4 の音の有無とラウドネス。{expected, has_audio, ok, integrated_lufs?, true_peak_dbfs?}"""
+    from app.core.audio import mix
+    try:
+        has = mix.has_audio(video)
+        rep: dict = {"expected": expected, "has_audio": has, "ok": has or not expected}
+        if has:
+            rep.update(mix.loudness(video))
+        return rep
+    except (mix.MixError, OSError) as e:
+        return {"expected": expected, "has_audio": None, "ok": not expected, "error": str(e)[:300]}
 
 
 def _render_summary(log: str) -> str | None:

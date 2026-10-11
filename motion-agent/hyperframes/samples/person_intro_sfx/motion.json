@@ -1,0 +1,41 @@
+{
+  "schema_version": "1.0.0",
+  "engine": {"name": "hyperframes", "version": "0.8.140"},
+  "profile": "insert",
+  "seed": "sample_person_intro_sfx",
+  "fit": {"sec": 5.0},
+  "look": "sample",
+  "materials": {
+    "portrait": {"path": "assets/_gen/portrait.png", "source": "自作（motion-agent/app/tools/make_portrait.py・架空の人物）"}
+  },
+  "generated": [
+    {"tool": "portrait", "out": "assets/_gen/portrait.png", "seed": 1963}
+  ],
+  "sounds": {
+    "tick_a": {"kind": "tick", "length": 0.05, "pitch": 2300, "gain": 0.35, "seed": 11},
+    "tick_b": {"kind": "tick", "length": 0.05, "pitch": 1900, "gain": 0.35, "seed": 12},
+    "tick_c": {"kind": "tick", "length": 0.05, "pitch": 2700, "gain": 0.35, "seed": 13},
+    "tick_settle": {"kind": "tick", "length": 0.07, "pitch": 1500, "gain": 0.55, "seed": 14},
+    "rule_whoosh": {"kind": "whoosh", "length": 0.45, "pitch": 1500, "gain": 0.5, "seed": 21},
+    "dot_impact": {"kind": "impact", "length": 0.6, "pitch": 72, "gain": 0.35, "seed": 31}
+  },
+  "sfx": [
+    {"id": "sfx-name-start-0", "sound": "tick_a", "at": 0.8, "volume": 0.7},
+    {"id": "sfx-name-start-1", "sound": "tick_b", "at": 0.86, "volume": 0.7},
+    {"id": "sfx-name-start-2", "sound": "tick_c", "at": 0.92, "volume": 0.7},
+    {"id": "sfx-name-start-3", "sound": "tick_a", "at": 0.98, "volume": 0.7},
+    {"id": "sfx-name-start-4", "sound": "tick_b", "at": 1.04, "volume": 0.7},
+    {"id": "sfx-name-start-5", "sound": "tick_c", "at": 1.1, "volume": 0.7},
+    {"id": "sfx-name-settle-0", "sound": "tick_settle", "at": 1.15},
+    {"id": "sfx-name-settle-1", "sound": "tick_settle", "at": 1.26},
+    {"id": "sfx-name-settle-2", "sound": "tick_settle", "at": 1.37},
+    {"id": "sfx-name-settle-3", "sound": "tick_settle", "at": 1.48},
+    {"id": "sfx-name-settle-4", "sound": "tick_settle", "at": 1.59},
+    {"id": "sfx-name-settle-5", "sound": "tick_settle", "at": 1.7},
+    {"id": "sfx-rule", "sound": "rule_whoosh", "at": 1.75},
+    {"id": "sfx-callout-dot", "sound": "dot_impact", "at": 2.6}
+  ],
+  "slug": "person-intro-sfx",
+  "poster_sec": 3.0,
+  "notes": "見本（MOTION_UNIFIED_PLAN A0）。person_intro の効果音つき版。名前の解読＝tick（文字ごとの始まりと落ち着き）・赤い線＝whoosh・注記の点＝impact（弱め）。効果音の本籍は sounds・sfx（打点は絵の動きの時刻に合わせた）で、WAV は assets/sfx/ に、<audio> は index.html に motion-agent が書く。インサートは本来無音（§7）なので、音つきの見本は別名にしてある。名前・肩書きは架空。"
+}
