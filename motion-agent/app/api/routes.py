@@ -385,6 +385,35 @@ async def hf_stills(req: HfStillsRequest, wait: float = Query(0, ge=0, le=300)):
     return job
 
 
+class HfRegisterRequest(HfTarget):
+    job_id: str | None = Field(None, description="箱に入れる描画のジョブ。省略は、その作品の一番新しい終わった描画")
+    line_id: str | None = Field(None, description="当てる行。省略は motion.json の fit.line_id")
+    assign: bool = Field(True, description="false なら箱に入れるだけ（行には当てない）")
+
+
+@router.post("/hf/register")
+async def hf_register(req: HfRegisterRequest):
+    """描いたインサートを Bロールの箱（scrapping-agent）へ入れる。明滅・音・描いた後の編集を見て、通ったものだけ。"""
+    import asyncio
+    from app.core import hf, hf_register as reg
+    try:
+        parts = req.target.split("/")
+        if len(parts) != 4 or parts[0] != "projects":
+            raise HTTPException(status_code=400, detail="target は projects/{pid}/{ep}/{comp_id}（箱に入れられるのは話のコンポジション）")
+        pid, comp_id = hf._name(parts[1], "project_id"), hf._name(parts[3], "comp_id")
+        try:
+            ep = int(parts[2])
+        except ValueError as e:
+            raise HTTPException(status_code=400, detail=f"episode は整数: {parts[2]!r}") from e
+        return await asyncio.to_thread(reg.register, pid, ep, comp_id, req.job_id, req.line_id, req.assign)
+    except hf.TargetError as e:
+        raise HTTPException(status_code=400, detail=str(e)) from e
+    except FileNotFoundError as e:
+        raise HTTPException(status_code=404, detail=str(e)) from e
+    except reg.RegisterError as e:
+        raise HTTPException(status_code=e.status, detail={"code": e.code, "message": str(e)}) from e
+
+
 @router.post("/hf/render", status_code=202)
 async def hf_render(req: HfRenderRequest):
     """検査（lint・ネットワーク・長さ）に誤りがあれば描かない（422）。"""

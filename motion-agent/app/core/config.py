@@ -25,3 +25,7 @@ HF_BIN = HF_DIR / "node_modules" / ".bin" / "hyperframes"
 HF_CHECK_TIMEOUT_SEC = int(os.getenv("MOTION_HF_CHECK_TIMEOUT_SEC", "180"))
 HF_PROFILES_DIR = HF_DIR / "profiles"
 HF_MEASURE_TIMEOUT_SEC = int(os.getenv("MOTION_HF_MEASURE_TIMEOUT_SEC", "120"))
+
+# Bロールの箱（scrapping-agent）。描いたインサートの受け渡し先（Docs/BROLL_PLAN.md §8-2）。書き手は scrapping-agent だけ（M4）
+SCRAPPING_AGENT_URL = os.getenv("SCRAPPING_AGENT_URL", "http://scrapping-agent:8003")
+BROLL_REGISTER_TIMEOUT_SEC = int(os.getenv("MOTION_BROLL_REGISTER_TIMEOUT_SEC", "120"))

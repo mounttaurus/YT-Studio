@@ -1904,9 +1904,97 @@ async def motion_hf_render(sample: str = "", project_id: str = "", episode_numbe
                             json={"target": _hf_target(sample, project_id, episode_number, comp_id), "quality": quality})
 
 
+async def motion_hf_register(project_id: str, episode_number: int, comp_id: str, job_id: str = "", line_id: str = "",
+                             assign: bool = True) -> dict:
+    """描いたインサート（motion_hf_render の done）を、その話の Bロールの箱へ入れる（箱へ書くのは scrapping-agent だけ。
+    motion-agent が out.mp4・コンポジションの写し・使った素材の asset_id・作り直しの古い素材を渡す）。課金なし。
+    job_id 省略は、そのコンポジションの一番新しい終わった描画。line_id 省略は motion.json の fit.line_id（その行に当たる）。
+    assign=false なら箱に入れるだけ。入れない場合: 明滅の実測に落ちた描画（422）／音を宣言しているのに音が無い（422）／
+    描いた後にコンポジションを直している（409 stale_render＝描き直す）。同じ中身は二重に入らない（duplicate:true）。
+    2回目以降は前の素材の割り当てを新しい素材へ差し替える（古い素材は箱に残る＝replaces）。返り値: {asset_id, assigned, replaces}。"""
+    body: dict = {"target": _hf_target("", project_id, episode_number, comp_id), "assign": bool(assign)}
+    if job_id:
+        body["job_id"] = job_id
+    if line_id:
+        body["line_id"] = line_id
+    return await dc.request("POST", "api/motion/hf/register", json=body)
+
+
 async def motion_status(job_id: str) -> dict:
     """motion-agent のジョブ（HyperFrames・Remotion どちらも）の状態（queued/running/done/error・progress・result・error）。"""
     return await dc.get(f"api/motion/jobs/{job_id}")
+
+
+# ── Bロールの箱（設計: Docs/BROLL_PLAN.md・DATA_SCHEMA §6e・B1） ──
+#
+# 話ごとの箱 episodes/epNN/broll/ に素材（写真・動画・Remotion／HyperFrames のインサート）を入れ、台本の行（line_id）に当てる。
+# 書くのは scrapping-agent だけ。素材IDは不変・同じ中身は二重に登録されない・外した素材は _trash へ移るだけ。
+# 課金なし（素材サイトの DL・AI 生成は別の口）。OTIO への反映は B3 から（今は箱と割り当てを残すところまで）。
+
+def _broll_view(res: dict, compact: bool) -> dict:
+    if not compact:
+        return res
+    keep = ("asset_id", "media_type", "duration_sec", "resolution", "license", "used_by", "unassigned", "note", "replaced_by")
+    assets = []
+    for a in res.get("assets", []):
+        row = {k: a[k] for k in keep if k in a}
+        row["source"] = (a.get("source") or {}).get("kind")
+        row["name"] = (a.get("source") or {}).get("original_name")
+        assets.append(row)
+    return {"exists": res.get("exists"), "summary": res.get("summary"), "assets": assets,
+            "placements": {ln: [it["asset_id"] for it in items] for ln, items in (res.get("placements") or {}).items()},
+            "orphans": res.get("orphans")}
+
+
+async def broll_list(project_id: str, episode_number: int, compact: bool = True) -> dict:
+    """話のBロールの箱: 素材（asset_id・種類・尺・ライセンス・どの行に当たっているか）・行ごとの割り当て・
+    行から外れた割り当て（orphans＝台本の結合・削除で外れたもの。当時の本文の冒頭つき）・数（未割り当て・出典 unknown）。
+    箱が無い話は exists:false の空。compact=false で全項目（出典の url・タグなど）。"""
+    res = await dc.get(f"api/scrapping/projects/{project_id}/episodes/{int(episode_number)}/broll")
+    return _broll_view(res, compact)
+
+
+async def broll_register(project_id: str, episode_number: int, path: str, license: str, source_kind: str = "claude",
+                         line_id: str = "", slug: str = "", credit: str = "", note: str = "",
+                         derived_from: Optional[list[str]] = None, replaces: str = "", poster_sec: Optional[float] = None,
+                         motion: Optional[dict] = None, added_by: str = "claude") -> dict:
+    """shared/ の中のファイル（Claude が作った画像・Remotion や HyperFrames の描画 out.mp4・自由生成の出力）を箱へ入れる（コピー）。
+    path は shared からの相対（例 motion/_work/{job}/out.mp4）。**license は必須**（own・pd・cc0・cc-by・cc-by-sa・licensed・unknown…。
+    cc-by 系は credit も）。同じ中身が箱にあれば新しく作らず既存の asset_id を返す（duplicate:true）。line_id を渡せばその行に当てる。
+    作り直しなら replaces に古い asset_id（割り当てが新しい素材へ差し替わり、古い素材は箱に残る）。インサートは
+    source_kind="motion"・motion={"engine":"hyperframes","plan_dir":"projects/…/motion/hf/mi_0001","fit":{"line_id":"line_034"}}・
+    derived_from=[使った写真の asset_id]。種類・尺・解像度は中身から測る（拡張子に頼らない）。"""
+    body: dict = {"path": path, "license": license, "source": {"kind": source_kind}, "credit": credit, "note": note,
+                  "added_by": added_by}
+    for k, v in (("line_id", line_id), ("slug", slug), ("replaces", replaces)):
+        if v:
+            body[k] = v
+    if derived_from:
+        body["derived_from"] = derived_from
+    if poster_sec is not None:
+        body["poster_sec"] = poster_sec
+    if motion:
+        body["motion"] = motion
+    return await dc.request("POST", f"api/scrapping/projects/{project_id}/episodes/{int(episode_number)}/broll/register",
+                            json=body)
+
+
+async def broll_assign(project_id: str, episode_number: int, line_id: str, asset_id: str, index: Optional[int] = None,
+                       note: str = "") -> dict:
+    """素材を台本の行に当てる（行の中の秒・範囲は持たない＝その行の音声の間、カットインで差し込む）。
+    1行に複数当てられる（index で並びの位置・省略は末尾）。同じ素材を別の行にも当てられる。同じ行に同じ素材は1つだけ
+    （やり直しても増えない）。台本に無い行は 404。"""
+    body: dict = {"line_id": line_id, "asset_id": asset_id, "note": note}
+    if index is not None:
+        body["index"] = index
+    return await dc.request("POST", f"api/scrapping/projects/{project_id}/episodes/{int(episode_number)}/broll/assign",
+                            json=body)
+
+
+async def broll_unassign(project_id: str, episode_number: int, line_id: str, asset_id: str) -> dict:
+    """行から素材を外す（素材は箱に残る。箱から外す＝_trash は別の口）。"""
+    return await dc.request("POST", f"api/scrapping/projects/{project_id}/episodes/{int(episode_number)}/broll/unassign",
+                            json={"line_id": line_id, "asset_id": asset_id})
 
 
 # ── レジストリ（server.py / 後継ループ が参照する単一の出所） ──────────
@@ -2051,5 +2139,11 @@ TOOLS = [
     {"fn": motion_hf_put,        "side_effects": [S.WRITE]},
     {"fn": motion_hf_stills,     "side_effects": [S.WRITE, S.ASYNC]},
     {"fn": motion_hf_render,     "side_effects": [S.WRITE, S.ASYNC]},
+    {"fn": motion_hf_register,   "side_effects": [S.WRITE]},
     {"fn": motion_status,        "side_effects": [S.READ]},
+    # Bロールの箱（scrapping-agent・課金なし）
+    {"fn": broll_list,           "side_effects": [S.READ]},
+    {"fn": broll_register,       "side_effects": [S.WRITE]},
+    {"fn": broll_assign,         "side_effects": [S.WRITE]},
+    {"fn": broll_unassign,       "side_effects": [S.WRITE]},
 ]

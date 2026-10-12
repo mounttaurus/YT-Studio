@@ -104,6 +104,28 @@ def get(job_id: str) -> dict | None:
     return None
 
 
+def latest_done_render(target: str, scan_limit: int = 300) -> dict | None:
+    """そのコンポジション（target）の、終わった本描画のうち一番新しいジョブ。無ければ None。
+    job_id が時刻で始まるので、名前の降順＝新しい順（メモリのジョブも作業フォルダのジョブも同じ並び）。"""
+    with _lock:
+        mem = {k: dict(v) for k, v in _jobs.items()}
+    ids = set(mem)
+    if config.WORK_DIR.is_dir():
+        ids.update(p.name for p in config.WORK_DIR.iterdir() if p.is_dir())
+    for job_id in sorted(ids, reverse=True)[:scan_limit]:
+        job = mem.get(job_id)
+        if job is None:
+            p = _job_dir(job_id) / "job.json"
+            try:
+                job = json.loads(p.read_text(encoding="utf-8")) if p.is_file() else None
+            except (OSError, ValueError):
+                job = None
+        if (job and job.get("composition") == target and job.get("kind") == "render"
+                and job.get("engine") == "hyperframes" and job.get("status") == "done"):
+            return job
+    return None
+
+
 def wait(job_id: str, timeout_sec: float) -> dict | None:
     end = time.monotonic() + timeout_sec
     while time.monotonic() < end:

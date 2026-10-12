@@ -27,6 +27,8 @@ COMP_RE = re.compile(r"^mi_(\d{4})$")
 MAX_FILES = 40
 MAX_BYTES = 8 * 1024 * 1024
 HISTORY_KEEP = 20
+# motion.json の中で motion-agent が書く台帳の項目（PUT で上書きされても残す）
+SERVER_KEYS = ("last_registered",)
 
 
 class PutError(ValueError):
@@ -77,6 +79,23 @@ def _payload(path: str, value) -> bytes:
     return data
 
 
+def _keep_server_keys(old_path: Path, new_data: bytes) -> bytes:
+    """motion.json を丸ごと書き換えられても、台帳の項目（SERVER_KEYS）は前の値を引き継ぐ。
+    last_registered が消えると、作り直した時に古い箱の素材を差し替えられない（replaces が空になる）。"""
+    try:
+        old = json.loads(old_path.read_text(encoding="utf-8"))
+        new = json.loads(new_data.decode("utf-8"))
+    except (OSError, ValueError):
+        return new_data
+    if not isinstance(old, dict) or not isinstance(new, dict):
+        return new_data
+    carry = {k: old[k] for k in SERVER_KEYS if k in old and k not in new}
+    if not carry:
+        return new_data
+    new.update(carry)
+    return (json.dumps(new, ensure_ascii=False, indent=2) + "\n").encode("utf-8")
+
+
 def put(project_id: str, episode: int, comp_id: str | None, files: dict) -> dict:
     """ファイルを書く。comp_id が空なら新しい mi_NNNN を取る。返り値: {comp_id, target, written, created, history}。"""
     if not isinstance(files, dict) or not files:
@@ -109,6 +128,8 @@ def put(project_id: str, episode: int, comp_id: str | None, files: dict) -> dict
         hist = sorted(x for x in (d / "history").iterdir() if x.is_dir())
         for old in hist[:-HISTORY_KEEP]:
             shutil.rmtree(old, ignore_errors=True)
+    if "motion.json" in payloads and (d / "motion.json").is_file():
+        payloads["motion.json"] = _keep_server_keys(d / "motion.json", payloads["motion.json"])
     written = []
     for path, data in payloads.items():
         out = d / path

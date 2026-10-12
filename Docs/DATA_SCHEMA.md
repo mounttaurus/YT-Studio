@@ -24,7 +24,8 @@ shared/projects/{YYYYMMDD_seq_slug}/
 │   │   ├── tts.json          ← tts-agent が書く
 │   │   ├── footage.json      ← scrapping-agent が書く
 │   │   ├── audio/            ← tts-agent が生成した音声ファイル
-│   │   ├── footage/          ← scrapping-agent が確定DLした素材（Bロール）
+│   │   ├── footage/          ← scrapping-agent が確定DLした素材（Bロール・旧方式。§6）
+│   │   ├── broll/            ← scrapping-agent が書く（Bロールの箱: broll.json＋素材＋_trash/＋plans/。§6e）
 │   │   ├── a_roll/           ← scrapping-agent が書く（Aロール: マンガ形式パネル＋aroll.json。§6d）
 │   │   ├── line_ops/         ← director-agent が書く（行の操作の窓口の履歴＋Undo用スナップショット。§4「行の操作の窓口」）
 │   │   ├── confirmations.json ← director-agent が書く（行の確定の記録＝確定した時点の行の指紋。§4「行の確定」）
@@ -1166,6 +1167,90 @@ Photoshop作業者は `export/script_lines.txt` の行番号で画像を引け�
 台本編集を意識せずに作業できる。台本を編集したら export を再実行するだけで良い（差分適用ではなく
 毎回フルリビルド＝食い違いが構造的に起きない）。書き出しファイル名に `line_id` を残しているため、
 将来「完成PSDを正本へ取り込む」機能を作る場合もここから逆引きできる。
+
+---
+
+## 6e. broll.json（2026-10-12 新規 — Bロールの箱・`Docs/BROLL_PLAN.md` B1）
+
+**場所:** `shared/projects/{project_id}/episodes/epNN/broll/broll.json`（素材は同じ `broll/` の直下）
+**書き手:** **scrapping-agent だけ**（BR3）。ワークベンチ・素材タブ・motion-agent・MCP は scrapping-agent の API を通す
+**読み手:** editing-agent（B3 から。今は `footage.json` のまま）・ワークベンチ（B2）・motion-agent（尺ずれの判定）
+
+旧 `footage.json`（§6）は新しく書かない。`broll.json` が無い話数は従来どおり（後方互換）。割り当ては**行単位**（`line_id`）で、
+行の中の秒・範囲・トリムは持たない（このアプリを編集アプリにしない）。
+
+```json
+{
+  "schema_version": "1.0.0",
+  "project_id": "20260927_002_mk_cia50",
+  "episode": 1,
+  "assets": [
+    {
+      "asset_id": "b_3fa9c2d1_jack-ruby_img",
+      "file": "broll/b_3fa9c2d1_jack-ruby_img.jpg",
+      "media_type": "photo",
+      "duration_sec": null,
+      "resolution": "1200x1600",
+      "sha256": "3fa9c2d1…（64桁）",
+      "source": {"kind": "wikimedia", "id": "File:Jack_Ruby_mugshot.jpg", "url": "https://commons.wikimedia.org/…",
+                 "author": "Dallas Police Department", "original_name": "Jack_Ruby_mugshot.jpg"},
+      "license": "pd",
+      "credit": "",
+      "tags": {"entities": ["ジャック・ルビー"], "kind": ["portrait"], "era": "1963", "confirmed": false},
+      "motion": null,
+      "added_at": "2026-10-12T12:00:00Z",
+      "added_by": "upload"
+    }
+  ],
+  "placements": {
+    "line_034": [{"asset_id": "b_3fa9c2d1_jack-ruby_img", "note": ""}],
+    "line_035": [{"asset_id": "b_77e0a1bc_ruby-caption_mot", "note": ""}, {"asset_id": "b_1c9d42ef_dallas_vid", "note": ""}]
+  },
+  "trashed": [],
+  "updated_at": "2026-10-12T12:00:00Z"
+}
+```
+
+### フィールド補足
+| フィールド | 値 |
+|---|---|
+| `asset_id` | `b_{sha256の先頭8桁}_{語}_{img｜vid｜mot}`。語は元のファイル名から作る（英数字とハイフンだけ・24字まで・日本語だけなら省く・数字で終わらせない）。**一度付けたら改名も振り直しもしない**。別の中身で頭8桁が重なった時だけ10桁・12桁に伸ばす。`_trash` へ移した素材の ID は使い回さない |
+| `file` | `broll/{asset_id}{拡張子}`。拡張子は**中身**で決める（`.jpg` の名前の PNG は `.png`）。editing-agent は話のフォルダからの相対で読む |
+| `media_type` | `photo`（png・jpg・webp）／`video`（mp4・mov・webm）。Remotion・HyperFrames 製の動画も `video`（ID の末尾が `mot`） |
+| `duration_sec`・`resolution` | 中身から測る（画像は Pillow・MP4/MOV は `moov`・ffprobe があればそれ）。測れなければ `null` |
+| `sha256` | 同じ中身を**二重に登録しない**判定に使う（既にあれば既存の `asset_id` を返す） |
+| `source.kind` | `pexels`・`pixabay`・`vecteezy`・`wikimedia`・`ai`・`user`・`motion`・`claude`。`source.id` は素材サイトの候補ID（同じ候補を再 DL しない） |
+| `license` | `own`・`pd`・`cc0`・`cc-by`・`cc-by-sa`・`licensed`・`unknown`（`OPENING_MOTION_PLAN.md` §8 の語彙）＋ `pexels-free`・`pixabay-content-license`・`vecteezy-free`・`vecteezy-pro`・`ai-generated`。**空欄は不可**。`cc-by`／`cc-by-sa` は `credit` か `source.author` が要る |
+| `tags` | 検索のための札。`confirmed:false` は機械が付けた推測（「依頼」であって観察ではない）。人が確かめたら `true` |
+| `motion` | Remotion・HyperFrames 製のみ。`{engine, plan（`broll/plans/{asset_id}.json`）, plan_dir（`broll/plans/{asset_id}/`＝コンポジションの写し）, fit, composition}`＝**作り直せる元** |
+| `derived_from`（任意） | 使った素材の `asset_id`（インサートに使った写真）。クレジットの辿り先・箱から外す時の警告に使う |
+| `replaces`／`replaced_by`（任意） | 作り直し（M5）。新しい素材の `replaces` に古い ID、古い素材に `replaced_by`。**割り当ては新しい素材へ差し替わり、古い素材は箱に残る** |
+| `poster_sec`（任意） | 縮小画像にする秒（インサート） |
+| `added_by` | `upload`・`path`・`search`・`motion`・`claude`・`migrate` |
+| `legacy`（任意） | 旧 `footage.json` から移した素材の元の `{clip_id, license, section, line_ids}` |
+| `placements` | `line_id` → 素材の並び（その行の中での表示順）。**1行に複数・1素材を複数の行に**当てられる。同じ行に同じ素材は1つだけ。空の行は持たない |
+| `trashed` | 箱から外した素材（`_trash/` へ移しただけ。復元できる）。ID は使い回さない |
+
+### 不変条件（`BROLL_PLAN.md` §2）
+- **BR1** 割り当ては `line_id` に付く（行番号を使わない）。台本の結合・削除で外れた行の割り当ては**消さず**、`GET …/broll` の `orphans` に導出で見せる（当時の本文の冒頭つき・`tts.json` の退避から）。台本の Undo で行が戻れば割り当ても戻る。
+- **BR2** `asset_id` とファイル名は不変。PATCH で直せるのは `tags`・`license`・`credit`・`note` だけ。
+- **BR3** 書き手は scrapping-agent だけ。**BR4** 入口は `register_asset()` の1つ（アップロード・パス・移行が全て通る）。
+- **BR5** 消さない（`DELETE` は `_trash/` へ移す。割り当てが残っていれば 409）。**BR7** 割り当てと取り込みは無料。
+
+### API（scrapping-agent・director の `/api/scrapping/…` 経由）
+| 口 | 中身 |
+|---|---|
+| `GET …/broll` | 箱・割り当て・導出（`used_by`・`orphans`・`summary`）。箱が無い話は `exists:false` の空 |
+| `POST …/broll/upload` | multipart: `files`（複数可）・`license`（必須）・`source_kind`・`credit`・`line_id`（任意）。ファイルごとの結果と失敗を返す |
+| `POST …/broll/register` | `{path（shared 相対）, license, source, credit, line_id, slug, tags, motion, derived_from, replaces, poster_sec, added_by, note}` |
+| `POST …/broll/assign`・`unassign`・`reorder` | `{line_id, asset_id, index?, note?}`・`{line_id, asset_id}`・`{line_id, asset_ids}` |
+| `PATCH`・`DELETE …/broll/assets/{asset_id}` | 札・ライセンス・クレジット・メモ／箱から外す（`_trash`） |
+| `GET …/broll/file/{name}` | 配信（`broll/` 直下のファイルだけ） |
+| `POST …/broll/migrate` | 旧 `footage.json` → 箱（割り当てはしない・冪等・元は残す。旧セクションは `note` と `legacy` に残す） |
+
+失敗は `detail: {code, message}`（`bad_license`・`unsupported`・`unknown_line`・`unknown_asset`・`still_placed` など）。
+書き込みは話ごとのロック（スレッド＋ファイルロック）と一時ファイル経由の置き換え。壊れた `broll.json` は空と見なさず例外にする（上書きで消さない）。
+MCP: `broll_list`・`broll_register`・`broll_assign`・`broll_unassign`。ロール表（`broll/sheet`）・OTIO への反映は B3。
 
 ---
 

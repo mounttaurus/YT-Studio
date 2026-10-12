@@ -24,6 +24,7 @@ from app.core import (
     auto_selector,
     background_manager,
     background_presets,
+    broll_manager,
     character_manager,
     cloudflare_client,
     comfy_client,
@@ -2938,3 +2939,173 @@ async def get_cutout_thresholds():
     プロジェクトに依らない設定なので、話数を選んでいなくても引ける窓口として分けている。
     """
     return cutout_selector.thresholds()
+
+
+# =====================================================================
+# Bロールの箱（Docs/BROLL_PLAN.md B1・DATA_SCHEMA §6e）
+# 書き手は scrapping-agent だけ（BR3）。入口は broll_manager.register_asset の1つ（BR4）。
+# 旧 footage.json 系（セクション単位・/select・/upload）は触らない＝並行して動く（移行は /broll/migrate）。
+# =====================================================================
+
+def _broll_ep(project_id: str, episode_number: int) -> Path:
+    ep_dir = project_manager.episode_dir(project_id, episode_number)
+    if ep_dir is None:
+        raise HTTPException(status_code=404, detail="episode directory not found")
+    return ep_dir
+
+
+def _broll_call(fn, *a, **kw):
+    try:
+        return fn(*a, **kw)
+    except broll_manager.BrollError as e:
+        raise HTTPException(status_code=e.status, detail={"code": e.code, "message": str(e)}) from e
+
+
+class BrollRegisterRequest(BaseModel):
+    path: str = Field(..., description="shared/ からの相対パス（Remotion・HyperFrames・自由生成・Claude が作ったもの）")
+    license: str
+    source: dict = Field(default_factory=lambda: {"kind": "claude"})
+    credit: str = ""
+    tags: Optional[dict] = None
+    line_id: Optional[str] = None
+    slug: Optional[str] = None
+    added_by: str = "path"
+    note: str = ""
+    poster_sec: Optional[float] = None
+    derived_from: Optional[list[str]] = None
+    replaces: Optional[str] = None
+    motion: Optional[dict] = Field(None, description="{engine, plan(dict), plan_dir(shared 相対), fit, composition}")
+
+
+class BrollAssignRequest(BaseModel):
+    line_id: str
+    asset_id: str
+    index: Optional[int] = None
+    note: str = ""
+
+
+class BrollUnassignRequest(BaseModel):
+    line_id: str
+    asset_id: str
+
+
+class BrollReorderRequest(BaseModel):
+    line_id: str
+    asset_ids: list[str]
+
+
+class BrollPatchRequest(BaseModel):
+    tags: Optional[dict] = None
+    license: Optional[str] = None
+    credit: Optional[str] = None
+    note: Optional[str] = None
+
+
+@router.get("/projects/{project_id}/episodes/{episode_number}/broll")
+async def get_broll(project_id: str, episode_number: int):
+    """箱と割り当て。行から外れた割り当ては orphans に（当時の本文の冒頭つき）。箱が無い話数は exists:false の空の箱。"""
+    ep_dir = _broll_ep(project_id, episode_number)
+    return broll_manager.view(ep_dir, project_id, episode_number)
+
+
+@router.post("/projects/{project_id}/episodes/{episode_number}/broll/upload")
+async def upload_broll(
+    project_id: str,
+    episode_number: int,
+    files: list[UploadFile] = File(...),
+    license: str = Form(...),
+    source_kind: str = Form("user"),
+    credit: str = Form(""),
+    line_id: str = Form(""),
+):
+    """ファイル（複数可）を箱へ。line_id があればその行に当てる（複数ファイルなら並びの順に）。"""
+    ep_dir = _broll_ep(project_id, episode_number)
+    incoming = broll_manager.broll_dir(ep_dir) / ".incoming"
+    incoming.mkdir(parents=True, exist_ok=True)
+    results, errors = [], []
+    for i, up in enumerate(files):
+        name = Path(up.filename or f"upload_{i}").name
+        tmp = incoming / f"{uuid.uuid4().hex}_{name}"
+        try:
+            tmp.write_bytes(await up.read())
+            r = _broll_call(
+                broll_manager.register_asset, ep_dir, project_id, episode_number, tmp, original_name=name,
+                source={"kind": source_kind}, license=license, credit=credit, added_by="upload", line_id=line_id or None)
+            results.append({"original_name": name, "asset_id": r["asset"]["asset_id"], "duplicate": r["duplicate"],
+                            "assigned": r["assigned"]})
+        except HTTPException as e:
+            errors.append({"original_name": name, "status": e.status_code, "detail": e.detail})
+        finally:
+            tmp.unlink(missing_ok=True)
+    return {"registered": results, "errors": errors}
+
+
+@router.post("/projects/{project_id}/episodes/{episode_number}/broll/register")
+async def register_broll(project_id: str, episode_number: int, req: BrollRegisterRequest):
+    """shared 内のファイルを箱へ（コピー）。同じ中身は二重に登録しない。作り直しは replaces で割り当てを差し替える。"""
+    ep_dir = _broll_ep(project_id, episode_number)
+    root = project_manager.SHARED_DIR.resolve()
+    src = (root / req.path).resolve()
+    if root not in src.parents:
+        raise HTTPException(status_code=400, detail={"code": "path_outside", "message": "shared/ の外は取り込めない"})
+    motion = dict(req.motion) if req.motion else None
+    if motion and motion.get("plan_dir"):
+        pd = (root / str(motion["plan_dir"])).resolve()
+        if root not in pd.parents:
+            raise HTTPException(status_code=400, detail={"code": "path_outside", "message": "plan_dir が shared/ の外"})
+        motion["plan_dir"] = str(pd)
+    return _broll_call(
+        broll_manager.register_asset, ep_dir, project_id, episode_number, src, source=req.source, license=req.license,
+        credit=req.credit, tags=req.tags, added_by=req.added_by, line_id=req.line_id, slug=req.slug, motion=motion,
+        derived_from=req.derived_from, replaces=req.replaces, poster_sec=req.poster_sec, note=req.note)
+
+
+@router.post("/projects/{project_id}/episodes/{episode_number}/broll/assign")
+async def assign_broll(project_id: str, episode_number: int, req: BrollAssignRequest):
+    ep_dir = _broll_ep(project_id, episode_number)
+    return _broll_call(broll_manager.assign, ep_dir, project_id, episode_number, req.line_id, req.asset_id, req.index, req.note)
+
+
+@router.post("/projects/{project_id}/episodes/{episode_number}/broll/unassign")
+async def unassign_broll(project_id: str, episode_number: int, req: BrollUnassignRequest):
+    ep_dir = _broll_ep(project_id, episode_number)
+    return _broll_call(broll_manager.unassign, ep_dir, project_id, episode_number, req.line_id, req.asset_id)
+
+
+@router.post("/projects/{project_id}/episodes/{episode_number}/broll/reorder")
+async def reorder_broll(project_id: str, episode_number: int, req: BrollReorderRequest):
+    ep_dir = _broll_ep(project_id, episode_number)
+    return _broll_call(broll_manager.reorder, ep_dir, project_id, episode_number, req.line_id, req.asset_ids)
+
+
+@router.patch("/projects/{project_id}/episodes/{episode_number}/broll/assets/{asset_id}")
+async def patch_broll_asset(project_id: str, episode_number: int, asset_id: str, req: BrollPatchRequest):
+    ep_dir = _broll_ep(project_id, episode_number)
+    changes = {k: v for k, v in req.model_dump().items() if v is not None}
+    return _broll_call(broll_manager.patch_asset, ep_dir, project_id, episode_number, asset_id, changes)
+
+
+@router.delete("/projects/{project_id}/episodes/{episode_number}/broll/assets/{asset_id}")
+async def delete_broll_asset(project_id: str, episode_number: int, asset_id: str):
+    """箱から外す（broll/_trash/ へ移すだけ）。行に当たっていれば 409。"""
+    ep_dir = _broll_ep(project_id, episode_number)
+    return _broll_call(broll_manager.trash_asset, ep_dir, project_id, episode_number, asset_id)
+
+
+@router.get("/projects/{project_id}/episodes/{episode_number}/broll/file/{name}")
+async def get_broll_file(project_id: str, episode_number: int, name: str):
+    """箱の中身の配信（broll/ 直下のファイルだけ）。"""
+    ep_dir = _broll_ep(project_id, episode_number)
+    f = broll_manager.asset_file(ep_dir, name)
+    if f is None:
+        raise HTTPException(status_code=404, detail=f"broll file not found: {name}")
+    media = {".png": "image/png", ".jpg": "image/jpeg", ".jpeg": "image/jpeg", ".webp": "image/webp",
+             ".mp4": "video/mp4", ".mov": "video/quicktime", ".webm": "video/webm"}
+    return FileResponse(f, media_type=media.get(f.suffix.lower(), "application/octet-stream"))
+
+
+@router.post("/projects/{project_id}/episodes/{episode_number}/broll/migrate")
+async def migrate_broll(project_id: str, episode_number: int):
+    """旧 footage.json のクリップを箱へコピーする（割り当てはしない・冪等・元は残す）。"""
+    ep_dir = _broll_ep(project_id, episode_number)
+    return _broll_call(broll_manager.migrate_from_footage, ep_dir, project_id, episode_number)

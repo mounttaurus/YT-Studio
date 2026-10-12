@@ -73,6 +73,25 @@ def read_motion(d: Path) -> dict | None:
     return json.loads(p.read_text(encoding="utf-8"))
 
 
+_SHA_SKIP = {"snapshots", "history", "vendor", "renders", ".hyperframes", "node_modules", "motion.json"}
+
+
+def source_sha(d: Path) -> str:
+    """描画に効くファイル（index.html・look.css・ブロックの写し・その場の部品・assets/）の指紋。
+    描いた後に直されたコンポジションを箱へ入れない判定に使う（motion.json は台帳なので含めない）。"""
+    import hashlib
+    h = hashlib.sha256()
+    root = d.resolve()
+    for p in sorted(root.rglob("*")):
+        rel = p.relative_to(root)
+        if not p.is_file() or rel.parts[0] in _SHA_SKIP or p.name.endswith(".tmp"):
+            continue
+        h.update(rel.as_posix().encode("utf-8") + b"\0")
+        h.update(p.read_bytes())
+        h.update(b"\0")
+    return h.hexdigest()
+
+
 def version() -> str | None:
     p = config.HF_DIR / "node_modules" / "hyperframes" / "package.json"
     if not p.is_file():
@@ -268,6 +287,7 @@ def list_project(project_id: str, episode: int) -> list[dict]:
                 out.append({"target": f"projects/{project_id}/{episode}/{d.name}", "comp_id": d.name,
                             "profile": m.get("profile"), "fit": m.get("fit"), "notes": m.get("notes"),
                             "duration": dur, "fingerprint": hf_blocks.fingerprint(d),
+                            "registered": m.get("last_registered"),   # 箱に入れた最後の素材（asset_id・描いた秒）
                             "fit_info": hf_project.fit_info(d, m, dur)})   # 尺ずれ: fit_info.drift_sec が 0 でなければ描き直し
     return out
 
@@ -302,6 +322,7 @@ def run_job(job_id: str, job_dir: Path, spec: dict, update, rel, make_sheet) -> 
     """HyperFrames の静止画・描画のジョブを1本回す。update(job_id, **fields) で状態を書く。"""
     d = Path(spec["dir"])
     prepare(d)
+    src_sha = source_sha(d)   # 描く直前の指紋（描画中に直されても、描いたものの指紋として残る）
     started = time.monotonic()
     update(job_id, status="running", progress=0.05)
     if spec["mode"] == "video":
@@ -329,7 +350,8 @@ def run_job(job_id: str, job_dir: Path, spec: dict, update, rel, make_sheet) -> 
         if not out.is_file():
             update(job_id, status="error", error="mp4 ができていない\n" + log[-2000:], elapsed_sec=elapsed)
             return
-        result = {"file": rel(out), "url": f"/files/{rel(out)}", "summary": _render_summary(log)}
+        result = {"file": rel(out), "url": f"/files/{rel(out)}", "summary": _render_summary(log),
+                  "source_sha": src_sha}   # 箱へ入れる時に「描いた後に直されていないか」を見る
         # 描いた映像の明滅を実測する（画面の25%以上・毎秒3回まで）。落ちたら箱に入れない（M6）
         result["flash"] = flash.analyze_video(str(out), float(spec["fps"]))
         # 音: 効果音を宣言しているのに音が入っていなければ ok: false（id 無しの <audio> は無音で描かれる）
