@@ -1,0 +1,14 @@
+{
+  "id": "F6_spotlight",
+  "version": 1,
+  "label": "注目の円",
+  "kind": "layer",
+  "profiles": ["insert", "opening", "free"],
+  "summary": "一部だけ明るく残し、周りを暗くする（顔・文書の一点に目を向ける）。",
+  "variants": null,
+  "text": [],
+  "materials": [],
+  "flash": {"max_per_sec": 0},
+  "placement": "cx・cy・r（px）で注目点を指す。写真が寄る時は F4_dossier と同じ camera を渡す",
+  "notes": "周りを暗くするだけで文字は持たない。dark を上げすぎると下の文字のコントラストを落とす（検査が見る）。"
+}

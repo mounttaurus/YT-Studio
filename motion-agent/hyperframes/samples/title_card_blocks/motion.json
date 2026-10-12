@@ -1,0 +1,17 @@
+{
+  "schema_version": "1.0.0",
+  "engine": {"name": "hyperframes", "version": "0.8.140"},
+  "profile": "insert",
+  "look": "dossier_crimson",
+  "seed": "sample_title_card_blocks",
+  "fit": {"sec": 4.0},
+  "materials": {
+    "portrait": {"path": "assets/_gen/portrait.png", "source": {"kind": "self", "note": "自作（架空の人物）"}}
+  },
+  "generated": [
+    {"tool": "portrait", "out": "assets/_gen/portrait.png", "seed": 1963}
+  ],
+  "slug": "title-card-blocks",
+  "poster_sec": 2.0,
+  "notes": "見本（I1）。F2_photo（写真がゆっくり寄る）＋ L2_title_card（全画面の名前）＋ A8_wipe（斜めの拭き取り）＋ D3_texture。名前は架空。"
+}

@@ -1,0 +1,45 @@
+<!doctype html>
+<html lang="ja">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=1920, height=1080" />
+    <title>見本: 人物の初出（ブロックの組み合わせ・HyperFrames）</title>
+    <!-- GSAP は motion-agent が vendor/ に置く（描画中にネットワークを使わない＝M3）。ブロックは辞書から compositions/blocks/ へ写される（M7） -->
+    <link rel="stylesheet" href="look.css" />
+    <script src="vendor/gsap.min.js"></script>
+    <style>
+      body { margin: 0; background: var(--look-desk, #120e0b); }
+      #root { position: relative; width: 100%; height: 100%; overflow: hidden; background: var(--look-desk, #120e0b); }
+    </style>
+  </head>
+  <body>
+    <!-- 人物の初出: F4_dossier（調書の台紙に留めた写真・ゆっくり寄る）＋ F6_spotlight（注目の円）＋ L3_callout（引き出し線の注記）
+         ＋ L1_name（名前の解読）＋ D3_texture（質感）。寄りの camera は台紙・円・注記で同じ文字列にする -->
+    <div id="root" data-composition-id="person_intro_blocks" data-start="0" data-width="1920" data-height="1080" data-duration="5">
+      <div id="dossier" class="clip" data-gimmick="F4_dossier" data-composition-id="F4_dossier"
+           data-composition-src="compositions/blocks/F4_dossier.html"
+           data-variable-values='{"photo":"assets/_gen/portrait.png","file_no":"FILE No. 0347","note":"要注意","camera":"to=1.1;x=-18;ox=588;oy=470;dur=5"}'
+           data-start="0" data-duration="5" data-track-index="1" data-width="1920" data-height="1080"></div>
+      <div id="spot" class="clip" data-gimmick="F6_spotlight" data-composition-id="F6_spotlight"
+           data-composition-src="compositions/blocks/F6_spotlight.html"
+           data-variable-values='{"cx":588,"cy":470,"r":210,"camera":"to=1.1;x=-18;ox=588;oy=470;dur=5"}'
+           data-start="0" data-duration="5" data-track-index="2" data-width="1920" data-height="1080"></div>
+      <div id="callout" class="clip" data-gimmick="L3_callout" data-composition-id="L3_callout"
+           data-composition-src="compositions/blocks/L3_callout.html"
+           data-variable-values='{"dot_x":595,"dot_y":765,"elbow_x":820,"elbow_y":640,"text_x":1086,"text_y":600,"text":"事件当夜、現場の近くにいた","t0":2.6,"camera":"to=1.1;x=-18;ox=588;oy=470;dur=5"}'
+           data-start="0" data-duration="5" data-track-index="3" data-width="1920" data-height="1080"></div>
+      <div id="name" class="clip" data-gimmick="L1_name" data-variant="decode" data-composition-id="L1_name"
+           data-composition-src="compositions/blocks/L1_name.html"
+           data-variable-values='{"name":"ジョン・ドウ","sub":"架空の証言者｜1963","variant":"decode","x":1060,"y":196,"seed":20261011}'
+           data-start="0.8" data-duration="4.2" data-track-index="4" data-width="1920" data-height="1080"></div>
+      <div id="texture" class="clip" data-gimmick="D3_texture" data-composition-id="D3_texture"
+           data-composition-src="compositions/blocks/D3_texture.html"
+           data-variable-values='{}'
+           data-start="0" data-duration="5" data-track-index="5" data-width="1920" data-height="1080"></div>
+    </div>
+    <script>
+      window.__timelines = window.__timelines || {};
+      window.__timelines["person_intro_blocks"] = gsap.timeline({ paused: true });
+    </script>
+  </body>
+</html>

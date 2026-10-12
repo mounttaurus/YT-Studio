@@ -1,0 +1,14 @@
+{
+  "id": "F2_photo",
+  "version": 1,
+  "label": "写真の動き（枠なし）",
+  "kind": "base",
+  "profiles": ["insert", "opening", "free"],
+  "summary": "写真を画面（または x・y・w・h の枠）いっぱいに出し、ゆっくり寄る・引く・横に流す。",
+  "variants": null,
+  "text": [],
+  "materials": [{"var": "photo", "kinds": ["image"]}],
+  "flash": {"max_per_sec": 0},
+  "placement": "既定は画面いっぱい。小窓にする時は x・y・w・h。camera は F4_dossier と同じ文字列",
+  "notes": "ただ寄るだけのインサートは作らない（写真をそのまま Bロールに当て、寄りは DaVinci で付ける）。名前・注記などの重ねものを足す土台として使う。"
+}

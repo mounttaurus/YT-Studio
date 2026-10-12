@@ -18,7 +18,7 @@ import subprocess
 import time
 from pathlib import Path
 
-from app.core import config, flash, hf_checks, hf_sfx
+from app.core import config, flash, hf_blocks, hf_checks, hf_look, hf_project, hf_sfx
 
 NAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$")
 VENDOR_FILES = {"gsap.min.js": Path("node_modules/gsap/dist/gsap.min.js")}
@@ -113,6 +113,10 @@ def prepare(d: Path) -> list[str]:
             out.parent.mkdir(parents=True, exist_ok=True)
             tool(out, spec)
             made.append(out_rel)
+    # 見た目の束: motion.json の look から look.css（色・書体の CSS の変数）を置く（I1）
+    made += hf_look.sync(d, motion)
+    # ブロック（辞書）: index.html が使うものを compositions/blocks/ へ写す（M7・I1）
+    made += hf_blocks.sync_project(d)
     # 効果音（motion.json の sounds・sfx）: WAV を assets/sfx/ に作り、index.html に <audio> を書く（A0・§9-1）
     made += hf_sfx.prepare(d, motion)
     return made
@@ -161,8 +165,51 @@ def lint(d: Path) -> dict:
     return {"ok": ok, "errors": errors, "warnings": warnings, "summary": {k: v for k, v in data.items() if k != "findings"}}
 
 
-def check(target: str) -> dict:
-    """描く前の検査（lint＋ネットワーク＋長さ）。誤りがあれば ok: false（描画は止める＝M6）。"""
+MEASURE_JS = Path(__file__).resolve().parent.parent / "tools" / "measure_text.mjs"
+_RESULT_PREFIX = "@@RESULT@@ "
+
+
+def profile_config(profile: str | None) -> dict:
+    """用途ごとの数字（字幕の帯・安全域・明滅）の本籍は hyperframes/profiles/{profile}.json（§8-1）。"""
+    p = config.HF_PROFILES_DIR / f"{profile or 'insert'}.json"
+    if not p.is_file():
+        p = config.HF_PROFILES_DIR / "insert.json"
+    if p.is_file():
+        return json.loads(p.read_text(encoding="utf-8"))
+    return {"profile": profile or "insert", "band": 0.2, "safe": 0.9, "flash_max_per_sec": 3}
+
+
+def deep_check(d: Path, profile: str | None) -> dict:
+    """描いた時の文字の枠を実測して、字幕の帯・安全域に掛かるものを誤りにする（§8-2）。ブラウザを使う＝十数秒かかる。
+    返り値: {issues, texts, samples, canvas}。測れなかった時は measure_failed（誤り＝描かない）。"""
+    cfg = profile_config(profile)
+    if not cfg.get("band") and not cfg.get("safe"):
+        return {"issues": [], "skipped": True, "profile": cfg.get("profile")}
+    args = [config.NODE_BIN, str(MEASURE_JS), str(d), str(config.HF_DIR), "--band", str(cfg.get("band", 0.2)),
+            "--safe", str(cfg.get("safe", 0.9))]
+    try:
+        cp = subprocess.run(args, env=_env(), capture_output=True, text=True, encoding="utf-8", errors="replace",
+                            timeout=config.HF_MEASURE_TIMEOUT_SEC, cwd=str(d))
+    except subprocess.TimeoutExpired:
+        return {"issues": [{"code": "measure_failed", "level": "error", "message": "文字の枠の実測が時間内に終わらない"}]}
+    line = next((ln for ln in reversed(cp.stdout.splitlines()) if ln.startswith(_RESULT_PREFIX)), None)
+    if line is None:
+        return {"issues": [{"code": "measure_failed", "level": "error",
+                            "message": "文字の枠を実測できない: " + (cp.stderr or cp.stdout)[-300:]}]}
+    res = json.loads(line[len(_RESULT_PREFIX):])
+    if not res.get("ok"):
+        return {"issues": [{"code": "measure_failed", "level": "error", "message": res.get("error") or "実測に失敗"}]}
+    issues = []
+    for f in res.get("findings", []):
+        issues.append({"code": f["code"], "level": f.get("level", "error"), "message": f["message"], "file": f.get("source"),
+                       "selector": f.get("selector"), "time": f.get("time"), "text": f.get("text"), "rect": f.get("rect")})
+    return {"issues": issues, "texts": res.get("texts"), "samples": res.get("samples"), "canvas": res.get("canvas"),
+            "band": res.get("band"), "safe": res.get("safe")}
+
+
+def check(target: str, deep: bool = False) -> dict:
+    """描く前の検査（lint＋ネットワーク＋長さ＋効果音＋ブロック）。deep なら文字の枠の実測（字幕の帯・安全域）も。
+    誤りがあれば ok: false（描画は止める＝M6）。"""
     d = existing(target)
     prepared = prepare(d)
     motion = read_motion(d)
@@ -170,6 +217,22 @@ def check(target: str) -> dict:
     length_issues, duration = hf_checks.check_length(d, motion)
     ours += length_issues
     ours += hf_sfx.check(d, motion, duration)
+    ours += hf_blocks.check(d, motion)
+    ours += hf_look.check(d, motion)
+    # 話の文脈が要る検査（行の長さ・出典・繰り返し）。話の外（見本）では何も言わない
+    ours += hf_project.check_fit(d, motion, duration)
+    ours += hf_project.check_sources(d, motion)
+    ours += hf_project.check_repeat(d, hf_blocks.fingerprint(d))
+    # 描いた時の HyperFrames の版（motion.json の engine.version）と今の版が違う: 見た目が変わりうる（警告）
+    want = ((motion or {}).get("engine") or {}).get("version")
+    if want and version() and want != version():
+        ours.append({"code": "engine_version_differs", "level": "warning", "file": "motion.json",
+                     "message": f"motion.json の engine.version（{want}）と今の HyperFrames（{version()}）が違う。"
+                                "描き直すと見た目が変わりうる（静止画を見比べる）"})
+    measured = None
+    if deep:
+        measured = deep_check(d, (motion or {}).get("profile"))
+        ours += measured["issues"]
     lr = lint(d)
     errors = [i for i in ours if i["level"] == "error"] + [{"code": f.get("code", "lint"), "level": "error",
                                                               "message": f.get("message", ""), "source": "lint",
@@ -179,7 +242,9 @@ def check(target: str) -> dict:
                                                                   "message": f.get("message", ""), "source": "lint"}
                                                                  for f in lr["warnings"]]
     return {"target": target, "ok": not errors, "errors": errors, "warnings": warnings, "duration": duration,
-            "profile": (motion or {}).get("profile"), "prepared": prepared, "hyperframes": version()}
+            "profile": (motion or {}).get("profile"), "prepared": prepared, "hyperframes": version(),
+            "fingerprint": hf_blocks.fingerprint(d),
+            "measured": None if measured is None else {k: v for k, v in measured.items() if k != "issues"}}
 
 
 def list_samples() -> list[dict]:
@@ -199,8 +264,11 @@ def list_project(project_id: str, episode: int) -> list[dict]:
         for d in sorted(base.iterdir()):
             if (d / "index.html").is_file():
                 m = read_motion(d) or {}
+                dur = hf_checks.root_info((d / "index.html").read_text(encoding="utf-8", errors="replace"))["duration"]
                 out.append({"target": f"projects/{project_id}/{episode}/{d.name}", "comp_id": d.name,
-                            "profile": m.get("profile"), "fit": m.get("fit"), "notes": m.get("notes")})
+                            "profile": m.get("profile"), "fit": m.get("fit"), "notes": m.get("notes"),
+                            "duration": dur, "fingerprint": hf_blocks.fingerprint(d),
+                            "fit_info": hf_project.fit_info(d, m, dur)})   # 尺ずれ: fit_info.drift_sec が 0 でなければ描き直し
     return out
 
 

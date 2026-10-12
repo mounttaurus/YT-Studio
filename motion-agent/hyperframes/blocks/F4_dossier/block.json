@@ -1,0 +1,17 @@
+{
+  "id": "F4_dossier",
+  "version": 1,
+  "label": "調書の枠（写真を台紙に留める）",
+  "kind": "base",
+  "profiles": ["insert", "opening", "free"],
+  "summary": "写真を調書の台紙にクリップで留める（ファイル番号・手書きの朱書き・紙の質感）。camera を渡すとゆっくり寄る。",
+  "variants": null,
+  "text": [
+    {"var": "file_no", "max_chars": 20, "role": "機械"},
+    {"var": "note", "max_chars": 8, "role": "手書き"}
+  ],
+  "materials": [{"var": "photo", "kinds": ["image"]}],
+  "flash": {"max_per_sec": 0},
+  "placement": "台紙は x・y・rot で置く。camera の文字列（to=1.1;x=-18;ox=588;oy=470;dur=5）を、同じ絵の上に重ねる F6_spotlight・L3_callout にも同じ値で渡す（寄りが揃う）",
+  "notes": "ただ寄るだけのインサートは作らない（写真をそのまま Bロールに当て、寄りは DaVinci で付ける）。名前・注記などの重ねものと組み合わせる。"
+}

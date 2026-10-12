@@ -14,7 +14,8 @@
 - POST /plans/{pid}/{ep}/stills|render    保存済みのプランの静止画・本描画
 - POST /fonts/specimen                    書体の見本帳（画像）
 - GET  /files/{path}                      shared/ のファイルを返す（描画中の Chrome が素材を取りに来る口でもある）
-- GET  /hf/info・/hf/projects/{pid}/{ep}  HyperFrames の版・見本・話のコンポジション
+- GET  /hf/info・/hf/blocks・/hf/looks・/hf/projects/{pid}/{ep}  HyperFrames の版・見本・辞書（ブロック）・見た目の束・話のコンポジション
+- PUT  /hf/projects/{pid}/{ep}/{comp_id}/files  話のコンポジションへファイルを書く（comp_id=new で新しい mi_NNNN・書いたあと検査）
 - POST /hf/check|stills|render            HyperFrames の検査・静止画・描画（target を本文で渡す）
 - GET  /audio/sfx・/audio/sfx/{kind}.wav  効果音の部品の一覧・試聴用の WAV（手続き合成・A0）
 - POST /jobs/{job_id}/sfx                 終わった Remotion の描画ジョブに効果音（と BGM）を足した out_sfx.mp4 を作る（A0・A2）
@@ -295,6 +296,15 @@ class HfTarget(BaseModel):
     target: str
 
 
+class HfCheckRequest(HfTarget):
+    deep: bool = Field(False, description="文字の枠を実測して字幕の帯・安全域を見る（ブラウザを使う・十数秒）")
+
+
+class HfPutRequest(BaseModel):
+    files: dict[str, Any] = Field(..., description="{パス: 中身}。中身は文字列・JSON（motion.json）・{base64}（画像）")
+    check: bool = Field(True, description="書いたあと、描く前の検査（lint・ブロック・長さ…）を返す")
+
+
 class HfStillsRequest(HfTarget):
     frames: int = Field(6, ge=1, le=12)
     at: list[float] | None = None
@@ -321,17 +331,49 @@ async def hf_info():
             "qualities": sorted(hf.QUALITIES), "default_quality": hf.DEFAULT_QUALITY}
 
 
+@router.get("/hf/blocks")
+async def hf_blocks_list():
+    """辞書（ブロック）の台帳。id・種別・用途・変数（型と範囲）・出し方・文字数・素材・置き方。"""
+    from app.core import hf_blocks
+    return {"blocks": hf_blocks.list_blocks()}
+
+
+@router.get("/hf/looks")
+async def hf_looks_list():
+    """見た目の束（色・書体）の一覧。チャンネルのデータ（shared/motion/looks/）が辞書側の候補より先。"""
+    from app.core import hf_look
+    return {"looks": hf_look.list_looks()}
+
+
 @router.get("/hf/projects/{project_id}/{episode}")
 async def hf_project_list(project_id: str, episode: int):
     from app.core import hf
     return {"compositions": _hf_call(hf.list_project, project_id, episode)}
 
 
+@router.put("/hf/projects/{project_id}/{episode}/{comp_id}/files")
+async def hf_put_files(project_id: str, episode: int, comp_id: str, req: HfPutRequest):
+    """話のコンポジションへ書く（M4: 書くのは motion-agent だけ）。comp_id が new なら新しい mi_NNNN。"""
+    import asyncio
+    from app.core import hf, hf_put
+    try:
+        res = await asyncio.to_thread(hf_put.put, project_id, episode, None if comp_id == "new" else comp_id, req.files)
+    except hf.TargetError as e:
+        raise HTTPException(status_code=400, detail=str(e)) from e
+    except FileNotFoundError as e:
+        raise HTTPException(status_code=404, detail=str(e)) from e
+    except hf_put.PutError as e:
+        raise HTTPException(status_code=422, detail=str(e)) from e
+    if req.check and (hf.resolve(res["target"]) / "index.html").is_file():
+        res["check"] = await asyncio.to_thread(_hf_call, hf.check, res["target"], False)
+    return res
+
+
 @router.post("/hf/check")
-async def hf_check(req: HfTarget):
+async def hf_check(req: HfCheckRequest):
     import asyncio
     from app.core import hf
-    return await asyncio.to_thread(_hf_call, hf.check, req.target)
+    return await asyncio.to_thread(_hf_call, hf.check, req.target, req.deep)
 
 
 @router.post("/hf/stills")
@@ -348,7 +390,7 @@ async def hf_render(req: HfRenderRequest):
     """検査（lint・ネットワーク・長さ）に誤りがあれば描かない（422）。"""
     import asyncio
     from app.core import hf
-    res = await asyncio.to_thread(_hf_call, hf.check, req.target)
+    res = await asyncio.to_thread(_hf_call, hf.check, req.target, True)   # 描く前は文字の枠の実測も通す（M6）
     if not res["ok"]:
         raise HTTPException(status_code=422, detail={"message": "検査に誤りがあるので描かない", "check": res})
     return _hf_call(jobs.submit_hf, "render", req.target, quality=req.quality)

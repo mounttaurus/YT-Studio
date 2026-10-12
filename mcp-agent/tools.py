@@ -1847,12 +1847,40 @@ async def motion_hf_list(project_id: str, episode_number: int) -> dict:
     return await dc.get(f"api/motion/hf/projects/{project_id}/{int(episode_number)}")
 
 
-async def motion_hf_check(sample: str = "", project_id: str = "", episode_number: int = 0, comp_id: str = "") -> dict:
+async def motion_hf_check(sample: str = "", project_id: str = "", episode_number: int = 0, comp_id: str = "",
+                          deep: bool = False) -> dict:
     """描く前の検査: HyperFrames の lint ＋ ネットワーク禁止（外部 URL・fetch など）＋ 長さ（ルートの data-duration と
-    motion.json の fit）。ok が false なら描けない。errors の code・file・line を見て直す。
-    vendor/ の GSAP と見本の素材はこの時に置かれる。"""
+    motion.json の fit・fit.line_id なら行の音声の実測）＋ ブロックの使い方（辞書にあるか・変数の型と範囲・文字数・素材の実在）
+    ＋ 効果音 ＋ 見た目の束 ＋ 出典 ＋ 繰り返し（警告）。ok が false なら描けない。errors の code・file・line を見て直す。
+    deep=true で、描いた時の文字の枠を実測して**字幕の帯（下から20%）・安全域（画面の90%）**に掛かる文字も誤りにする
+    （ブラウザを使う・十数秒。描画の前は自動で通る）。vendor/ の GSAP・辞書のブロック・look.css・効果音はこの時に置かれる。"""
     return await dc.request("POST", "api/motion/hf/check",
-                            json={"target": _hf_target(sample, project_id, episode_number, comp_id)})
+                            json={"target": _hf_target(sample, project_id, episode_number, comp_id), "deep": bool(deep)})
+
+
+async def motion_hf_blocks() -> dict:
+    """辞書（ブロック）の台帳: id・種別（base 土台／layer 重ね／enter 繋ぎ／overlay 全編）・用途・変数（型と範囲・既定）・
+    出し方（variants）・文字数の上限・素材・置き方。コンポジションの index.html に host（data-composition-src=
+    "compositions/blocks/{id}.html"・data-composition-id={id}・data-gimmick={id}・data-variable-values=JSON・
+    data-start・data-duration・data-width/height）を書けば、描く前に辞書から写される。見本は sample="person_intro_blocks"。"""
+    return await dc.get("api/motion/hf/blocks")
+
+
+async def motion_hf_looks() -> dict:
+    """見た目の束（色・書体）の一覧。motion.json の "look" で選び、index.html の <head> に
+    <link rel="stylesheet" href="look.css" /> を入れる（motion-agent が look.css を置く）。"""
+    return await dc.get("api/motion/hf/looks")
+
+
+async def motion_hf_put(project_id: str, episode_number: int, files: dict, comp_id: str = "new", check: bool = True) -> dict:
+    """話のコンポジションへファイルを書く（書くのは motion-agent だけ＝本番のデータへ直接書かない）。
+    comp_id="new" なら新しい mi_NNNN。files は {パス: 中身}: index.html・motion.json（辞書で渡してよい）・
+    compositions/custom/*.html（その場の部品）・assets/ の素材（画像は {"base64": …}）だけ。
+    書く前の版は history/ に残る。書いたあと、描く前の検査（motion_hf_check と同じ・deep なし）の結果を check に返す。
+    組み立ては辞書のブロック（motion_hf_blocks）の host を index.html に書く。motion.json の fit は {"sec": 秒} か
+    {"line_id": "line_034"}（その行の音声の長さに合わせる）。"""
+    return await dc.request("PUT", f"api/motion/hf/projects/{project_id}/{int(episode_number)}/{comp_id or 'new'}/files",
+                            json={"files": files, "check": bool(check)})
 
 
 async def motion_hf_stills(sample: str = "", project_id: str = "", episode_number: int = 0, comp_id: str = "",
@@ -2018,6 +2046,9 @@ TOOLS = [
     {"fn": motion_hf_info,       "side_effects": [S.READ]},
     {"fn": motion_hf_list,       "side_effects": [S.READ]},
     {"fn": motion_hf_check,      "side_effects": [S.WRITE]},
+    {"fn": motion_hf_blocks,     "side_effects": [S.READ]},
+    {"fn": motion_hf_looks,      "side_effects": [S.READ]},
+    {"fn": motion_hf_put,        "side_effects": [S.WRITE]},
     {"fn": motion_hf_stills,     "side_effects": [S.WRITE, S.ASYNC]},
     {"fn": motion_hf_render,     "side_effects": [S.WRITE, S.ASYNC]},
     {"fn": motion_status,        "side_effects": [S.READ]},

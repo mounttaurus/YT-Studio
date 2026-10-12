@@ -1,0 +1,7 @@
+{
+  "id": "ledger_amber",
+  "label": "台帳・琥珀",
+  "colors": {"desk": "#1a120a", "paper": "#e3cf9c", "ink": "#f7edd4", "ink_dim": "#cdb98a", "accent": "#d9892b"},
+  "fonts": {"name": "Kozuka Mincho Pr6N", "sub": "IPAexGothic", "mono": "Noto Sans Mono CJK JP", "hand": "KouzanBrushFont"},
+  "notes": "黄ばんだ紙と古い台帳。差し色は琥珀。筆文字の朱書き。"
+}

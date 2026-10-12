@@ -1,0 +1,7 @@
+{
+  "id": "dossier_crimson",
+  "label": "調書・赤と黒",
+  "colors": {"desk": "#120e0b", "paper": "#d9cdb6", "ink": "#f1ebe0", "ink_dim": "#b9ad9a", "accent": "#c8282e"},
+  "fonts": {"name": "Noto Serif CJK JP", "sub": "Noto Sans CJK JP", "mono": "Noto Sans Mono CJK JP", "hand": "SetoFont"},
+  "notes": "H1 の見本から続く既定。暗い机の上の古い調書。差し色は朱赤。"
+}

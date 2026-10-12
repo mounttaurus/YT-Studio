@@ -1,0 +1,7 @@
+{
+  "id": "cold_file",
+  "label": "冷たい資料・青灰",
+  "colors": {"desk": "#0b1015", "paper": "#cdd5db", "ink": "#e9eff3", "ink_dim": "#93a3ae", "accent": "#35b3d6"},
+  "fonts": {"name": "FOT-Rodin ProN", "sub": "Heisei Kaku Gothic Std", "mono": "Noto Sans Mono CJK JP", "hand": "Kinuta Shin Enpitsu Italic StdN"},
+  "notes": "蛍光灯の下の書類。青灰の紙と、シアンの差し色。ゴシック体。"
+}

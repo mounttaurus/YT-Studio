@@ -1,0 +1,123 @@
+<!doctype html>
+<html
+  data-composition-variables='[
+    {"id":"name","type":"string","label":"名前","default":"ジョン・ドウ","maxLength":14},
+    {"id":"sub","type":"string","label":"肩書き・年代","default":"","maxLength":28},
+    {"id":"variant","type":"enum","label":"出し方","default":"decode","options":[
+      {"value":"decode","label":"解読"},{"value":"type","label":"タイプ"},{"value":"stamp","label":"判子"},
+      {"value":"wipe","label":"拭き取り"},{"value":"slide","label":"横滑り"}]},
+    {"id":"x","type":"number","label":"左端 px","default":1060,"min":0,"max":1700},
+    {"id":"y","type":"number","label":"上端 px","default":196,"min":0,"max":880},
+    {"id":"size","type":"number","label":"名前の大きさ px","default":104,"min":40,"max":220},
+    {"id":"seed","type":"number","label":"種","default":1}
+  ]'
+>
+  <head><meta charset="UTF-8" /></head>
+  <body>
+    <template>
+      <style>
+        #root { position: absolute; inset: 0; }
+        #L1_name-block { position: absolute; left: var(--x, 1060px); top: var(--y, 196px); width: 800px; }
+        #L1_name-name {
+          font-family: var(--look-font-name, "Noto Serif CJK JP"), serif; font-weight: 900; line-height: 1.1;
+          color: var(--look-ink, #f1ebe0); letter-spacing: 0.04em; white-space: nowrap;
+          text-shadow: 0 4px 24px rgba(0, 0, 0, 0.7);
+        }
+        #L1_name-name .ch { display: inline-block; width: 1em; text-align: center; opacity: 0; border-right: 8px solid transparent; }
+        #L1_name-rule { width: 620px; height: 6px; margin-top: 18px; background: var(--look-accent, #c8282e); transform-origin: 0 50%; }
+        #L1_name-sub {
+          margin-top: 22px; font-family: var(--look-font-sub, "Noto Sans CJK JP"), sans-serif; font-weight: 700;
+          font-size: 40px; letter-spacing: 0.06em; color: var(--look-ink-dim, #b9ad9a); white-space: nowrap;
+        }
+      </style>
+
+      <div id="root" data-composition-id="L1_name" data-width="1920" data-height="1080">
+        <div id="L1_name-block">
+          <div id="L1_name-name"></div>
+          <div id="L1_name-rule"></div>
+          <div id="L1_name-sub"></div>
+        </div>
+      </div>
+
+      <script>
+        (function () {
+          const v = Object.assign({ name: "ジョン・ドウ", sub: "", variant: "decode", x: 1060, y: 196, size: 104, seed: 1 },
+                                  (window.__hyperframes && window.__hyperframes.getVariables()) || {});
+          const block = document.getElementById("L1_name-block");
+          const nameEl = document.getElementById("L1_name-name");
+          const rule = document.getElementById("L1_name-rule");
+          const sub = document.getElementById("L1_name-sub");
+          block.style.left = v.x + "px";
+          block.style.top = v.y + "px";
+          nameEl.style.fontSize = v.size + "px";
+          sub.textContent = v.sub;
+
+          function mulberry32(a) {
+            return function () {
+              a |= 0; a = (a + 0x6d2b79f5) | 0;
+              let t = Math.imul(a ^ (a >>> 15), 1 | a);
+              t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+              return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+            };
+          }
+          const rand = mulberry32(Number(v.seed) || 1);
+          const GLYPHS = "アカサタナハマヤラワヰヱ#%&*+=<>/0123456789※";
+          const text = String(v.name);
+          const tl = gsap.timeline({ paused: true });
+          const accent = "#c8282e";
+          const ink = "#f1ebe0";
+
+          const makeChars = () => Array.from(text).map((ch) => {
+            const s = document.createElement("span");
+            s.className = "ch";
+            s.textContent = ch;
+            nameEl.appendChild(s);
+            return s;
+          });
+
+          let end = 0;
+          if (v.variant === "decode") {
+            const chars = makeChars();
+            const STEP = 1 / 15;
+            chars.forEach((s, i) => {
+              const start = 0.0 + 0.06 * i;
+              const settle = 0.35 + 0.11 * i;
+              tl.set(s, { opacity: 1, color: accent }, start);
+              for (let t = start; t < settle - 1e-6; t += STEP) {
+                tl.set(s, { textContent: GLYPHS[Math.floor(rand() * GLYPHS.length)] }, t);
+              }
+              tl.set(s, { textContent: Array.from(text)[i], color: ink }, settle);
+              end = Math.max(end, settle);
+            });
+          } else if (v.variant === "type") {
+            const chars = makeChars();
+            chars.forEach((s, k) => {
+              const t = 0.0 + k * 0.07;
+              tl.set(s, { opacity: 1, borderRightColor: accent }, t);
+              if (k > 0) tl.set(chars[k - 1], { borderRightColor: "transparent" }, t);
+              end = t;
+            });
+            tl.set(chars[chars.length - 1], { borderRightColor: "transparent" }, end + 0.25);
+            end += 0.25;
+          } else {
+            // 判子・拭き取り・横滑り: 名前の塊を1本の fromTo で動かす（出し方ごとに始点・終点だけが違う）
+            const SPEC = {
+              stamp: [{ opacity: 0, scale: 1.7, rotate: -4, transformOrigin: "0 50%" },
+                      { opacity: 1, scale: 1, rotate: 0, duration: 0.14, ease: "power4.in" }],
+              wipe: [{ clipPath: "inset(0% 100% 0% 0%)" },
+                     { clipPath: "inset(0% 0% 0% 0%)", duration: 0.5, ease: "power2.out" }],
+              slide: [{ opacity: 0, x: -90 }, { opacity: 1, x: 0, duration: 0.45, ease: "power3.out" }],
+            };
+            const spec = SPEC[v.variant] || SPEC.slide;
+            nameEl.textContent = text;
+            tl.fromTo(nameEl, spec[0], spec[1], 0);
+            end = spec[1].duration;
+          }
+          tl.fromTo(rule, { scaleX: 0 }, { scaleX: 1, duration: 0.5, ease: "power3.out" }, end + 0.1);
+          tl.fromTo(sub, { clipPath: "inset(0% 100% 0% 0%)" }, { clipPath: "inset(0% 0% 0% 0%)", duration: 0.6, ease: "power2.out" }, end + 0.3);
+          window.__timelines["L1_name"] = tl;
+        })();
+      </script>
+    </template>
+  </body>
+</html>

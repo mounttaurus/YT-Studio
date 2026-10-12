@@ -1,0 +1,8 @@
+{
+  "profile": "free",
+  "label": "自由（試作・音楽もの）",
+  "band": 0.0,
+  "safe": 0.0,
+  "flash_max_per_sec": 3,
+  "notes": "文字の位置の検査はしない（明滅の実測だけは関門）。"
+}

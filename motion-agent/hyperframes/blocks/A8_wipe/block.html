@@ -1,0 +1,39 @@
+<!doctype html>
+<html
+  data-composition-variables='[
+    {"id":"color","type":"color","label":"拭き取りの色","default":"#c8282e"},
+    {"id":"angle","type":"number","label":"斜めの角度 度","default":-18,"min":-45,"max":45},
+    {"id":"dir","type":"enum","label":"向き","default":"right","options":[
+      {"value":"right","label":"左→右"},{"value":"left","label":"右→左"}]}
+  ]'
+>
+  <head><meta charset="UTF-8" /></head>
+  <body>
+    <template>
+      <style>
+        #root { position: absolute; inset: 0; overflow: hidden; }
+        #A8_wipe-band { position: absolute; top: -10%; height: 120%; width: 70%; }
+      </style>
+
+      <div id="root" data-composition-id="A8_wipe" data-width="1920" data-height="1080">
+        <div id="A8_wipe-band" data-layout-ignore></div>
+      </div>
+
+      <script>
+        (function () {
+          const v = Object.assign({ color: "#c8282e", angle: -18, dir: "right" },
+                                  (window.__hyperframes && window.__hyperframes.getVariables()) || {});
+          const band = document.getElementById("A8_wipe-band");
+          band.style.background = v.color;
+          band.style.transform = "skewX(" + v.angle + "deg)";
+          const tl = gsap.timeline({ paused: true });
+          // 帯が画面を横切る。真ん中（ホストの長さの半分）で画面が帯に覆われる＝ここで下の絵を入れ替える
+          const from = v.dir === "left" ? 2300 : -1500;
+          const to = v.dir === "left" ? -1500 : 2300;
+          tl.fromTo(band, { x: from }, { x: to, duration: 0.55, ease: "power2.inOut" }, 0);
+          window.__timelines["A8_wipe"] = tl;
+        })();
+      </script>
+    </template>
+  </body>
+</html>

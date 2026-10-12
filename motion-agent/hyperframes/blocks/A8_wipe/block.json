@@ -1,0 +1,14 @@
+{
+  "id": "A8_wipe",
+  "version": 1,
+  "label": "斜めの拭き取り（繋ぎ）",
+  "kind": "enter",
+  "profiles": ["insert", "opening", "free"],
+  "summary": "斜めの色の帯が画面を横切る繋ぎ。帯が画面を覆う瞬間に下の絵を入れ替える。",
+  "variants": null,
+  "text": [],
+  "materials": [],
+  "flash": {"max_per_sec": 2},
+  "placement": "host の data-duration は 0.6 秒前後。入れ替えたい時刻の 0.3 秒前に data-start を置く（帯が画面の真ん中に来るのは 0.3 秒後）",
+  "notes": "帯の色が画面の広い面積を一瞬で変えるので、明滅の実測に注意（連発しない・毎秒2回まで）。"
+}

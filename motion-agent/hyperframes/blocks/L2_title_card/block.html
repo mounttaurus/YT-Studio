@@ -1,0 +1,71 @@
+<!doctype html>
+<html
+  data-composition-variables='[
+    {"id":"text","type":"string","label":"大きな文字（人物名・事件名）","default":"","maxLength":12},
+    {"id":"sub","type":"string","label":"小さな文字","default":"","maxLength":24},
+    {"id":"variant","type":"enum","label":"出し方","default":"wipe","options":[
+      {"value":"wipe","label":"拭き取り"},{"value":"fade","label":"ふわっと"},{"value":"zoom","label":"寄りながら"}]},
+    {"id":"size","type":"number","label":"文字の大きさ px","default":160,"min":60,"max":260},
+    {"id":"y","type":"number","label":"文字の上端 px","default":330,"min":40,"max":600},
+    {"id":"dim","type":"number","label":"下の絵を暗くする 0〜1","default":0.55,"min":0,"max":0.9}
+  ]'
+>
+  <head><meta charset="UTF-8" /></head>
+  <body>
+    <template>
+      <style>
+        #root { position: absolute; inset: 0; }
+        #L2_title_card-dim { position: absolute; inset: 0; background: #000; opacity: 0; }
+        #L2_title_card-block { position: absolute; left: 0; width: 1920px; text-align: center; }
+        #L2_title_card-text {
+          display: inline-block; white-space: nowrap; line-height: 1.1; font-weight: 900; letter-spacing: 0.06em;
+          font-family: var(--look-font-name, "Noto Serif CJK JP"), serif; color: var(--look-ink, #f1ebe0);
+          text-shadow: 0 6px 40px rgba(0, 0, 0, 0.75);
+        }
+        #L2_title_card-rule { width: 520px; height: 8px; margin: 28px auto 0; background: var(--look-accent, #c8282e); transform-origin: 50% 50%; }
+        #L2_title_card-sub {
+          margin-top: 30px; font-family: var(--look-font-sub, "Noto Sans CJK JP"), sans-serif; font-weight: 700;
+          font-size: 46px; letter-spacing: 0.1em; color: var(--look-ink-dim, #b9ad9a);
+        }
+      </style>
+
+      <div id="root" data-composition-id="L2_title_card" data-width="1920" data-height="1080">
+        <div id="L2_title_card-dim"></div>
+        <div id="L2_title_card-block">
+          <div id="L2_title_card-text"></div>
+          <div id="L2_title_card-rule"></div>
+          <div id="L2_title_card-sub"></div>
+        </div>
+      </div>
+
+      <script>
+        (function () {
+          const v = Object.assign({ text: "", sub: "", variant: "wipe", size: 160, y: 330, dim: 0.55 },
+                                  (window.__hyperframes && window.__hyperframes.getVariables()) || {});
+          const block = document.getElementById("L2_title_card-block");
+          const text = document.getElementById("L2_title_card-text");
+          const rule = document.getElementById("L2_title_card-rule");
+          const sub = document.getElementById("L2_title_card-sub");
+          block.style.top = v.y + "px";
+          text.style.fontSize = v.size + "px";
+          text.textContent = v.text;
+          sub.textContent = v.sub;
+          const tl = gsap.timeline({ paused: true });
+          tl.fromTo("#L2_title_card-dim", { opacity: 0 }, { opacity: v.dim, duration: 0.5, ease: "power2.out" }, 0);
+          // 出し方ごとに始点・終点だけが違う（名前の塊を1本の fromTo で動かす）
+          const SPEC = {
+            wipe: [{ clipPath: "inset(0% 100% 0% 0%)" }, { clipPath: "inset(0% 0% 0% 0%)", duration: 0.6, ease: "power3.out" }],
+            zoom: [{ opacity: 0, scale: 0.9 }, { opacity: 1, scale: 1, duration: 0.9, ease: "power2.out" }],
+            fade: [{ opacity: 0 }, { opacity: 1, duration: 0.7, ease: "sine.out" }],
+          };
+          const spec = SPEC[v.variant] || SPEC.fade;
+          tl.fromTo(text, spec[0], spec[1], 0.15);
+          const end = 0.15 + spec[1].duration;
+          tl.fromTo(rule, { scaleX: 0 }, { scaleX: 1, duration: 0.5, ease: "power3.out" }, end);
+          tl.fromTo(sub, { opacity: 0, y: 10 }, { opacity: 1, y: 0, duration: 0.5, ease: "power2.out" }, end + 0.15);
+          window.__timelines["L2_title_card"] = tl;
+        })();
+      </script>
+    </template>
+  </body>
+</html>

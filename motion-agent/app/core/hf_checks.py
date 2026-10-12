@@ -96,9 +96,7 @@ def check_length(root: Path, motion: dict | None) -> tuple[list[dict], float | N
         if abs(want - dur) > 1.0 / FPS + 1e-9:
             issues.append(_issue("length_mismatch", f"ルートの data-duration（{dur:g} 秒）が fit.sec（{want:g} 秒）と合わない",
                                  file="index.html"))
-    elif "line_id" in fit:
-        issues.append(_issue("fit_line_unsupported", "fit.line_id（行の音声の長さ）は I1 で対応する。今は長さを確かめていない",
-                             level="warning"))
+    # fit.line_id（行の音声の実測）は話の文脈が要るので hf_project.check_fit が見る
     if motion is None:
         issues.append(_issue("missing_motion_json", "motion.json（添え書き）が無い", level="warning"))
     return issues, dur

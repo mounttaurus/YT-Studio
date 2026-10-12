@@ -1,0 +1,17 @@
+{
+  "id": "L1_name",
+  "version": 1,
+  "label": "名前と肩書き",
+  "kind": "layer",
+  "profiles": ["insert", "opening", "free"],
+  "summary": "名前（大）＋細い赤線＋肩書き・年代。出し方（variant）で現れ方を変えて、同じ話の中で繰り返しに見せない。",
+  "variants": {"var": "variant", "default": "decode", "options": ["decode", "type", "stamp", "wipe", "slide"]},
+  "text": [
+    {"var": "name", "max_chars": 14, "role": "章題"},
+    {"var": "sub", "max_chars": 28, "role": "標準"}
+  ],
+  "materials": [],
+  "flash": {"max_per_sec": 0},
+  "placement": "x・y（左上の px）で置く。字幕の帯（下から20%）に掛からない y を選ぶ（検査が止める）",
+  "notes": "decode は 1字ずつ記号が回ってから落ち着く（種 seed で記号の並びが決まる）。type は1字ずつ打たれて赤いカーソルが付く。"
+}

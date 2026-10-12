@@ -1,0 +1,87 @@
+<!doctype html>
+<html
+  data-composition-variables='[
+    {"id":"photo","type":"string","label":"写真（assets/ の相対パス）","default":"assets/photo.png"},
+    {"id":"file_no","type":"string","label":"ファイル番号","default":"FILE No. 0347","maxLength":20},
+    {"id":"note","type":"string","label":"手書きの朱書き","default":"","maxLength":8},
+    {"id":"x","type":"number","label":"台紙の左端 px","default":210,"min":0,"max":1200},
+    {"id":"y","type":"number","label":"台紙の上端 px","default":92,"min":0,"max":400},
+    {"id":"rot","type":"number","label":"台紙の傾き 度","default":-2.2,"min":-8,"max":8},
+    {"id":"camera","type":"string","label":"カメラ（to=1.1;x=-18;ox=588;oy=470;dur=5 の形・空なら動かさない）","default":""}
+  ]'
+>
+  <head><meta charset="UTF-8" /></head>
+  <body>
+    <template>
+      <style>
+        #root { position: absolute; inset: 0; }
+        #F4_dossier-cam { position: absolute; inset: 0; }
+        #F4_dossier-card {
+          position: absolute; width: 760px; height: 900px;
+          background: linear-gradient(170deg, #e2d7c1 0%, var(--look-paper, #d9cdb6) 55%, #c9bb9f 100%);
+          box-shadow: 0 30px 80px rgba(0, 0, 0, 0.6), 0 0 0 1px rgba(60, 40, 20, 0.25);
+        }
+        #F4_dossier-no {
+          position: absolute; left: 56px; top: 34px; font-family: var(--look-font-mono, "Noto Sans Mono CJK JP"), monospace;
+          font-weight: 700; font-size: 26px; letter-spacing: 0.12em; color: #4a3b2b;
+        }
+        #F4_dossier-note {
+          position: absolute; right: 58px; top: 22px; rotate: 4deg;
+          font-family: var(--look-font-hand, "SetoFont"), cursive; font-size: 46px; color: var(--look-accent, #c8282e);
+        }
+        #F4_dossier-photo {
+          position: absolute; left: 100px; top: 100px; width: 560px; height: 700px; object-fit: cover;
+          box-shadow: 0 6px 18px rgba(0, 0, 0, 0.45); filter: contrast(1.05);
+        }
+        #F4_dossier-clip {
+          position: absolute; left: 330px; top: 60px; width: 100px; height: 120px;
+          border: 9px solid #8d8f93; border-bottom: none; border-radius: 50px 50px 0 0;
+        }
+      </style>
+
+      <div id="root" data-composition-id="F4_dossier" data-width="1920" data-height="1080">
+        <div id="F4_dossier-cam">
+          <div id="F4_dossier-card">
+            <div id="F4_dossier-no"></div>
+            <div id="F4_dossier-note"></div>
+            <img id="F4_dossier-photo" src="" alt="" />
+            <div id="F4_dossier-clip"></div>
+          </div>
+        </div>
+      </div>
+
+      <script>
+        (function () {
+          const v = Object.assign({ photo: "assets/photo.png", file_no: "", note: "", x: 210, y: 92, rot: -2.2, camera: "" },
+                                  (window.__hyperframes && window.__hyperframes.getVariables()) || {});
+          const card = document.getElementById("F4_dossier-card");
+          card.style.left = v.x + "px";
+          card.style.top = v.y + "px";
+          card.style.rotate = v.rot + "deg";
+          document.getElementById("F4_dossier-no").textContent = v.file_no;
+          document.getElementById("F4_dossier-note").textContent = v.note;
+          document.getElementById("F4_dossier-photo").setAttribute("src", v.photo);
+          const tl = gsap.timeline({ paused: true });
+          // camera は "to=1.1;x=-18;ox=588;oy=470;dur=5"（to: 最後の倍率・x: 横へ px・ox,oy: 寄る中心 px・dur: 秒）
+          const cam = (function (s) {
+            if (!s) return null;
+            const o = {};
+            String(s).split(";").forEach(function (kv) {
+              const i = kv.indexOf("=");
+              if (i > 0) o[kv.slice(0, i).trim()] = parseFloat(kv.slice(i + 1));
+            });
+            return o.to ? o : null;
+          })(v.camera);
+          if (cam && cam.to) {
+            tl.fromTo("#F4_dossier-cam", { scale: 1, x: 0 },
+                      { scale: cam.to, x: cam.x || 0, duration: cam.dur || 5, ease: "sine.inOut",
+                        transformOrigin: (cam.ox || 960) + "px " + (cam.oy || 540) + "px" }, 0);
+          } else {
+            tl.set("#F4_dossier-cam", { x: 0 }, 0);
+          }
+          window.__timelines["F4_dossier"] = tl;
+        })();
+      </script>
+    </template>
+  </body>
+</html>

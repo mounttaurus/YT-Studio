@@ -1,0 +1,17 @@
+{
+  "id": "L2_title_card",
+  "version": 1,
+  "label": "全画面の名前（タイトルカード）",
+  "kind": "base",
+  "profiles": ["insert", "opening", "free"],
+  "summary": "下の絵を暗くして、画面の真ん中に大きく名前（または事件名）と細い赤線・小さな説明。",
+  "variants": {"var": "variant", "default": "wipe", "options": ["wipe", "fade", "zoom"]},
+  "text": [
+    {"var": "text", "max_chars": 12, "role": "章題"},
+    {"var": "sub", "max_chars": 24, "role": "標準"}
+  ],
+  "materials": [],
+  "flash": {"max_per_sec": 0},
+  "placement": "y（文字の上端 px）で縦の位置を決める。小さな文字が字幕の帯（下から20%）に掛からないようにする（検査が止める）",
+  "notes": "写真の上に重ねる層（F2_photo の上）。一瞬で読める量だけ。"
+}

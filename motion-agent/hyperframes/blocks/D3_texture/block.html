@@ -1,0 +1,62 @@
+<!doctype html>
+<html
+  data-composition-variables='[
+    {"id":"light_x","type":"number","label":"机の光 x %","default":32,"min":0,"max":100},
+    {"id":"light_y","type":"number","label":"机の光 y %","default":42,"min":0,"max":100},
+    {"id":"grain","type":"number","label":"粒子の濃さ 0〜0.3（-1 で見た目の束に従う）","default":0.09,"min":-1,"max":0.3},
+    {"id":"vignette","type":"number","label":"周辺減光 0〜0.9（-1 で見た目の束に従う）","default":0.55,"min":-1,"max":0.9},
+    {"id":"seed","type":"number","label":"種","default":7}
+  ]'
+>
+  <head><meta charset="UTF-8" /></head>
+  <body>
+    <template>
+      <style>
+        #root { position: absolute; inset: 0; }
+        #D3_texture-light { position: absolute; inset: 0; }
+        #D3_texture-grain-wrap { position: absolute; inset: -60px; mix-blend-mode: screen; }
+        #D3_texture-grain { position: absolute; left: 0; top: 0; width: 2040px; height: 1200px; }
+        #D3_texture-vignette { position: absolute; inset: 0; }
+      </style>
+
+      <div id="root" data-composition-id="D3_texture" data-width="1920" data-height="1080">
+        <div id="D3_texture-light" data-layout-ignore></div>
+        <div id="D3_texture-grain-wrap" data-layout-ignore>
+          <svg id="D3_texture-grain" viewBox="0 0 2040 1200">
+            <filter id="D3_texture-grain-f"><feTurbulence type="fractalNoise" baseFrequency="0.85" numOctaves="2" seed="7" /></filter>
+            <rect width="2040" height="1200" filter="url(#D3_texture-grain-f)" />
+          </svg>
+        </div>
+        <div id="D3_texture-vignette" data-layout-ignore></div>
+      </div>
+
+      <script>
+        (function () {
+          const v = Object.assign({ light_x: 32, light_y: 42, grain: 0.09, vignette: 0.55, seed: 7 },
+                                  (window.__hyperframes && window.__hyperframes.getVariables()) || {});
+          // grain・vignette が -1 なら、見た目の束（look.css の --look-grain・--look-vignette）に従う
+          const lookCss = getComputedStyle(document.documentElement);
+          const lookNum = function (name, fallback) {
+            const n = parseFloat(lookCss.getPropertyValue(name));
+            return Number.isFinite(n) ? n : fallback;
+          };
+          if (v.grain < 0) v.grain = lookNum("--look-grain", 0.09);
+          if (v.vignette < 0) v.vignette = lookNum("--look-vignette", 0.55);
+          document.getElementById("D3_texture-light").style.background =
+            "radial-gradient(ellipse 70% 80% at " + v.light_x + "% " + v.light_y + "%, rgba(255,214,160,0.16) 0%, rgba(0,0,0,0) 70%)";
+          document.getElementById("D3_texture-grain-wrap").style.opacity = String(v.grain);
+          document.getElementById("D3_texture-vignette").style.background =
+            "radial-gradient(ellipse 75% 75% at 50% 46%, rgba(0,0,0,0) 55%, rgba(0,0,0," + v.vignette + ") 100%)";
+          const f = document.querySelector("#D3_texture-grain-f feTurbulence");
+          if (f) f.setAttribute("seed", String(Math.round(Number(v.seed)) || 7));
+          const dur = (document.querySelector('[data-composition-id="D3_texture"]') || {}).dataset;
+          const total = Number(dur && dur.duration) || 5;
+          const tl = gsap.timeline({ paused: true });
+          // 粒子をこま送りで動かし続ける（画面の全ては動く）
+          tl.fromTo("#D3_texture-grain", { x: 0, y: 0 }, { x: -48, y: 31, duration: total, ease: "steps(30)" }, 0);
+          window.__timelines["D3_texture"] = tl;
+        })();
+      </script>
+    </template>
+  </body>
+</html>

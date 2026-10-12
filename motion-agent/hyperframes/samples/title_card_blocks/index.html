@@ -1,0 +1,39 @@
+<!doctype html>
+<html lang="ja">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=1920, height=1080" />
+    <title>見本: 全画面の名前（ブロックの組み合わせ・HyperFrames）</title>
+    <link rel="stylesheet" href="look.css" />
+    <script src="vendor/gsap.min.js"></script>
+    <style>
+      body { margin: 0; background: var(--look-desk, #120e0b); }
+      #root { position: relative; width: 100%; height: 100%; overflow: hidden; background: var(--look-desk, #120e0b); }
+    </style>
+  </head>
+  <body>
+    <!-- 全画面の名前: F2_photo（写真が寄る）＋ L2_title_card（名前）＋ A8_wipe（拭き取り）＋ D3_texture -->
+    <div id="root" data-composition-id="title_card_blocks" data-start="0" data-width="1920" data-height="1080" data-duration="4">
+      <div id="photo" class="clip" data-gimmick="F2_photo" data-composition-id="F2_photo"
+           data-composition-src="compositions/blocks/F2_photo.html"
+           data-variable-values='{"photo":"assets/_gen/portrait.png","camera":"to=1.12;x=-30;ox=960;oy=420;dur=4"}'
+           data-start="0" data-duration="4" data-track-index="1" data-width="1920" data-height="1080"></div>
+      <div id="title" class="clip" data-gimmick="L2_title_card" data-variant="wipe" data-composition-id="L2_title_card"
+           data-composition-src="compositions/blocks/L2_title_card.html"
+           data-variable-values='{"text":"ジョン・ドウ","sub":"1963年・事件当夜の証言者","variant":"wipe","size":160,"y":330,"dim":0.55}'
+           data-start="0.4" data-duration="3.6" data-track-index="2" data-width="1920" data-height="1080"></div>
+      <div id="wipe" class="clip" data-gimmick="A8_wipe" data-composition-id="A8_wipe"
+           data-composition-src="compositions/blocks/A8_wipe.html"
+           data-variable-values='{"color":"#c8282e","angle":-18,"dir":"right"}'
+           data-start="3.2" data-duration="0.8" data-track-index="3" data-width="1920" data-height="1080"></div>
+      <div id="texture" class="clip" data-gimmick="D3_texture" data-composition-id="D3_texture"
+           data-composition-src="compositions/blocks/D3_texture.html"
+           data-variable-values='{}'
+           data-start="0" data-duration="4" data-track-index="4" data-width="1920" data-height="1080"></div>
+    </div>
+    <script>
+      window.__timelines = window.__timelines || {};
+      window.__timelines["title_card_blocks"] = gsap.timeline({ paused: true });
+    </script>
+  </body>
+</html>

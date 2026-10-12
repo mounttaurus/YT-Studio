@@ -1,0 +1,14 @@
+{
+  "id": "D3_texture",
+  "version": 1,
+  "label": "質感（机の光・粒子・周辺減光）",
+  "kind": "overlay",
+  "profiles": ["insert", "opening", "free"],
+  "summary": "全編に重ねる質感。机の上から差す光・動き続ける粒子・周辺減光。",
+  "variants": null,
+  "text": [],
+  "materials": [],
+  "flash": {"max_per_sec": 0},
+  "placement": "画面全体（host の data-duration はコンポジションの長さ）。一番上の段に置く",
+  "notes": "粒子は種を固定した乱流で、描くたびに同じ（決定的）。文字の上に被るので、コントラストの検査は見ない（data-layout-ignore）。"
+}

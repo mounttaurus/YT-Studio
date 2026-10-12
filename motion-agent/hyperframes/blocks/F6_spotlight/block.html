@@ -1,0 +1,55 @@
+<!doctype html>
+<html
+  data-composition-variables='[
+    {"id":"cx","type":"number","label":"中心 x px","default":588,"min":0,"max":1920},
+    {"id":"cy","type":"number","label":"中心 y px","default":470,"min":0,"max":1080},
+    {"id":"r","type":"number","label":"明るく残す半径 px","default":210,"min":60,"max":700},
+    {"id":"dark","type":"number","label":"周りの暗さ 0〜1","default":0.72,"min":0.2,"max":0.95},
+    {"id":"t0","type":"number","label":"始まり 秒（ブロックの頭から）","default":0.5,"min":0,"max":10},
+    {"id":"dur_in","type":"number","label":"暗くなる秒","default":0.9,"min":0.2,"max":3},
+    {"id":"camera","type":"string","label":"カメラ（F4_dossier と同じ文字列）","default":""}
+  ]'
+>
+  <head><meta charset="UTF-8" /></head>
+  <body>
+    <template>
+      <style>
+        #root { position: absolute; inset: 0; }
+        #F6_spotlight-cam { position: absolute; inset: 0; }
+        #F6_spotlight-dim { position: absolute; inset: 0; opacity: 0; }
+      </style>
+
+      <div id="root" data-composition-id="F6_spotlight" data-width="1920" data-height="1080">
+        <div id="F6_spotlight-cam"><div id="F6_spotlight-dim"></div></div>
+      </div>
+
+      <script>
+        (function () {
+          const v = Object.assign({ cx: 588, cy: 470, r: 210, dark: 0.72, t0: 0.5, dur_in: 0.9, camera: "" },
+                                  (window.__hyperframes && window.__hyperframes.getVariables()) || {});
+          const dim = document.getElementById("F6_spotlight-dim");
+          dim.style.background = "radial-gradient(circle " + v.r + "px at " + v.cx + "px " + v.cy + "px, " +
+            "rgba(0,0,0,0) 0%, rgba(0,0,0,0) 62%, rgba(4,3,2," + v.dark + ") 100%)";
+          const tl = gsap.timeline({ paused: true });
+          tl.fromTo(dim, { opacity: 0 }, { opacity: 1, duration: v.dur_in, ease: "power2.out" }, v.t0);
+          // camera は "to=1.1;x=-18;ox=588;oy=470;dur=5"（to: 最後の倍率・x: 横へ px・ox,oy: 寄る中心 px・dur: 秒）
+          const cam = (function (s) {
+            if (!s) return null;
+            const o = {};
+            String(s).split(";").forEach(function (kv) {
+              const i = kv.indexOf("=");
+              if (i > 0) o[kv.slice(0, i).trim()] = parseFloat(kv.slice(i + 1));
+            });
+            return o.to ? o : null;
+          })(v.camera);
+          if (cam && cam.to) {
+            tl.fromTo("#F6_spotlight-cam", { scale: 1, x: 0 },
+                      { scale: cam.to, x: cam.x || 0, duration: cam.dur || 5, ease: "sine.inOut",
+                        transformOrigin: (cam.ox || 960) + "px " + (cam.oy || 540) + "px" }, 0);
+          }
+          window.__timelines["F6_spotlight"] = tl;
+        })();
+      </script>
+    </template>
+  </body>
+</html>

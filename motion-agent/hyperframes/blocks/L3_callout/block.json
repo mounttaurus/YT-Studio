@@ -1,0 +1,14 @@
+{
+  "id": "L3_callout",
+  "version": 1,
+  "label": "引き出し線の注記",
+  "kind": "layer",
+  "profiles": ["insert", "opening", "free"],
+  "summary": "点 → 線が伸びる → 短い注記が出る。写真の一点に説明を添える。",
+  "variants": null,
+  "text": [{"var": "text", "max_chars": 30, "role": "標準"}],
+  "materials": [],
+  "flash": {"max_per_sec": 0},
+  "placement": "dot_x・dot_y に点、text_x・text_y に注記。注記は字幕の帯（下から20%）に置かない。写真が寄る時は camera を F4_dossier と同じにする",
+  "notes": "一瞬で読める量だけ（30字以内）。長い説明はナレーションに任せる。"
+}

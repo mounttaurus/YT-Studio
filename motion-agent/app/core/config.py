@@ -23,3 +23,5 @@ HF_DIR = Path(os.getenv("HF_DIR", "/app/hyperframes"))
 HF_SAMPLES_DIR = HF_DIR / "samples"
 HF_BIN = HF_DIR / "node_modules" / ".bin" / "hyperframes"
 HF_CHECK_TIMEOUT_SEC = int(os.getenv("MOTION_HF_CHECK_TIMEOUT_SEC", "180"))
+HF_PROFILES_DIR = HF_DIR / "profiles"
+HF_MEASURE_TIMEOUT_SEC = int(os.getenv("MOTION_HF_MEASURE_TIMEOUT_SEC", "120"))

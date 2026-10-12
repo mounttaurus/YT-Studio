@@ -99,9 +99,10 @@ def test_missing_duration_and_motion(tmp_path):
         "missing_duration": "error", "missing_motion_json": "warning"}
 
 
-def test_fit_line_id_is_a_warning_until_i1(tmp_path):
-    issues, _ = hf_checks.check_length(_write(tmp_path), {"fit": {"line_id": "line_001"}})
-    assert [(i["code"], i["level"]) for i in issues] == [("fit_line_unsupported", "warning")]
+def test_fit_line_id_is_checked_with_the_episode_context_not_here(tmp_path):
+    # 行の長さは話の文脈（tts.json）が要るので hf_project.check_fit が見る（tests/test_hf_project.py）
+    issues, dur = hf_checks.check_length(_write(tmp_path), {"fit": {"line_id": "line_001"}})
+    assert issues == [] and dur == 5.0
 
 
 # ── 準備（vendor・見本の素材） ──

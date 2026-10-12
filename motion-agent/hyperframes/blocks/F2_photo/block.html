@@ -1,0 +1,61 @@
+<!doctype html>
+<html
+  data-composition-variables='[
+    {"id":"photo","type":"string","label":"写真（assets/ の相対パス）","default":"assets/photo.png"},
+    {"id":"x","type":"number","label":"左端 px","default":0,"min":0,"max":1920},
+    {"id":"y","type":"number","label":"上端 px","default":0,"min":0,"max":1080},
+    {"id":"w","type":"number","label":"幅 px","default":1920,"min":200,"max":1920},
+    {"id":"h","type":"number","label":"高さ px","default":1080,"min":200,"max":1080},
+    {"id":"camera","type":"string","label":"カメラ（to=1.1;x=-18;ox=588;oy=470;dur=5 の形・空なら動かさない）","default":""}
+  ]'
+>
+  <head><meta charset="UTF-8" /></head>
+  <body>
+    <template>
+      <style>
+        #root { position: absolute; inset: 0; }
+        #F2_photo-frame { position: absolute; overflow: hidden; }
+        #F2_photo-cam { position: absolute; inset: 0; }
+        #F2_photo-img { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; }
+      </style>
+
+      <div id="root" data-composition-id="F2_photo" data-width="1920" data-height="1080">
+        <div id="F2_photo-frame">
+          <div id="F2_photo-cam"><img id="F2_photo-img" src="" alt="" /></div>
+        </div>
+      </div>
+
+      <script>
+        (function () {
+          const v = Object.assign({ photo: "assets/photo.png", x: 0, y: 0, w: 1920, h: 1080, camera: "" },
+                                  (window.__hyperframes && window.__hyperframes.getVariables()) || {});
+          const frame = document.getElementById("F2_photo-frame");
+          frame.style.left = v.x + "px";
+          frame.style.top = v.y + "px";
+          frame.style.width = v.w + "px";
+          frame.style.height = v.h + "px";
+          document.getElementById("F2_photo-img").setAttribute("src", v.photo);
+          const tl = gsap.timeline({ paused: true });
+          // camera は "to=1.1;x=-18;ox=588;oy=470;dur=5"（to: 最後の倍率・x: 横へ px・ox,oy: 寄る中心（枠の中の px）・dur: 秒）
+          const cam = (function (s) {
+            if (!s) return null;
+            const o = {};
+            String(s).split(";").forEach(function (kv) {
+              const i = kv.indexOf("=");
+              if (i > 0) o[kv.slice(0, i).trim()] = parseFloat(kv.slice(i + 1));
+            });
+            return o.to ? o : null;
+          })(v.camera);
+          if (cam && cam.to) {
+            tl.fromTo("#F2_photo-cam", { scale: 1, x: 0 },
+                      { scale: cam.to, x: cam.x || 0, duration: cam.dur || 5, ease: "sine.inOut",
+                        transformOrigin: (cam.ox || v.w / 2) + "px " + (cam.oy || v.h / 2) + "px" }, 0);
+          } else {
+            tl.set("#F2_photo-cam", { x: 0 }, 0);
+          }
+          window.__timelines["F2_photo"] = tl;
+        })();
+      </script>
+    </template>
+  </body>
+</html>
