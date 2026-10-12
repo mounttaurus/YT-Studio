@@ -64,6 +64,15 @@ def test_cue_past_the_end_is_cut_and_marked():
     assert [c["clipped"] for c in rep["cues"]] == [True, True]
 
 
+def test_soft_limit_leaves_quiet_parts_alone_and_rounds_peaks():
+    x = np.array([0.0, 0.3, -0.5, 0.59, 0.8, -1.2, 3.0])
+    y = mix.soft_limit(x, 0.85)
+    assert np.array_equal(y[:4], x[:4])                      # knee（0.595）までは触らない
+    assert np.all(np.abs(y) <= 0.85) and y[4] < 0.8 and y[5] < -0.7 and y[6] == pytest.approx(0.85, abs=1e-3)
+    assert np.all(np.diff(y[[3, 4, 6]]) > 0)                 # 単調（大きい入力は大きいまま）
+    assert mix.soft_limit(np.array([0.1, -0.2]), 0.85).tolist() == [0.1, -0.2]
+
+
 def test_stacked_hits_are_scaled_under_the_ceiling():
     cues = [{"kind": "impact", "at": 0.1, "gain": 0.9, "volume": 1.0, "seed": i} for i in range(4)]
     track, rep = mix.render_track(cues, 1.0)

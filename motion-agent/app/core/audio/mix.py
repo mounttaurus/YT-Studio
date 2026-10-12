@@ -24,6 +24,10 @@ from app.core.audio import sfx_synth as synth
 # 同じ種類の打点がこの秒より近ければ後ろを間引く（OPENING_MOTION_PLAN §14-3「③で密になりすぎる」への当座の規則。
 # M2 で音の組み立てと一緒に見直す）
 DEFAULT_MIN_GAP_SEC = 0.1
+# 下に敷く BGM（予告編キット）の音量。キットのピークは 0.9 なので、効果音（0.5〜0.9）の下に収まる
+DEFAULT_BED_GAIN = 0.55
+# AAC に通した後の真のピークの上限。超えたら下げて入れ直す（mux_cues）。最終のラウドネスは M2 が決める
+TRUE_PEAK_LIMIT_DBFS = -1.0
 # 出力の上限（足し合わせてこれを超えたら全体を一律に下げる）。AAC に通すと真のピークが 0.4dB ほど超えるので、
 # 0.98（実測で +0.4 dBTP）ではなく -1.4 dBFS まで。最終のラウドネスは M2 が決める
 CEILING = 0.85
@@ -36,6 +40,11 @@ CUE_PARTS: dict[str, tuple[str, dict]] = {
     "flash": ("suck", {"length": 0.8, "pitch": 3000.0, "gain": 0.7}),
     "riser": ("riser", {"length": 1.4, "pitch": 140.0, "gain": 0.75}),
 }
+
+
+# AAC の前に通す先読みのリミッター（山の間の「見えない山」＝標本の間の頂を抑える）。level=0 で音量を持ち上げない。
+# 0.8＝-1.9dBFS。AAC が戻す分（約1dB）の余白を残す。最終のラウドネスは M2 が決める
+LIMITER = "alimiter=limit=0.8:attack=5:release=60:level=0"
 
 
 class MixError(RuntimeError):
@@ -87,11 +96,29 @@ def cue_start(cue: dict, params: dict | None = None) -> float:
 
 # ── 音の道 ──
 
-def render_track(cues: list[dict], total_sec: float) -> tuple[np.ndarray, dict]:
+def soft_limit(x: np.ndarray, ceiling: float, knee: float = 0.7) -> np.ndarray:
+    """柔らかい上限。knee×ceiling までは触らず、それを超えた山だけを ceiling へ滑らかに丸める
+    （全体を一律に下げると、BGM を敷いた時に音楽全体が小さくなる）。"""
+    k = ceiling * knee
+    a = np.abs(x)
+    over = a > k
+    if not np.any(over):
+        return x
+    y = x.copy()
+    y[over] = np.sign(x[over]) * (k + (ceiling - k) * np.tanh((a[over] - k) / (ceiling - k)))
+    return y
+
+
+def render_track(cues: list[dict], total_sec: float, bed: np.ndarray | None = None,
+                 bed_gain: float = 1.0) -> tuple[np.ndarray, dict]:
     """打点を全部置いた 48kHz・モノラルの音の道。返り値: (波形, 報告)。
+    bed は下に敷く音（BGM＝予告編キット）。道より長ければ切り、短ければ後ろは無音。
     道の外へはみ出す部分は切る。足し合わせて CEILING を超えたら全体を一律に下げる。"""
     n = max(1, int(round(float(total_sec) * synth.SR)))
     out = np.zeros(n)
+    if bed is not None:
+        m = min(n, len(bed))
+        out[:m] += float(bed_gain) * np.asarray(bed[:m], dtype=np.float64)
     cache: dict[tuple, np.ndarray] = {}
     placed: list[dict] = []
     for c in cues:
@@ -107,12 +134,12 @@ def render_track(cues: list[dict], total_sec: float) -> tuple[np.ndarray, dict]:
             out[a:b] += float(c.get("volume", 1.0)) * x[a - i0:b - i0]
         placed.append({"kind": c["kind"], "at": round(float(c["at"]), 4), "start": round(start, 4),
                        "length": p["length"], "clipped": bool(i0 < 0 or i0 + len(x) > n)})
+    peak_in = float(np.max(np.abs(out))) if n else 0.0
+    out = soft_limit(out, CEILING)
     peak = float(np.max(np.abs(out))) if n else 0.0
-    scale = 1.0
-    if peak > CEILING:
-        scale = CEILING / peak
-        out *= scale
-    return out, {"cues": placed, "peak": round(float(np.max(np.abs(out))), 4), "scaled": round(scale, 4)}
+    # scaled: 山の頂が上限で何割に丸められたか（1.0＝触っていない）
+    scale = round(peak / peak_in, 4) if peak_in > CEILING else 1.0
+    return out, {"cues": placed, "peak": round(peak, 4), "scaled": scale}
 
 
 # ── ffmpeg ──
@@ -165,24 +192,41 @@ def mux(video: Path, wav: Path, out: Path, audio_bitrate: str = "192k") -> Path:
     """映像はそのまま（-c:v copy）、音の道を AAC・48kHz・ステレオで足す。長さは映像に合わせる。"""
     out.parent.mkdir(parents=True, exist_ok=True)
     _ffmpeg(["-i", str(video), "-i", str(wav), "-map", "0:v:0", "-map", "1:a:0", "-c:v", "copy",
-             "-c:a", "aac", "-b:a", audio_bitrate, "-ar", str(synth.SR), "-ac", "2", "-shortest",
+             "-af", LIMITER, "-c:a", "aac", "-b:a", audio_bitrate, "-ar", str(synth.SR), "-ac", "2", "-shortest",
              "-fflags", "+bitexact", "-flags:a", "+bitexact", "-movflags", "+faststart", str(out)])
     return out
 
 
 def mux_cues(video: Path, cues: list[dict], out: Path, track_wav: Path | None = None,
-             min_gap_sec: float = DEFAULT_MIN_GAP_SEC) -> dict:
-    """打点を音の道にして映像へ足す。返り値: {file, track, duration, cues, dropped, peak, scaled, loudness}。"""
+             min_gap_sec: float = DEFAULT_MIN_GAP_SEC, bed: np.ndarray | None = None,
+             bed_gain: float = DEFAULT_BED_GAIN) -> dict:
+    """打点（と下に敷く BGM）を音の道にして映像へ足す。
+    返り値: {file, track, duration, cues, dropped, peak, scaled, loudness}。"""
     total = probe_duration(video)
     kept, dropped = thin_cues(cues, min_gap_sec)
-    track, report = render_track(kept, total)
+    track, report = render_track(kept, total, bed=bed, bed_gain=bed_gain)
     wav = track_wav or out.with_suffix(".wav")
     wav.parent.mkdir(parents=True, exist_ok=True)
-    wav.write_bytes(synth.wav_bytes(track))
+    base = track
+    wav.write_bytes(synth.wav_bytes(base))
     mux(video, wav, out)
+    loud = loudness(out)
+    trim_db = 0.0
+    for _ in range(3):
+        # AAC に通すと波形の山が戻ってくる（密な音ほど大きく、下げても単調には下がらない）。
+        # 測って、超えていれば超えた分＋余白だけ下げて入れ直す（最大3回）
+        tp = loud.get("true_peak_dbfs")
+        if tp is None or tp <= TRUE_PEAK_LIMIT_DBFS:
+            break
+        trim_db -= (tp - TRUE_PEAK_LIMIT_DBFS) + 0.3
+        track = base * (10.0 ** (trim_db / 20.0))
+        wav.write_bytes(synth.wav_bytes(track))
+        mux(video, wav, out)
+        loud = loudness(out)
     return {"file": out, "track": wav, "duration": round(total, 3), "cues": report["cues"],
             "dropped": [{"kind": c["kind"], "at": c["at"]} for c in dropped],
-            "peak": report["peak"], "scaled": report["scaled"], "loudness": loudness(out)}
+            "peak": round(float(np.max(np.abs(track))), 4), "scaled": report["scaled"],
+            "trim_db": round(trim_db, 2), "loudness": loud}
 
 
 # ── Remotion の描画ジョブへ足す口 ──
@@ -195,9 +239,12 @@ def _job_sfx(props: dict) -> tuple[list[dict], int]:
     return list(sfx), fps
 
 
-def mux_job(job_id: str, min_gap_sec: float = DEFAULT_MIN_GAP_SEC, seed: int = 0) -> dict:
-    """終わった Remotion の描画ジョブ（無音の out.mp4）に、その props の効果音を足して out_sfx.mp4 を作る。
-    置く場所は同じジョブのフォルダ（sfx_track.wav・sfx_cues.json も）。映像は触らない。"""
+def mux_job(job_id: str, min_gap_sec: float = DEFAULT_MIN_GAP_SEC, seed: int = 0, bgm: str | None = None,
+            bgm_gain: float = DEFAULT_BED_GAIN) -> dict:
+    """終わった Remotion の描画ジョブ（無音の out.mp4）に、その props の効果音（と BGM）を足して
+    out_sfx.mp4（bgm があれば out_sfx_{雰囲気}.mp4）を作る。置く場所は同じジョブのフォルダ
+    （sfx_track*.wav・sfx_cues.json・bgm_{雰囲気}.wav も）。映像は触らない。
+    bgm は予告編キットの雰囲気（kit.MOODS）。演出プラン（型 v2・bpm あり）の描画だけ使える。"""
     from app.core import jobs  # 循環 import を避ける
     if not job_id or "/" in job_id or "\\" in job_id or ".." in job_id:
         raise ValueError(f"job_id が正しくない: {job_id!r}")
@@ -212,12 +259,26 @@ def mux_job(job_id: str, min_gap_sec: float = DEFAULT_MIN_GAP_SEC, seed: int = 0
     video, props_path = d / "out.mp4", d / "props.json"
     if not video.is_file() or not props_path.is_file():
         raise FileNotFoundError(f"out.mp4 か props.json が無い: {job_id}")
-    sfx, fps = _job_sfx(json.loads(props_path.read_text(encoding="utf-8")))
+    props = json.loads(props_path.read_text(encoding="utf-8"))
+    sfx, fps = _job_sfx(props)
     cues = cues_from_timing(sfx, fps, seed=seed)
-    res = mux_cues(video, cues, d / "out_sfx.mp4", track_wav=d / "sfx_track.wav", min_gap_sec=min_gap_sec)
+    bed, bgm_report, suffix = None, None, ""
+    if bgm:
+        from app.core import timing
+        from app.core.audio import kit
+        if kit.MOODS.get(bgm) is None:
+            raise ValueError(f"bgm は {sorted(kit.MOODS)} のどれか: {bgm!r}")
+        if not props.get("bpm") or not props.get("shots"):
+            raise ValueError("bgm は演出プラン（型 v2・bpm とショットの並びがある描画）だけ")
+        bed, bgm_report = kit.render(timing.audiomap_from_props(props), bgm, fps=fps, seed=seed)
+        suffix = f"_{bgm}"
+        (d / f"bgm_{bgm}.wav").write_bytes(synth.wav_bytes(bed))
+    res = mux_cues(video, cues, d / f"out_sfx{suffix}.mp4", track_wav=d / f"sfx_track{suffix}.wav",
+                   min_gap_sec=min_gap_sec, bed=bed, bed_gain=bgm_gain)
     (d / "sfx_cues.json").write_text(json.dumps({"fps": fps, "cues": res["cues"], "dropped": res["dropped"]},
                                                 ensure_ascii=False, indent=2), encoding="utf-8")
     return {"job_id": job_id, "file": jobs.rel(res["file"]), "url": f"/files/{jobs.rel(res['file'])}",
             "track": jobs.rel(res["track"]), "duration": res["duration"], "cue_count": len(res["cues"]),
             "dropped_count": len(res["dropped"]), "cues": res["cues"], "dropped": res["dropped"],
-            "peak": res["peak"], "scaled": res["scaled"], "loudness": res["loudness"]}
+            "peak": res["peak"], "scaled": res["scaled"], "trim_db": res["trim_db"], "loudness": res["loudness"],
+            "bgm": bgm_report}

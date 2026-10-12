@@ -1,0 +1,26 @@
+{
+  "schema_version": "1.0.0",
+  "engine": {"name": "hyperframes", "version": "0.8.140"},
+  "profile": "insert",
+  "seed": "sample_typed_memo",
+  "fit": {"sec": 4.0},
+  "look": "sample",
+  "sounds": {
+    "key_a": {"kind": "type", "pitch": 240, "gain": 0.5, "seed": 101},
+    "key_b": {"kind": "type", "pitch": 205, "gain": 0.5, "seed": 102},
+    "key_c": {"kind": "type", "pitch": 275, "gain": 0.5, "seed": 103},
+    "key_enter": {"kind": "type", "length": 0.1, "pitch": 150, "gain": 0.7, "seed": 104},
+    "pop_hand": {"kind": "pop", "length": 0.16, "pitch": 700, "gain": 0.5, "seed": 105}
+  },
+  "sfx": [
+    {"id": "sfx-type-a", "sound": ["key_a", "key_b", "key_c"], "at": 0.5, "volume": 0.8,
+     "repeat": {"count": 13, "every": 0.07, "jitter": 0.012, "volume_jitter": 0.25, "seed": 5}},
+    {"id": "sfx-enter", "sound": "key_enter", "at": 1.52},
+    {"id": "sfx-type-b", "sound": ["key_b", "key_c", "key_a"], "at": 1.76, "volume": 0.8,
+     "repeat": {"count": 9, "every": 0.07, "jitter": 0.012, "volume_jitter": 0.25, "seed": 6}},
+    {"id": "sfx-hand", "sound": "pop_hand", "at": 2.7}
+  ],
+  "slug": "typed-memo",
+  "poster_sec": 3.0,
+  "notes": "見本（A0 の続き・ユーザーの案）。調書のメモが1字ずつタイプされる。字が現れる時刻は等間隔（0.07秒）で、タイピングの音（type）は同じ打点から ±12ms 揺らし・音量も揺らして人が打っているように聞こえる。行末に Enter（低い type）、朱書きが現れる時に pop。絵の時刻（HTML の data-at・data-every）は motion.json の sfx の at・every と同じ値。字幕の帯（下から20%）には文字を置かない。内容は架空。"
+}

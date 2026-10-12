@@ -10,6 +10,16 @@
           `at` は部品の基準点（sfx_synth.anchor）: 頭が打点＝既定。riser・suck は**終わり**が打点で、
           `data-start` は `at − length` になる（打点から逆算）。
 
+連打（タイピングなど）の書き方（A0 の続き）。1件で何十個も置ける。展開した id は `{id}-00`, `{id}-01`…:
+
+    {"id": "sfx-type", "sound": ["key_a", "key_b", "key_c"], "at": 0.8, "volume": 0.8,
+     "repeat": {"count": 13, "every": 0.07, "jitter": 0.012, "volume_jitter": 0.25, "seed": 5}}
+    {"id": "sfx-hits", "sound": "pop", "at": [1.0, 1.4, 2.2]}            # 打点を並べる
+
+- `sound` は名前の並びでもよい（順に使い回す＝同じ音の連打にしない）。
+- `repeat`: count（最大 200）・every（秒）・jitter（打点を ±この秒だけ揺らす・種で決まる）・volume_jitter（0〜1・音量を下へ揺らす）・seed。
+  絵の側（GSAP の文字送り）は揺らさず `every` の等間隔にし、音だけを少し揺らすと人が打っているように聞こえる。
+
 `prepare` が WAV を作り、index.html のルートの中に <audio> を書く。書く範囲は次の目印の間だけ:
 
     <!-- sfx:begin … -->  …  <!-- sfx:end -->
@@ -53,6 +63,61 @@ def sound_file(name: str) -> str:
     return f"{SFX_DIR}/{name}.wav"
 
 
+MAX_REPEAT = 200   # 1件で置ける個数の上限（<audio> が増えすぎない）
+
+
+def _is_num(v) -> bool:
+    return isinstance(v, (int, float)) and not isinstance(v, bool)
+
+
+def _expand(cid: str, c: dict) -> tuple[list[dict], list[dict]]:
+    """1件の置き場所を、置く音1つずつの {id, sound, at, volume} に展開する。
+    単発（at が数）なら id はそのまま。at が並び・repeat なら `{id}-NN`。誤りは (空, 指摘)。"""
+    snd, at, rep = c.get("sound"), c.get("at"), c.get("repeat")
+    vol = c.get("volume", 1.0)
+    names = snd if isinstance(snd, list) else [snd]
+    if not names or not all(isinstance(n, str) for n in names):
+        return [], [_issue("sfx_unknown_sound", f"{cid}: sound は音の名前か、名前の並び: {snd!r}")]
+    if rep is None and not isinstance(at, list):
+        return [{"id": cid, "sound": names[0], "at": at, "volume": vol}], []
+    if rep is not None:
+        if not isinstance(rep, dict):
+            return [], [_issue("sfx_bad_repeat", f"{cid}: repeat は {{count, every, jitter, volume_jitter, seed}} の辞書")]
+        if isinstance(at, list):
+            return [], [_issue("sfx_bad_repeat", f"{cid}: repeat と at の並びは同時に使えない（at は始めの1つだけ）")]
+        count, every = rep.get("count"), rep.get("every")
+        jitter, vj, seed = rep.get("jitter", 0.0), rep.get("volume_jitter", 0.0), rep.get("seed", 0)
+        if isinstance(count, bool) or not isinstance(count, int) or not (1 <= count <= MAX_REPEAT):
+            return [], [_issue("sfx_bad_repeat", f"{cid}: repeat.count は 1〜{MAX_REPEAT} の整数: {count!r}")]
+        if not _is_num(every) or every < 0.01:
+            return [], [_issue("sfx_bad_repeat", f"{cid}: repeat.every は 0.01 秒以上: {every!r}")]
+        if not _is_num(jitter) or not (0 <= jitter <= every / 2):
+            return [], [_issue("sfx_bad_repeat", f"{cid}: repeat.jitter は 0〜every/2 秒: {jitter!r}")]
+        if not _is_num(vj) or not (0 <= vj <= 1):
+            return [], [_issue("sfx_bad_repeat", f"{cid}: repeat.volume_jitter は 0〜1: {vj!r}")]
+        if isinstance(seed, bool) or not isinstance(seed, int):
+            return [], [_issue("sfx_bad_repeat", f"{cid}: repeat.seed は整数: {seed!r}")]
+        if not _is_num(at) or at < 0:
+            return [], [_issue("sfx_bad_at", f"{cid}: at は 0 以上の秒: {at!r}")]
+        if not _is_num(vol):
+            return [], [_issue("sfx_bad_volume", f"{cid}: volume は 0〜{MAX_VOLUME}: {vol!r}")]
+        ut = sfx_synth._unit(count, seed, 1)
+        uv = sfx_synth._unit(count, seed, 2)
+        out = []
+        for k in range(count):
+            t = float(at) + k * float(every) + (float(ut[k]) * 2.0 - 1.0) * float(jitter)
+            out.append({"id": f"{cid}-{k:02d}", "sound": names[k % len(names)], "at": max(0.0, round(t, 4)),
+                        "volume": round(float(vol) * (1.0 - float(vj) * float(uv[k])), 4)})
+        return out, []
+    # at の並び
+    if not at or len(at) > MAX_REPEAT or not all(_is_num(t) and t >= 0 for t in at):
+        return [], [_issue("sfx_bad_at", f"{cid}: at の並びは 0 以上の秒を1〜{MAX_REPEAT}個: {at!r}")]
+    if not _is_num(vol):
+        return [], [_issue("sfx_bad_volume", f"{cid}: volume は 0〜{MAX_VOLUME}: {vol!r}")]
+    return [{"id": f"{cid}-{k:02d}", "sound": names[k % len(names)], "at": float(t), "volume": vol}
+            for k, t in enumerate(at)], []
+
+
 def resolve(motion: dict | None) -> tuple[list[dict], dict[str, dict], list[dict]]:
     """motion.json の sounds・sfx を読み、検査して解く。
     返り値: (置く音のリスト, 有効な音の定義 {名前: 正規化した引数}, 指摘)。誤りのある項目は落とす。"""
@@ -92,31 +157,36 @@ def resolve(motion: dict | None) -> tuple[list[dict], dict[str, dict], list[dict
         if not isinstance(cid, str) or not _NAME_RE.match(cid):
             issues.append(_issue("sfx_bad_id", f"{label}: id は英数字・-・_ だけ（<audio> の id になる）: {cid!r}"))
             continue
-        if cid in seen:
-            issues.append(_issue("sfx_duplicate_id", f"{label}: id {cid} が重なっている"))
+        items, errs = _expand(cid, c)
+        if errs:
+            issues += errs
             continue
-        seen.add(cid)
-        sound = c.get("sound")
-        if not isinstance(sound, str) or sound not in raw_sounds:
-            issues.append(_issue("sfx_unknown_sound", f"{cid}: sounds に {sound!r} が無い"))
-            continue
-        if sound not in sounds:      # 定義の誤りは上で指摘済み
-            continue
-        at, vol = c.get("at"), c.get("volume", 1.0)
-        if isinstance(at, bool) or not isinstance(at, (int, float)) or at < 0:
-            issues.append(_issue("sfx_bad_at", f"{cid}: at は 0 以上の秒: {at!r}"))
-            continue
-        if isinstance(vol, bool) or not isinstance(vol, (int, float)) or not (0 <= vol <= MAX_VOLUME):
-            issues.append(_issue("sfx_bad_volume", f"{cid}: volume は 0〜{MAX_VOLUME}: {vol!r}"))
-            continue
-        p = sounds[sound]
-        start = float(at) - p["length"] if sfx_synth.anchor(p["kind"]) == "end" else float(at)
-        if start < -1e-9:
-            issues.append(_issue("sfx_before_start", f"{cid}: 打点 {at:g} 秒に頂点を合わせると頭が {start:g} 秒になる"
-                                                      f"（{sound} の length {p['length']:g} を短くするか at を遅らせる）"))
-            continue
-        cues.append({"id": cid, "sound": sound, "kind": p["kind"], "at": float(at), "start": max(0.0, start),
-                     "length": p["length"], "volume": float(vol), "file": sound_file(sound)})
+        for it in items:
+            iid = it["id"]
+            if iid in seen:
+                issues.append(_issue("sfx_duplicate_id", f"{label}: id {iid} が重なっている"))
+                continue
+            seen.add(iid)
+            sound, at, vol = it["sound"], it["at"], it["volume"]
+            if not isinstance(sound, str) or sound not in raw_sounds:
+                issues.append(_issue("sfx_unknown_sound", f"{iid}: sounds に {sound!r} が無い"))
+                continue
+            if sound not in sounds:      # 定義の誤りは上で指摘済み
+                continue
+            if isinstance(at, bool) or not isinstance(at, (int, float)) or at < 0:
+                issues.append(_issue("sfx_bad_at", f"{iid}: at は 0 以上の秒: {at!r}"))
+                continue
+            if isinstance(vol, bool) or not isinstance(vol, (int, float)) or not (0 <= vol <= MAX_VOLUME):
+                issues.append(_issue("sfx_bad_volume", f"{iid}: volume は 0〜{MAX_VOLUME}: {vol!r}"))
+                continue
+            p = sounds[sound]
+            start = float(at) - p["length"] if sfx_synth.anchor(p["kind"]) == "end" else float(at)
+            if start < -1e-9:
+                issues.append(_issue("sfx_before_start", f"{iid}: 打点 {at:g} 秒に頂点を合わせると頭が {start:g} 秒になる"
+                                                          f"（{sound} の length {p['length']:g} を短くするか at を遅らせる）"))
+                continue
+            cues.append({"id": iid, "sound": sound, "kind": p["kind"], "at": float(at), "start": max(0.0, start),
+                         "length": p["length"], "volume": float(vol), "file": sound_file(sound)})
     return cues, sounds, issues
 
 

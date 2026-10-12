@@ -10,6 +10,8 @@ numpy だけで 48kHz・16bit・モノラルの WAV を作る。外部の音源�
     glitch   ビットを落とした断片                    HUD・乱れ
     braam    低音の和音を歪ませた持続                タイトル
     suck     逆再生のシンバル風                      無音へ吸い込む直前
+    type     キーボードを打つ1打（種で1打ごとに揺れる）  タイピング・文字送り
+    pop      丸い「ポッ」                            文字や語が現れる時
 
 全て (length, pitch, gain, seed) を取る:
     length  秒。WAV の長さそのもの（sample 数は round(length * 48000)）
@@ -298,11 +300,42 @@ def suck(length: float = 1.0, pitch: float = 3000.0, gain: float = 0.8, seed: in
     return _finish(cymbal[::-1], gain, fade_in=0.01, fade_out=0.002)
 
 
+def key_type(length: float = 0.07, pitch: float = 240.0, gain: float = 0.5, seed: int = 0) -> np.ndarray:
+    """タイピングの1打（キーボードの「カタッ」）。低い胴鳴り＋打鍵の硬い音＋底づきの鈍い音。
+    種で1打ごとに音程が±6%・打鍵の音の高さが揺れる（連打を機械的にしない）。
+    pitch が低いと「ゴトッ」と深く、高いと「カチッ」と軽い（目安: 160〜400）。"""
+    n = _count(length)
+    t = _times(n)
+    r = _unit(4, seed, 0)
+    p = pitch * (0.94 + 0.12 * float(r[0]))
+    thock = np.sin(_phase(p * (1.0 + 0.9 * np.exp(-t / 0.012)))) * np.exp(-t / 0.022)
+    knock = 0.35 * np.sin(2.0 * np.pi * p * 2.1 * t) * np.exp(-t / 0.012)
+    fc = 3200.0 * (0.85 + 0.3 * float(r[1]))
+    clack = _stft_filter(noise(n, seed, 1), _band(lambda tc: np.full_like(tc, fc), 0.8)) * np.exp(-t / 0.004)
+    bottom = _stft_filter(noise(n, seed, 2), _lowpass(900.0, 2)) * np.exp(-t / 0.008)
+    tip = _stft_filter(noise(n, seed, 3), _highpass(5000.0, 2)) * np.exp(-t / 0.0015)
+    s = lambda a: a / max(1e-9, float(np.max(np.abs(a))))   # noqa: E731
+    x = thock + knock + 0.8 * s(clack) + 0.45 * s(bottom) + 0.25 * s(tip)
+    return _finish(np.tanh(1.2 * x), gain, fade_in=0.0002, fade_out=min(0.006, length / 3.0))
+
+
+def pop(length: float = 0.14, pitch: float = 880.0, gain: float = 0.5, seed: int = 0) -> np.ndarray:
+    """文字や語が「ポッ」と現れる音。下から立ち上がって落ち着く丸い音に、少しの空気の雑音。"""
+    n = _count(length)
+    t = _times(n)
+    f = pitch * (0.72 + 0.28 * (1.0 - np.exp(-t / 0.02)))
+    body = np.sin(_phase(f)) * _ramp(t, 0.002) * np.exp(-t / 0.035)
+    over = 0.25 * np.sin(2.0 * np.pi * pitch * 2.0 * t) * np.exp(-t / 0.02)
+    air = _stft_filter(noise(n, seed, 0), _band(lambda tc: np.full_like(tc, pitch * 3.0), 1.0)) * np.exp(-t / 0.01)
+    air = air / max(1e-9, float(np.max(np.abs(air)))) * 0.25
+    return _finish(body + over + air, gain, fade_in=0.001, fade_out=min(0.01, length / 3.0))
+
+
 # ── 部品表・入口 ──
 
 PARTS: dict[str, Callable[..., np.ndarray]] = {
     "whoosh": whoosh, "riser": riser, "impact": impact, "stamp": stamp,
-    "tick": tick, "glitch": glitch, "braam": braam, "suck": suck,
+    "tick": tick, "glitch": glitch, "braam": braam, "suck": suck, "type": key_type, "pop": pop,
 }
 
 # 置く時の基準点。"start"（既定）は WAV の頭が打点。"end" は WAV の終わりが打点（打点から逆算して置く）
@@ -312,6 +345,7 @@ PITCH_MEANING: dict[str, str] = {
     "whoosh": "山の頂での帯域の中心（Hz）", "riser": "始めの音程（Hz・終わりで8倍）", "impact": "落ち着く低音（Hz）",
     "stamp": "打撃の低音（Hz）", "tick": "クリックの音程（Hz）", "glitch": "断片の基準の音程（Hz）",
     "braam": "和音の根音（Hz）", "suck": "金属音の基準（Hz）",
+    "type": "胴鳴りの音程（Hz・低いとゴトッ、高いとカチッ）", "pop": "落ち着く音程（Hz）",
 }
 
 

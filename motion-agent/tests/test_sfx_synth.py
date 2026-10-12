@@ -17,8 +17,9 @@ def _read(data: bytes):
     return w, pcm
 
 
-def test_the_eight_parts_exist():
-    assert KINDS == sorted(["whoosh", "riser", "impact", "stamp", "tick", "glitch", "braam", "suck"])
+def test_the_parts_exist():
+    # 計画 §9-2 の8部品＋タイピング（type）・文字が現れる音（pop）
+    assert KINDS == sorted(["whoosh", "riser", "impact", "stamp", "tick", "glitch", "braam", "suck", "type", "pop"])
 
 
 # ── 長さ ──
@@ -166,6 +167,32 @@ def test_stamp_is_a_low_thump():
     m = np.abs(np.fft.rfft(x))
     f = np.fft.rfftfreq(len(x), 1 / S.SR)
     assert f[int(np.argmax(m))] < 400
+
+
+def test_type_is_a_short_key_strike_that_varies_by_seed():
+    x = S.synth("type", seed=3)
+    assert len(x) == round(0.07 * S.SR)
+    h = len(x) // 3
+    assert np.sum(x[:h] ** 2) > 4 * np.sum(x[h:] ** 2)            # 頭に集まる
+    # 低い pitch の方が低音寄り（スペクトルの重心が低い）
+    def centroid(v):
+        m = np.abs(np.fft.rfft(v * np.hanning(len(v))))
+        f = np.fft.rfftfreq(len(v), 1 / S.SR)
+        return float((m * f).sum() / m.sum())
+    assert centroid(S.synth("type", pitch=160.0, seed=3)) < centroid(S.synth("type", pitch=400.0, seed=3))
+    # 打ごとに揺れる（種が違えば波形が違い、同じ打の連続にならない）
+    a, b = S.synth("type", seed=1), S.synth("type", seed=2)
+    assert float(np.max(np.abs(a - b))) > 0.05 * float(np.max(np.abs(a)))
+
+
+def test_pop_is_round_and_front_loaded():
+    x = S.synth("pop")
+    assert len(x) == round(0.14 * S.SR)
+    h = int(0.06 * S.SR)
+    assert np.sum(x[:h] ** 2) > 4 * np.sum(x[h:] ** 2)
+    m = np.abs(np.fft.rfft(x))
+    f = np.fft.rfftfreq(len(x), 1 / S.SR)
+    assert 400 < f[int(np.argmax(m))] < 2000
 
 
 def test_glitch_has_gaps():

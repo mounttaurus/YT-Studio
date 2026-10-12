@@ -17,7 +17,9 @@
 - GET  /hf/info・/hf/projects/{pid}/{ep}  HyperFrames の版・見本・話のコンポジション
 - POST /hf/check|stills|render            HyperFrames の検査・静止画・描画（target を本文で渡す）
 - GET  /audio/sfx・/audio/sfx/{kind}.wav  効果音の部品の一覧・試聴用の WAV（手続き合成・A0）
-- POST /jobs/{job_id}/sfx                 終わった Remotion の描画ジョブに効果音を足した out_sfx.mp4 を作る（A0）
+- POST /jobs/{job_id}/sfx                 終わった Remotion の描画ジョブに効果音（と BGM）を足した out_sfx.mp4 を作る（A0・A2）
+- GET  /audio/kit・/audio/kit/{mood}.wav  予告編キット（BGM の手続き合成）の雰囲気の一覧・試聴用の WAV（A2）
+- GET  /audio/map・/plans/{pid}/{ep}/audiomap  拍の格子から作る拍の地図（audiomap.json・A1）
 """
 from __future__ import annotations
 
@@ -242,6 +244,19 @@ async def plan_put(project_id: str, episode: int, body: PlanBody):
     return {"saved": saved, "analysis": plan_mod.summarize(meta, plan_store.canonicalize(plan), config.SHARED_DIR)}
 
 
+@router.get("/plans/{project_id}/{episode}/audiomap")
+async def plan_audiomap(project_id: str, episode: int):
+    """保存済みの演出プランの拍の地図（拍の格子から作る・A1）。検査に誤りがあれば 422。"""
+    plan = _store(plan_store.load, project_id, episode)
+    if plan is None:
+        raise HTTPException(status_code=404, detail="演出プランがありません（PUT で保存してください）")
+    a = plan_mod.analyze(_plan_meta(plan), plan, config.SHARED_DIR)
+    tl = a.get("timeline")
+    if not tl:
+        raise HTTPException(status_code=422, detail={"message": "時間の表が作れない（検査の誤り）", "errors": a.get("errors")})
+    return tl["audiomap"]
+
+
 @router.get("/plans/{project_id}/{episode}/history")
 async def plan_history(project_id: str, episode: int):
     return {"history": _store(plan_store.history, project_id, episode)}
@@ -364,6 +379,8 @@ async def audio_sfx_wav(kind: str, length: float | None = None, pitch: float | N
 class SfxMuxRequest(BaseModel):
     min_gap_sec: float = Field(0.1, ge=0.0, le=2.0, description="同じ部品の打点がこれより近ければ後ろを間引く")
     seed: int = 0
+    bgm: str | None = Field(None, description="予告編キットの雰囲気（dread・drive・hush）。演出プラン（型 v2）の描画だけ")
+    bgm_gain: float = Field(0.55, ge=0.0, le=1.0, description="BGM の音量（効果音の下に敷く）")
 
 
 @router.post("/jobs/{job_id}/sfx")
@@ -374,10 +391,37 @@ async def job_sfx(job_id: str, req: SfxMuxRequest | None = None):
     from app.core.audio import mix
     req = req or SfxMuxRequest()
     try:
-        return await asyncio.to_thread(mix.mux_job, job_id, req.min_gap_sec, req.seed)
+        return await asyncio.to_thread(mix.mux_job, job_id, req.min_gap_sec, req.seed, req.bgm, req.bgm_gain)
     except FileNotFoundError as e:
         raise HTTPException(status_code=404, detail=str(e)) from e
     except ValueError as e:
         raise HTTPException(status_code=422, detail=str(e)) from e
     except mix.MixError as e:
         raise HTTPException(status_code=500, detail=str(e)) from e
+
+
+@router.get("/audio/map")
+async def audio_map(bpm: float = Query(120.0, ge=60, le=200), fps: int = Query(30, ge=24, le=60)):
+    """拍の格子から作る拍の地図（型 v1 の既定の長さ・見本）。形は analyze-beatgrid.py の audiomap.json（version 2）。
+    演出プランの地図は GET /plans/{pid}/{ep}/audiomap。"""
+    from app.core.audio import kit
+    return kit.demo_audiomap(bpm, fps)
+
+
+@router.get("/audio/kit")
+async def audio_kit():
+    """予告編キット（BGM の手続き合成・§9-3）の雰囲気の一覧。"""
+    from app.core.audio import kit
+    return {"moods": kit.moods()}
+
+
+@router.get("/audio/kit/{mood}.wav")
+async def audio_kit_wav(mood: str, bpm: float = Query(120.0, ge=60, le=200), fps: int = Query(30, ge=24, le=60),
+                        seed: int = 0):
+    """試聴用の BGM（型 v1 の既定の長さ・①〜⑤の構造）。同じ引数なら同じバイト列（M2）。"""
+    from app.core.audio import kit, sfx_synth
+    try:
+        x, _ = kit.render(kit.demo_audiomap(bpm, fps), mood, fps=fps, seed=seed)
+    except kit.KitError as e:
+        raise HTTPException(status_code=422, detail=str(e)) from e
+    return Response(content=sfx_synth.wav_bytes(x), media_type="audio/wav")

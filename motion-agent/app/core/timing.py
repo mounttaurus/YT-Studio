@@ -7,6 +7,8 @@
 """
 from __future__ import annotations
 
+import math
+
 BEATS = ("b1_first", "b2_flow", "b3_montage", "b4_out", "b5_title")
 
 
@@ -195,9 +197,11 @@ def plan_timeline(meta: dict, bpm: float, shots: list[dict]) -> dict:
     for it in out:
         b = beats.setdefault(it["beat"], {"from": it["from"], "to": it["to"]})
         b["from"], b["to"] = min(b["from"], it["from"]), max(b["to"], it["to"])
-    return {"fps": fps, "bpm": bpm, "bar_sec": bar_sec(bpm), "total_frames": out[-1]["to"] if out else 0,
-            "total_sec": round((out[-1]["to"] if out else 0) / fps, 3), "shots": out, "beats": beats,
-            "sfx": plan_sfx(out)}
+    sfx = plan_sfx(out)
+    total_frames = out[-1]["to"] if out else 0
+    return {"fps": fps, "bpm": bpm, "bar_sec": bar_sec(bpm), "total_frames": total_frames,
+            "total_sec": round(total_frames / fps, 3), "shots": out, "beats": beats,
+            "sfx": sfx, "audiomap": audiomap_from_grid(fps, bpm, total_frames, beats, sfx)}
 
 
 def plan_sfx(shots: list[dict]) -> list[dict]:
@@ -217,3 +221,157 @@ def plan_sfx(shots: list[dict]) -> list[dict]:
             sfx.append({"frame": it["from"], "kind": "impact"})
     sfx.sort(key=lambda x: (x["frame"], x["kind"]))
     return sfx
+
+
+# ===== 拍の地図（A1・Docs/MOTION_UNIFIED_PLAN.md §9-5） =============================================
+# HyperFrames の music-to-video の analyze-beatgrid.py が出す audiomap.json（version 2）と同じ形。
+# 拍の格子から作る時は `source: "grid"`（曲を解析する A3 では `source: "analysis"`）。
+# 絵・効果音・BGM（A2）は、どちらの地図も同じに読める。時間の本籍はこのファイル（M1）。
+
+AUDIOMAP_VERSION = 2
+PHRASE_BARS = 4
+# メトロノーム上の位置（16分音符16個で1小節）の強さ。analyze-beatgrid.py の GRID_CLASS と同じ
+_GRID_CLASS = {0: "strong", 8: "strong", 4: "weak", 12: "weak", 2: "weak", 6: "weak", 10: "weak", 14: "weak"}
+_OFF_GRID = 0.35   # 16分の格子から、16分の何割以上ずれたら off-grid か
+# 計画 §9-3（予告編キット）の意図: ビートごとの音の段。VOID が「無音の落とし」
+BEAT_ENERGY: dict[str, tuple[str, float, str]] = {
+    "b1_first": ("LOW", 0.45, "heavy"),
+    "b2_flow": ("MEDIUM", 0.6, "full"),
+    "b3_montage": ("HIGH", 0.9, "bright"),
+    "b4_out": ("VOID", 0.0, "sparse"),
+    "b5_title": ("HIGH", 0.85, "heavy"),
+}
+# 効果音の kind → 地図の drum と special（analyze-beatgrid.py の語彙）
+_CUE_DRUM = {"impact": ("kick", None), "hit": ("snare", None), "whoosh": ("hihat", None),
+             "flash": ("perc", "hard_stop"), "riser": ("perc", "riser")}
+_CUE_FEEL = {"impact": "heavy", "hit": "full", "whoosh": "bright", "flash": "sparse", "riser": "bright"}
+
+
+def beat_spans(shots: list[dict]) -> dict[str, dict]:
+    """ショットの並び（beat・from・to）→ ビートごとの {from, to}（フレーム）。plan_timeline の beats と同じ集め方。"""
+    out: dict[str, dict] = {}
+    for it in shots:
+        b = out.setdefault(it["beat"], {"from": it["from"], "to": it["to"]})
+        b["from"], b["to"] = min(b["from"], it["from"]), max(b["to"], it["to"])
+    return out
+
+
+def _position(t_sec: float, beat_sec: float) -> tuple[int, int, int, str]:
+    """時刻 → (小節 0始まり, 小節内の拍 1〜4, 16分の位置 0〜15, 格子の強さ)。"""
+    pos16 = t_sec / beat_sec * 4.0
+    step = int(round(pos16))
+    off = abs(pos16 - step)
+    step16 = step % 16
+    bar = step // 16
+    beat_in_bar = (step16 // 4) + 1
+    cls = "off-grid" if off > _OFF_GRID else _GRID_CLASS.get(step16, "syncopated")
+    return bar, beat_in_bar, step16, cls
+
+
+def audiomap_from_grid(fps: int, bpm: float, total_frames: int, beats: dict[str, dict], sfx: list[dict]) -> dict:
+    """拍の格子から作る拍の地図（`source: "grid"`）。形は analyze-beatgrid.py の audiomap.json（version 2）。
+    入力は plan_timeline の出力（fps・bpm・total_frames・beats・sfx）か、描画ジョブの props から取れる同じ値。
+    beats は {ビート名: {from, to}}（フレーム）、sfx は [{frame, kind}]。"""
+    beat_sec = 60.0 / bpm
+    total_sec = total_frames / fps
+    n_beats = max(0, int(math.ceil(total_sec / beat_sec - 1e-9)))
+    beats_sec = [round(k * beat_sec, 3) for k in range(n_beats)]
+    downbeats = beats_sec[::BEATS_PER_BAR]
+
+    # 段（energy_phases）: ビートの並びの順
+    phases: list[dict] = []
+    for name in BEATS:
+        if name not in beats:
+            continue
+        lvl, en, feel = BEAT_ENERGY[name]
+        phases.append({"start": round(beats[name]["from"] / fps, 3), "end": round(beats[name]["to"] / fps, 3),
+                       "level": lvl, "energy": en, "name": name, "feel": {"character": feel, "bands": []}})
+    phases.sort(key=lambda x: x["start"])
+
+    def energy_at(t: float) -> float:
+        for ph in phases:
+            if ph["start"] - 1e-9 <= t < ph["end"] - 1e-9:
+                return ph["energy"]
+        return 0.0
+
+    events: list[dict] = []
+    for c in sorted(sfx, key=lambda x: (x["frame"], x["kind"])):
+        t = c["frame"] / fps
+        bar, bib, step16, cls = _position(t, beat_sec)
+        drum, special = _CUE_DRUM.get(c["kind"], ("perc", None))
+        events.append({"t": round(t, 3), "bar": bar, "beat_in_bar": bib, "step16": step16, "grid": cls, "drum": drum,
+                       "energy": energy_at(t), "feel": _CUE_FEEL.get(c["kind"], "full"), "special": special,
+                       "cue": c["kind"]})
+
+    # 山と谷（段の境目の変化）。analyze-beatgrid.py と同じく |変化| > 0.12・大きい順に最大8
+    moments = []
+    for prev, nxt in zip(phases, phases[1:]):
+        d = round(nxt["energy"] - prev["energy"], 2)
+        if abs(d) > 0.12:
+            moments.append({"t": nxt["start"], "kind": "DROP" if d < 0 else "SURGE", "delta": d})
+    moments.sort(key=lambda m: abs(m["delta"]), reverse=True)
+    hard_stops = [m for m in moments if m["kind"] == "DROP" and m["t"] > total_sec * 0.6 and m["delta"] < -0.25]
+
+    # 連打（rolls）: 同じ段の中で 4つ以上続く hit を1本の連打として数える（③のカット）
+    rolls = []
+    hits = [e for e in events if e["cue"] == "hit"]
+    if len(hits) >= 4:
+        t0, t1 = hits[0]["t"], hits[-1]["t"]
+        gaps = [b["t"] - a["t"] for a, b in zip(hits, hits[1:])]
+        half = len(gaps) // 2
+        accel = half >= 1 and sum(gaps[half:]) / (len(gaps) - half) < sum(gaps[:half]) / half * 0.85
+        rolls.append({"start": t0, "end": t1, "dur_sec": round(t1 - t0, 3), "hits": len(hits),
+                      "rate_per_min": round((len(hits) - 1) / max(t1 - t0, 1e-6) * 60),
+                      "kind": "accel-roll" if accel else "fill", "drum": "snare",
+                      "leads_to": next((m["kind"] for m in moments if 0 <= m["t"] - t1 <= 1.2), None)})
+
+    # 段ごとの密度（打点の数と連打）
+    for ph in phases:
+        span = max(1e-6, ph["end"] - ph["start"])
+        ons = [e for e in events if ph["start"] - 1e-9 <= e["t"] < ph["end"] - 1e-9]
+        ph_rolls = [{"start": r["start"], "end": r["end"], "kind": r["kind"], "drum": r["drum"]}
+                    for r in rolls if r["start"] < ph["end"] and r["end"] > ph["start"]]
+        ph["onsets"] = len(ons)
+        ph["onsetRate"] = round(len(ons) / span, 1)
+        ph["rolls"] = ph_rolls
+        ph["hardStops"] = [h["t"] for h in hard_stops if ph["start"] - 1e-9 <= h["t"] <= ph["end"] + 1e-9]
+        ph["density"] = ("sparse" if ph["energy"] < 0.2 or len(ons) < 6 else
+                         "dense" if len(ons) >= 18 or ph_rolls else "medium")
+
+    phrases = []
+    for i in range(0, len(downbeats), PHRASE_BARS):
+        end = downbeats[i + PHRASE_BARS] if i + PHRASE_BARS < len(downbeats) else round(total_sec, 3)
+        phrases.append({"index": len(phrases), "start": downbeats[i], "end": end,
+                        "bars": min(PHRASE_BARS, len(downbeats) - i)})
+
+    drums: dict[str, int] = {}
+    grids: dict[str, int] = {}
+    for e in events:
+        drums[e["drum"]] = drums.get(e["drum"], 0) + 1
+        grids[e["grid"]] = grids.get(e["grid"], 0) + 1
+    summary = (f"{bpm:g} BPM · {len(beats_sec)} beats / {len(downbeats)} bars · {len(events)} events ({drums}) · "
+               f"{len(rolls)} rolls · {len(phases)} energy phases · {total_sec:.1f}s（grid）")
+    return {
+        "version": AUDIOMAP_VERSION,
+        "source": "grid",
+        "phraseBars": PHRASE_BARS,
+        "summary": summary,
+        "audio": {"path": None, "duration_sec": round(total_sec, 3), "sr": None},
+        "tempo": {"bpm": round(float(bpm), 1), "beats_per_bar": BEATS_PER_BAR, "downbeat_phase": 0,
+                  "n_beats": len(beats_sec), "n_bars": len(downbeats)},
+        "grid": {"beats_sec": beats_sec, "downbeats_sec": downbeats},
+        "energy_phases": phases,
+        "key_moments": moments[:8],
+        "hard_stops": hard_stops,
+        "rolls": rolls,
+        "silences": [{"start": ph["start"], "end": ph["end"]} for ph in phases if ph["level"] == "VOID"],
+        "stats": {"drum_counts": drums, "grid_counts": grids},
+        "events": events,
+        "phrases": phrases,
+    }
+
+
+def audiomap_from_props(props: dict) -> dict:
+    """v2 の描画入力（props）から拍の地図を作る。props は bpm・fps・total_frames・shots・sfx を持つ。"""
+    return audiomap_from_grid(int(props["fps"]), float(props["bpm"]), int(props["total_frames"]),
+                              beat_spans(props["shots"]), list(props.get("sfx") or []))

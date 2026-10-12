@@ -207,3 +207,107 @@ def test_sample_person_intro_sfx_is_in_sync_and_clean(tmp_path):
     cues, _, issues = hf_sfx.resolve(motion)
     assert issues == [] and len(cues) == 14
     assert {c["kind"] for c in cues} == {"tick", "whoosh", "impact"}
+
+
+# ── 連打（タイピング）・打点の並び ──
+
+TYPING = {
+    "sounds": {
+        "key_a": {"kind": "type", "pitch": 240, "gain": 0.5, "seed": 1},
+        "key_b": {"kind": "type", "pitch": 210, "gain": 0.5, "seed": 2},
+        "key_c": {"kind": "type", "pitch": 270, "gain": 0.5, "seed": 3},
+        "ding": {"kind": "pop", "gain": 0.4},
+    },
+    "sfx": [
+        {"id": "sfx-type", "sound": ["key_a", "key_b", "key_c"], "at": 0.8, "volume": 0.8,
+         "repeat": {"count": 10, "every": 0.07, "jitter": 0.012, "volume_jitter": 0.25, "seed": 5}},
+        {"id": "sfx-end", "sound": "ding", "at": [1.9, 2.4]},
+    ],
+}
+
+
+def test_repeat_expands_into_numbered_cues_with_rotation_and_jitter():
+    cues, _, issues = hf_sfx.resolve(TYPING)
+    assert issues == []
+    typed = [c for c in cues if c["id"].startswith("sfx-type-")]
+    assert [c["id"] for c in typed] == [f"sfx-type-{k:02d}" for k in range(10)]
+    assert [c["sound"] for c in typed[:4]] == ["key_a", "key_b", "key_c", "key_a"]      # 順に使い回す
+    for k, c in enumerate(typed):
+        assert abs(c["at"] - (0.8 + 0.07 * k)) <= 0.012 + 1e-9                         # 等間隔から ±jitter
+        assert 0.8 * 0.75 - 1e-9 <= c["volume"] <= 0.8 + 1e-9                          # 音量は下へ揺れる
+    assert len({c["at"] for c in typed}) == 10 and len({c["volume"] for c in typed}) > 3   # 揺れている
+    ends = [c for c in cues if c["id"].startswith("sfx-end-")]
+    assert [(c["id"], c["at"]) for c in ends] == [("sfx-end-00", 1.9), ("sfx-end-01", 2.4)]
+
+
+def test_repeat_is_deterministic_and_seed_changes_it():
+    a, _, _ = hf_sfx.resolve(TYPING)
+    b, _, _ = hf_sfx.resolve(TYPING)
+    assert a == b
+    other = json.loads(json.dumps(TYPING))
+    other["sfx"][0]["repeat"]["seed"] = 6
+    c, _, _ = hf_sfx.resolve(other)
+    assert [x["at"] for x in a] != [x["at"] for x in c]
+
+
+def test_repeat_without_jitter_is_exact():
+    m = {"sounds": TYPING["sounds"], "sfx": [{"id": "t", "sound": "key_a", "at": 1.0, "repeat": {"count": 4, "every": 0.1}}]}
+    cues, _, issues = hf_sfx.resolve(m)
+    assert issues == [] and [c["at"] for c in cues] == pytest.approx([1.0, 1.1, 1.2, 1.3])
+    assert {c["volume"] for c in cues} == {1.0}
+
+
+@pytest.mark.parametrize("sfx", [
+    {"id": "t", "sound": "key_a", "at": 1.0, "repeat": {"count": 0, "every": 0.1}},
+    {"id": "t", "sound": "key_a", "at": 1.0, "repeat": {"count": 500, "every": 0.1}},
+    {"id": "t", "sound": "key_a", "at": 1.0, "repeat": {"count": 3, "every": 0.001}},
+    {"id": "t", "sound": "key_a", "at": 1.0, "repeat": {"count": 3, "every": 0.1, "jitter": 0.08}},
+    {"id": "t", "sound": "key_a", "at": 1.0, "repeat": {"count": 3, "every": 0.1, "volume_jitter": 2}},
+    {"id": "t", "sound": "key_a", "at": [1.0, 2.0], "repeat": {"count": 3, "every": 0.1}},
+    {"id": "t", "sound": "key_a", "at": 1.0, "repeat": 5},
+])
+def test_bad_repeat_is_an_error(sfx):
+    cues, _, issues = hf_sfx.resolve({"sounds": TYPING["sounds"], "sfx": [sfx]})
+    assert cues == [] and [i["code"] for i in issues] == ["sfx_bad_repeat"]
+
+
+def test_unknown_sound_in_a_rotation_is_an_error_only_for_that_cue():
+    m = {"sounds": TYPING["sounds"], "sfx": [{"id": "t", "sound": ["key_a", "nope"], "at": [1.0, 1.1, 1.2]}]}
+    cues, _, issues = hf_sfx.resolve(m)
+    assert [c["id"] for c in cues] == ["t-00", "t-02"] and [i["code"] for i in issues] == ["sfx_unknown_sound"]
+
+
+def test_expanded_cues_become_audio_tags_on_separate_tracks_when_overlapping(tmp_path):
+    d = _comp(tmp_path, motion=TYPING)
+    made = hf_sfx.prepare(d, TYPING)
+    assert "index.html" in made and sorted(m for m in made if m.endswith(".wav")) == [
+        "assets/sfx/ding.wav", "assets/sfx/key_a.wav", "assets/sfx/key_b.wav", "assets/sfx/key_c.wav"]
+    html = (d / "index.html").read_text(encoding="utf-8")
+    assert html.count("<audio ") == 12 and 'id="sfx-type-09"' in html and 'id="sfx-end-01"' in html
+    assert hf_sfx.check(d, TYPING, 5.0) == []
+
+
+def test_sample_typed_memo_times_match_between_html_and_motion_json(tmp_path):
+    """絵（HTML の data-at・data-every）と音（motion.json の sfx）が同じ打点から来ている（M1）。"""
+    src = config.HF_SAMPLES_DIR / "typed_memo"
+    if not src.is_dir():
+        pytest.skip("見本が無い環境")
+    d = tmp_path / "typed_memo"
+    d.mkdir()
+    for name in ("index.html", "motion.json"):
+        shutil.copyfile(src / name, d / name)
+    motion = hf.read_motion(d)
+    html = (d / "index.html").read_text(encoding="utf-8")
+    lines = re.findall(r'<div id="line-(\w+)" class="line typed" data-text="([^"]*)" data-at="([\d.]+)" data-every="([\d.]+)"', html)
+    assert len(lines) == 2
+    by_id = {c["id"]: c for c in motion["sfx"]}
+    for key, text, at, every in lines:
+        rep = by_id[f"sfx-type-{key}"]
+        assert float(at) == pytest.approx(rep["at"]) and float(every) == pytest.approx(rep["repeat"]["every"])
+        assert len(text) == rep["repeat"]["count"]                       # 1字に1打
+    before = html
+    made = hf_sfx.prepare(d, motion)
+    assert "index.html" not in made and (d / "index.html").read_text(encoding="utf-8") == before   # <audio> は同期済み
+    assert [i for i in hf_sfx.check(d, motion, 4.0) if i["level"] == "error"] == []
+    cues, _, issues = hf_sfx.resolve(motion)
+    assert issues == [] and len(cues) == 13 + 9 + 2 and {c["kind"] for c in cues} == {"type", "pop"}
