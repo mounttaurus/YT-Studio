@@ -427,6 +427,8 @@ POST /projects/{id}/run
 
 6. **長文は自動チャンキング** — Irodori-TTS-Serverが自動で分割処理するため、tts-agent側では対応不要。
 
+7. **音声の透かし（SilentCipher）は止めている**（2026-10-12）— Irodori-TTS-Server は生成音声に不可聴の透かしを常時入れる（設定では無効化できない・処理時間の約4割）。`tts-agent/irodori-patches/silentcipher.py`（import を失敗させるスタブ）を `PYTHONPATH` で先に見せ、ライブラリ公式の「透かしなしで続行」経路に入れている。同一seedの出力差は -48.5dB で機械指標上は差なし。戻す時は compose の `PYTHONPATH` とマウントの2行を消す。
+
 ---
 
 *最終更新: 2025-06-03 | バージョン: 1.0.0*

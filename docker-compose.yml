@@ -214,11 +214,16 @@ services:
       - IRODORI_CODEC_PRECISION=bf16
       - IRODORI_ALLOW_NO_REF_VOICE=true
       - IRODORI_VOICES_DIR=/app/voices
+      # 生成音声の透かし(SilentCipher)を止める。/opt/irodori-patches の silentcipher.py が import 不能スタブで、
+      # ライブラリ公式の「透かしなしで続行」経路に入る（無効化の設定は無い）。詳細は同ファイルの docstring
+      - PYTHONPATH=/opt/irodori-patches
     volumes:
       # HFモデルキャッシュ(数GB)もホストの見えるフォルダへ（Volume不使用・ユーザーがバックアップ/削除可能）
       - ./tts-agent/irodori-models:/root/.cache/huggingface
       # 声カタログは shared/voices/{engine}/ へ移設（旧 ./tts-agent/voices）。コンテナ内パスは /app/voices 据え置き
       - ./shared/voices/irodori:/app/voices
+      # silentcipher を import 不能にするスタブ（透かしを止める）。読み取り専用
+      - ./tts-agent/irodori-patches:/opt/irodori-patches:ro
     deploy:
       resources:
         reservations:
