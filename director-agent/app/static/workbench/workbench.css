@@ -106,7 +106,8 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-
          white-space: nowrap; overflow: hidden; text-overflow: ellipsis; cursor: pointer; }
 .ctxnb:hover { color: var(--text); }
 .ctxnbl { font-size: 10px; color: var(--faint); flex-shrink: 0; }
-.mtabs { display: flex; gap: 2px; padding: 0 12px; border-bottom: 1px solid var(--line); overflow-x: auto; }
+/* 縮めない: overflow-x:auto だと縦にも縮められ、本文が長い行でタブ帯が半分潰れていた */
+.mtabs { display: flex; gap: 2px; padding: 0 12px; border-bottom: 1px solid var(--line); overflow-x: auto; overflow-y: hidden; flex-shrink: 0; }
 .mtabs button { background: none; border: 0; border-bottom: 2px solid transparent; padding: 7px 12px; color: var(--muted); font-size: 12.5px; font-weight: 600; white-space: nowrap; }
 .mtabs button[aria-selected="true"] { color: var(--text); border-bottom-color: var(--accent); }
 .mtabs .dot { display: inline-block; width: 7px; height: 7px; border-radius: 50%; margin-right: 5px; background: var(--none); vertical-align: middle; }
