@@ -483,14 +483,22 @@ def update_line(
                     p["bubble_key"] = bubble_key
                 else:
                     p.pop("bubble_key", None)
-            if prompt is not None:
+            if prompt is not None and not prompt.strip():
+                # 自由入力をやめる＝機械の指示へ戻す。定型なら今の slot からすぐ作る（空のままだと「プロンプトが無い」行に
+                # 見え、生成のボタンが押せなくなる）。LLM モードは空にしておき、生成の直前に作る（ensure_prompts）
+                p["prompt"], p["prompt_source"] = "", ""
+                if _prompt_mode() == "template":
+                    _put_template_prompt(p, _script_lines_by_id(project_id, episode).get(line_id) or p)
+            elif prompt is not None:
                 p["prompt"] = prompt.strip()
                 p["prompt_source"] = "user"
                 # 手書きプロンプトは「今の台本テキスト」を見て書かれたものとみなす
                 p["prompt_text_hash"] = text_hash(p.get("text"))
                 # slotを明示指定していない時だけ、古いslotが別の演技のdedup対象に誤って
-                # 混ざらないよう正規表現で再計算する（LLM呼び出し不要・課金なし）
-                if slot is None:
+                # 混ざらないよう正規表現で再計算する（LLM呼び出し不要・課金なし）。
+                # ⚠️ 手で選んだ「絵の希望」（slot_source=="user"）は消さない（自由入力の欄で書き足しただけで、
+                # プルダウンの選択が黙って消えていた）
+                if slot is None and p.get("slot_source") != "user":
                     derived = aroll_prompt_generator.derive_slot_from_prompt(p["prompt"])
                     if not (derived["emotion"] and derived["shot"] and derived["angle"]):
                         derived = None

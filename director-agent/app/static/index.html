@@ -3575,6 +3575,8 @@
             <h3 style="margin:0">📁 保存済み（direct_output）</h3>
             <button class="btn-ghost" style="font-size:12px" @click="loadFreeOutputs()">🔄 更新</button>
           </div>
+          <p style="font-size:11px;color:#64748b;margin:6px 0 0">「🎬 Bロールへ」は、今開いているプロジェクト・話数の Bロールの箱へ入れます（ワークベンチの「🎬 A/Bロール」タブで行に当てられます。行IDを入れればその場で当てます）。</p>
+          <p x-show="free.brollMsg" x-text="free.brollMsg" style="font-size:12px;color:#94a3b8;margin:6px 0 0"></p>
           <div style="display:flex;flex-wrap:wrap;gap:14px;margin-top:12px">
             <template x-for="o in free.outputs" :key="o.name">
               <div :style="o.kind==='audio' ? 'width:260px' : (o.kind==='video' ? 'width:320px' : 'width:180px')">
@@ -3586,6 +3588,10 @@
                   <button class="btn-ghost" style="flex:1;padding:4px" @click="downloadFree(o)">⬇保存</button>
                   <button class="btn-ghost" style="padding:4px" @click="deleteFreeOutput(o.name)">🗑</button>
                 </div>
+                <button class="btn-ghost" style="width:100%;padding:4px;margin-top:4px;font-size:11px"
+                        x-show="o.kind!=='audio' && currentProject && activeEpisodeNumber"
+                        :title="`${currentProject?.id || ''} 第${activeEpisodeNumber}話の Bロールの箱へ入れる（コピー）`"
+                        @click="freeToBroll(o)" x-text="`🎬 第${activeEpisodeNumber}話のBロールへ`"></button>
               </div>
             </template>
             <p x-show="!free.outputs.length" style="font-size:12px;color:#64748b">まだ保存された画像はありません</p>
@@ -4809,6 +4815,7 @@ function app() {
       // 🎙️ 話者音声（TTS）自由生成＝エキストラ用（tts.json/OTIOには載らない）
       ttsCharId: '', ttsVoice: '', ttsCaption: '', ttsEmotion: 'neutral', ttsLang: 'ja',
       ttsText: '', ttsBusy: false, ttsMsg: '',
+      brollMsg: '',   // 保存済みを「🎬 Bロールへ」入れた結果
     },
     // 🏞️ 背景アーカイブタブ
     bg: {
@@ -7907,6 +7914,24 @@ function app() {
         const d = await (await fetch(`${FAPI}/imagegen/free/outputs`)).json();
         this.free.outputs = d.outputs || [];
       } catch { this.free.outputs = []; }
+    },
+    async freeToBroll(o) {
+      // 自由生成の絵・動画を、今の話数の Bロールの箱へ入れる（コピー・同じ中身は二重に入れない）。行に当てるのは任意
+      const pid = this.currentProject?.id, ep = this.activeEpisodeNumber;
+      if (!pid || !ep) { this.free.brollMsg = '先にプロジェクトと話数を選んでください'; return; }
+      const lid = prompt(`${o.name} を「${pid}」第${ep}話の Bロールの箱へ入れます。\n行に当てるなら line_id を入力（例 line_025）。空欄なら箱に入れるだけです。`, '');
+      if (lid === null) return;
+      const line = lid.trim();
+      const r = await fetch(`${FAPI}/projects/${encodeURIComponent(pid)}/episodes/${ep}/broll/register`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        // 自分で生成した絵＝権利は own・出自は ai（Bロールの箱の語彙 broll_manager.SOURCE_KINDS / LICENSES）
+        body: JSON.stringify({ path: `direct_output/${o.name}`, license: 'own', source: { kind: 'ai' },
+                               added_by: 'free_studio', line_id: line || null }),
+      });
+      const d = await r.json().catch(() => ({}));
+      if (!r.ok) { this.free.brollMsg = `Bロールへ入れられませんでした: ${d.detail?.message || d.detail || r.status}`; return; }
+      this.free.brollMsg = `🎬 ${o.name} を第${ep}話の Bロールの箱へ入れました（${d.asset?.asset_id || ''}`
+        + `${d.duplicate ? '・同じ素材が既に箱にありました' : ''}${line && d.assigned ? `・${line} に当てました` : ''}）`;
     },
     async deleteFreeOutput(name) {
       if (!confirm(`${name} を削除しますか？`)) return;

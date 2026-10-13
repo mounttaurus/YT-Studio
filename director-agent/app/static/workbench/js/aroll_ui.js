@@ -282,6 +282,17 @@ export function createArollUi(ctx) {
       <div class="pgrid bg">${list.map((b) => `<button class="pitemx ${b.bg_id === l.aroll.background_id ? 'cur' : ''}" data-a="bgpick" data-bg="${esc(b.bg_id)}"><img src="${esc(bgUrl(b.bg_id))}" loading="lazy" alt=""><small>${esc(b.bg_id)}</small></button>`).join('')}</div></div>`;
   }
 
+  /** 「✍ 自由入力で生成」: 書いた英文をそのまま画像モデルへ渡して新しく生成する（在庫を使わない）。
+   *  入力欄は自動保存しない（保存と生成を1つの操作にする＝欄を離れた瞬間の保存と生成ボタンが競合して、生成が黙って飛ぶのを防ぐ）。 */
+  function freeBoxHtml(a, off) {
+    const own = a.prompt_source === 'user';
+    return `<div class="box"><span class="flabel">✍ 自由入力で生成（英語）${own ? ' ' + chip('purple', '自由入力を使用中') : ''}</span>
+      <textarea id="m-prompt" data-a="m-free" rows="2" placeholder="例: holding a magnifying glass, surprised, waist-up shot（空のままなら「絵の希望」から定型で作ります）">${own ? esc(a.prompt) : ''}</textarea>
+      <div class="inline"><button class="btn" data-a="m-free-gen" ${off ? 'disabled' : ''} title="書いた指示を保存して、在庫を使わず新しく生成します（課金・確認あり）">🎨 この指示で生成（課金）</button>
+        ${own ? `<button class="btn ghost" data-a="m-free-clear" ${off ? 'disabled' : ''} title="自由入力をやめ、「絵の希望」から定型で作る指示に戻します（今の絵は変わりません）">↺ 定型に戻す</button>` : ''}</div>
+      <span class="hint">書いた文がそのまま画像モデルへ渡ります（生成を押した時に保存）。1人・パステル背景・文字なしの指定は自動で付きます＝切り抜いて在庫へ入れ、背景と吹き出しを重ねるため。髪型・服装は参照画像が担保するので書かなくて構いません。</span></div>`;
+  }
+
   /** 「この絵でOK」。承認済みでも、セリフが変わって「台本とズレ」の行には出す（承認は絵の記録＝セリフを直しても外れない。押すと古い印も解消する）。 */
   function approveCtl(l, a, off) {
     const stale = a.sync === 'stale';
@@ -339,6 +350,7 @@ export function createArollUi(ctx) {
         <button class="btn" data-a="m-picker" ${off || !canPick ? 'disabled' : ''} title="${canPick ? '在庫から選び直す（無料）' : 'キャラが1人に確定していない行は選べません'}">🔀 選び直す</button>
         <button class="btn ghost" data-a="m-fresh" ${off || !a.has_prompt ? 'disabled' : ''} title="在庫を使わず必ず新しく課金生成する">🎲 新しく生成（課金）</button></div>
       ${pickerHtml(l)}
+      ${freeBoxHtml(a, off)}
       <div class="box"><span class="flabel">前の絵を使う</span><div class="inline">
         ${a.cut && a.cut.size > 1 ? `<span class="hint">この行を含む ${a.cut.size}行が同じ絵を使います</span>` : '<span class="hint">この行は自分の絵を使います</span>'}
         ${cut === 'join' ? `<button class="btn" data-a="cut" data-mode="join" data-id="${esc(l.id)}" ${off ? 'disabled' : ''}>↑ 前の絵を使う</button>` : ''}
@@ -349,13 +361,14 @@ export function createArollUi(ctx) {
         <span class="hint mono">${esc(a.background_id || '（背景未割当）')}</span>
         <button class="btn" data-a="m-bgpicker" ${off ? 'disabled' : ''}>🔀 背景</button></div>${bgPickerHtml(l)}</div>
       ${bubbleBoxHtml(l, off)}
-      <details class="aset"><summary>映すキャラ・プロンプト（詳細）</summary>
+      <details class="aset"><summary>映すキャラ・今の指示（詳細）</summary>
         <div class="inline">${(a.characters || []).length ? a.characters.map((c, i) =>
           `<span class="chip cast">${esc(c.name)}${i === 0 ? ' 🔒' : ` <button class="x" data-a="m-rmchar" data-cid="${esc(c.id)}" title="外す" ${off ? 'disabled' : ''}>×</button>`}</span>`).join('') : '<span class="chip info">🎙 ナレーション（背景のみ）</span>'}
           ${(a.characters || []).length === 1 && addable.length ? `<select data-a="m-addchar" ${off ? 'disabled' : ''}><option value="">＋キャラ（2人写り）</option>${addable.map((c) => `<option value="${esc(c.char_id)}">${esc(c.name)}</option>`).join('')}</select>` : ''}</div>
         <span class="hint">先頭は話者で外せません。2人写りは自動では作らない方針なので、必要な行だけ手で足します。</span>
-        <label class="flabel" for="m-prompt">プロンプト（英語で書いてください・画像モデルに渡すため）</label>
-        <textarea id="m-prompt" data-a="m-prompt" rows="3" placeholder="（プロンプト未生成 — 下ごしらえで作るか手入力）">${esc(a.prompt)}</textarea></details>
+        ${a.prompt_source !== 'user' ? `<span class="flabel">今の指示（機械が作成・参考）</span>
+        <div class="hint mono">${esc(a.prompt || '（まだありません）')}</div>
+        <span class="hint">自由入力が空の行は、新しく生成する直前に「絵の希望」から定型で作り直します。</span>` : ''}</details>
       <span class="hint">単独キャラの行は、生成した瞬間に自動で背景を抜いて在庫へ登録します（無料）。2人以上写る行だけは背景付きのままです。</span>`;
   }
 
@@ -525,6 +538,41 @@ export function createArollUi(ctx) {
     });
   }
 
+  async function freeGen(lineId) {
+    const box = document.getElementById('m-prompt');
+    const text = ((box && box.value) || '').trim();
+    if (!text) { toast('指示を書いてください（定型から作るなら「🎲 新しく生成」）'); return; }
+    if (!confirm('書いた指示で、在庫を使わず新しく生成します（課金 ≈$0.04）。\n今の絵は上書きされます。よろしいですか？')) return;
+    await working(busyMsg('生成しています（数十秒かかります）'), async () => {
+      try {
+        await api.aroll.updateLine(pid(), ep(), lineId, { prompt: text });
+        await api.aroll.generateLine(pid(), ep(), lineId, { allow_paid_fallback: A.settings.paid, use_library: false });
+        say(`${lineId} を自由入力の指示で生成しました`);
+      } catch (e) { say(`${lineId} の生成に失敗: ${e.message}`); throw e; } finally { await refresh(); }
+    });
+  }
+
+  async function freeClear(lineId) {
+    await working(busyMsg('定型の指示に戻しています'), async () => {
+      await api.aroll.updateLine(pid(), ep(), lineId, { prompt: '' });
+      toast('自由入力をやめ、「絵の希望」から作る定型の指示に戻しました（絵は変わりません）');
+      await refresh({ plan: false });
+    });
+  }
+
+  /** 背景を選ぶ。在庫の絵を選んだ時（pick）と同じく、確定済み ∧ 手直し無しの行だけ自動で組み直す（D25）。 */
+  async function pickBg(lineId, bgId) {
+    await working(busyMsg('背景を差し替えています'), async () => {
+      await api.aroll.updateLine(pid(), ep(), lineId, { background_id: bgId });
+      A.bg = null;
+      await refresh({ plan: false });
+      const ran = ctx.autoResync ? await ctx.autoResync(lineId) : false;
+      say(ran ? `${lineId} の背景を差し替え、合成を頼みました（Photoshop を使います）`
+        : `${lineId} の背景を差し替えました。合成には、まだ反映されていません＝要合成です（確定済み・手直し無しの行は自動で合成されます）`);
+      ctx.rerender();
+    });
+  }
+
   async function openPicker(lineId) {
     if (A.picker && A.picker.lineId === lineId) { A.picker = null; redrawModal(); return; }
     A.picker = { lineId, items: [], note: '', busy: true };
@@ -688,10 +736,9 @@ export function createArollUi(ctx) {
       'bubble-pick': () => setBubble(S.modal.id, el.dataset.key),
       'bubble-auto': () => setBubble(S.modal.id, null),
       bgcat: () => { A.bg.cat = A.bg.cat === el.dataset.cat && el.dataset.cat !== 'all' ? 'all' : el.dataset.cat; redrawModal(); },
-      bgpick: () => working(busyMsg('背景を差し替えています'), async () => {
-        await api.aroll.updateLine(pid(), ep(), S.modal.id, { background_id: el.dataset.bg });
-        A.bg = null; await refresh({ plan: false });
-      }),
+      bgpick: () => pickBg(S.modal.id, el.dataset.bg),
+      'm-free-gen': () => freeGen(S.modal.id),
+      'm-free-clear': () => freeClear(S.modal.id),
       'm-rmchar': () => { const l = byId(S.modal.id); return editChars(l.id, l.aroll.characters.map((c) => c.id).filter((c) => c !== el.dataset.cid)); },
       'm-voice': () => { const l = byId(S.modal.id); return working(busyMsg('絵の表情を合わせています'), async () => { await setSlot(l.id, 'emotion', R.voiceEmotionInPresets(l, A.presets), { quiet: true }); await refresh(); }); },
     }[a];
@@ -719,11 +766,6 @@ export function createArollUi(ctx) {
     if (a === 'm-addchar') {
       const l = byId(S.modal.id);
       if (el.value) await editChars(l.id, [...l.aroll.characters.map((c) => c.id), el.value]);
-      return;
-    }
-    if (a === 'm-prompt') {
-      const l = byId(S.modal.id);
-      await working(busyMsg('保存しています'), async () => { await api.aroll.updateLine(pid(), ep(), l.id, { prompt: el.value }); toast('プロンプトを保存しました'); await refresh({ plan: false }); });
     }
   }
   const input = (el) => { if (el.dataset.a === 'extra') { A.settings.extra = el.value; A.touched = true; } };

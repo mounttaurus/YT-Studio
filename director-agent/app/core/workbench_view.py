@@ -129,6 +129,22 @@ def _bubble_stale(p: dict | None, plan_p: dict | None) -> bool:
     return plan_b.get("key_source") == "user"
 
 
+def _background_stale(p: dict | None, plan_p: dict | None) -> bool:
+    """背景の割当が、プラン作成時点と今で食い違うか（「背景を変える」の後に組み直していない）。
+
+    プランは作成時点の割当を `background.assigned_id` に持つ（組んだ背景 `bg_id` は時間帯・画角での差し替えや
+    サブ行の共有で割当と違ってよいので、そちらとは比べない）。`assigned_id` の無い旧プランは、手で選んだ背景の行だけ
+    組んだ背景と比べる（手で選んだ背景は差し替えない＝食い違えば組み直しが要る）。
+    """
+    if p is None or plan_p is None:
+        return False
+    bg = plan_p.get("background") or {}
+    want = p.get("background_id") or None
+    if "assigned_id" in bg:
+        return (bg.get("assigned_id") or None) != want
+    return bool(want) and p.get("background_source") == "user" and bg.get("bg_id") != want
+
+
 def _bubble_key(s: str | None) -> str:
     """吹き出し文字の比較用（qa_check._bubble_text_key と同じ：改行と前後の空白だけ吸収）。"""
     return (s or "").replace("\r", "").replace("\n", "").strip()
@@ -157,7 +173,7 @@ def _build_state(p: dict | None, plan_p: dict | None, qa_p: dict | None, version
     """行の合成の状態（director の旧 `arollBuildState` の移し替え・判定をサーバーへ）。
 
     ungenerated＝絵がまだ無い／unplanned＝プラン未作成／unbuilt＝PSD 未合成／
-    restale＝PSD はあるが、プラン作成時点の切り抜き・その版・吹き出しの文字・吹き出しの形が今と違う（要組み直し）／built＝最新。
+    restale＝PSD はあるが、プラン作成時点の切り抜き・その版・吹き出しの文字・吹き出しの形・背景の割当が今と違う（要組み直し）／built＝最新。
     ⚠️ 旧 `qa.checked_at` と時刻を比べる方式は、1行だけ再検査すると他行の判定が狂った。ここはプランとの比較だけ。
     """
     if p is None:
@@ -180,6 +196,8 @@ def _build_state(p: dict | None, plan_p: dict | None, qa_p: dict | None, version
     if qa_p.get("text_stale") or _text_stale_now(qa_p, live_text):   # 絵は同じでも、台本の文面が変わって吹き出しの文字が古い
         return "restale"
     if _bubble_stale(p, plan_p):        # 吹き出しの形を選び直した（上書きを足した・変えた・外した）
+        return "restale"
+    if _background_stale(p, plan_p):    # 背景を選び直した
         return "restale"
     return "built"
 
@@ -206,6 +224,7 @@ def _aroll_view(a: dict, lid: str, ctx: dict) -> dict:
             "speaker_changed": bool(p.get("speaker_changed")), "sync_known": a["available"],
             "status": p.get("status") or "pending", "has_image": bool(p.get("image")),
             "thumb": thumb, "has_prompt": bool((p.get("prompt") or "").strip()), "prompt": p.get("prompt") or "",
+            "prompt_source": p.get("prompt_source") or "",    # user＝自由入力（そのまま画像モデルへ）・それ以外は機械が作った指示
             "characters": [{"id": c, "name": ctx["char_name"](c)} for c in chars],
             "cutout_slot_id": p.get("cutout_slot_id") or None, "cutout_char_id": cid or None,
             "slot": p.get("slot") or {}, "slot_source": p.get("slot_source"), "matched": bool(p.get("slot_key")),

@@ -663,7 +663,14 @@ def build(paths: Paths | None = None) -> dict[str, Any]:
         # グループ無しの行は従来どおりこの場で解決する（カット共有は元々同じ絵＝同じshot
         # なので、行ごとに呼んでも結果は揃う）。
         parent_id = p.get("parent_line_id")
-        if parent_id:
+        # 手で選んだ背景（`background_source=="user"`・絵タブの「背景」ピッカー）はそのまま使う。グループの共有にも、
+        # 時間帯・光源・画角での差し替えにも入れない。入れていた時は、サブ行で選んだ背景が基準行の背景で黙って上書きされ、
+        # 画面の「背景: …」と組んだ絵が食い違った（2026-10-13 20260728_001 line_005_s1）
+        user_bg = bool(bg_id) and p.get("background_source") == "user"
+        if user_bg:
+            bg_id_resolved, bg_reason = bg_id, "user"
+            zoom, center = 1.0, None
+        elif parent_id:
             bg_id_resolved, bg_reason = bg_id, None  # 後段で group_rows から埋める
             zoom, center = 1.0, None
         else:
@@ -704,6 +711,9 @@ def build(paths: Paths | None = None) -> dict[str, Any]:
                 "background": {
                     "bg_id": bg_id,
                     "bg_source": bg_reason,
+                    # プラン作成時点の行の割当（aroll.json の background_id）。組んだ背景 bg_id は差し替え・グループの共有で
+                    # 割当と違うことがあるので、「背景を変えたのに組み直していない」の判定（director の要組み直し）はこちらと比べる
+                    "assigned_id": p.get("background_id"),
                     # サブ行グループの寄り引きに合わせた拡大（§8-2）。基準(一番引き)は1.0。
                     # グループの行は後段で解決するまでの仮値（group_rowsが上書きする）。
                     "zoom": zoom,
@@ -765,7 +775,7 @@ def build(paths: Paths | None = None) -> dict[str, Any]:
                 "warnings": warnings,
             }
         panels.append(panel)
-        if parent_id:
+        if parent_id and not user_bg:
             group_rows.setdefault(parent_id, []).append({
                 "panel": panel, "shot": shot, "mask": mask, "char_dx": char_dx,
                 "raw_bg_id": bg_id, "emotion": emotion, "order": p.get("order") or 0,
