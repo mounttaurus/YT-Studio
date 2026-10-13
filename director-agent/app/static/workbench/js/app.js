@@ -8,6 +8,8 @@ import { createArollUi } from './aroll_ui.js';
 import * as R from './aroll_model.js';
 import { createFinalUi } from './final_ui.js';
 import * as FM from './final_model.js';
+import { createBrollUi } from './broll_ui.js';
+import * as BM from './broll_model.js';
 
 const $ = (id) => document.getElementById(id);
 const esc = M.esc;
@@ -20,7 +22,7 @@ const store = {
   set: (k, v) => { try { storage && storage.setItem(k, v); } catch { /* ignore */ } },
 };
 
-const TABS = ['script', 'tts', 'aroll', 'final'];
+const TABS = ['script', 'tts', 'aroll', 'final', 'broll'];
 const S = {
   pid: params.get('project'), ep: Number(params.get('episode')) || null,
   view: null, lines: [], cast: [], enabled: false, tpending: null,
@@ -63,7 +65,7 @@ async function working(msg, fn) {
 
 const speakerName = (l) => l.speaker_name || '話者未選択';
 const tagName = { auto: '自動', later: 'あとで', keep: 'そのまま' };
-const LANES = [['script', '台本', '本籍'], ['tts', '音声', 'TTS'], ['aroll', '絵', 'Aロール'], ['final', '仕上がり', '合成']];
+const LANES = [['script', '台本', '本籍'], ['tts', '音声', 'TTS'], ['aroll', '絵', 'Aロール'], ['final', '仕上がり', '合成'], ['broll', 'Bロール', '箱']];
 
 // ── 読み込み ───────────────────────────────────────────
 async function load() {
@@ -75,6 +77,7 @@ async function load() {
   if (S.modal && !S.modal.edited && !S.modal.pending) drawModal();
   else if (S.modal && !byId(S.modal.id)) closeModal();
   if (v.tts_progress && v.tts_progress.running) startFollow();
+  if (BI.B.box && (S.tab === 'broll' || (S.modal && S.modal.section === 'broll'))) BI.loadBox();   // 結合・削除・Undo で行から外れる素材が変わる
 }
 
 // ── 描画: 全体 ────────────────────────────────────────────
@@ -103,11 +106,14 @@ function renderBanner() {
 }
 
 const pill = (cls, text) => `<span class="pill ${cls || 'none'}">${esc(text)}</span>`;
+/** data-a の頭で担当を分ける: f-＝仕上がり（final_ui.js）・b-＝Bロール（broll_ui.js）・それ以外＝絵（aroll_ui.js）。 */
+const owner = (a) => (a.startsWith('f-') ? FI : a.startsWith('b-') ? BI : AR);
 const uiCtx = {
   S, api, esc, toast, fail, working, load, byId, pill, rerender: () => { if (S.view) render(); },
   redrawModal: () => { if (S.modal && !S.drawer) drawModal(); },
 };
 const FI = createFinalUi(uiCtx);
+const BI = createBrollUi(uiCtx);
 const AR = createArollUi({ ...uiCtx, autoResync: (id) => FI.autoResync(id), resyncShortcut: (l) => FI.resyncShortcutHtml(l) });
 const pills = (o, map) => map.map(([k, cls, lbl]) => (o[k] ? pill(cls, `${o[k]} ${lbl}`) : '')).join('') || pill('none', '—');
 
@@ -137,14 +143,20 @@ function renderTabs() {
   const tab = (k, label, n, disabledTitle) => `<button class="tab" role="tab" data-tab="${k}" aria-selected="${S.tab === k}" ${disabledTitle ? `disabled title="${disabledTitle}"` : ''}>${label}${n ? `<span class="n">${n}</span>` : ''}</button>`;
   $('tabs').innerHTML = tab('script', '📝 台本', S.enabled ? `${c.unconfirmed}件未確定` : '')
     + tab('tts', '🎙 TTS', todo ? `${todo}件` : '')
-    + tab('aroll', '🖼 Aロール', R.filterCount(S.lines, 'ungenerated') ? `${R.filterCount(S.lines, 'ungenerated')}件未生成` : '')
+    + tab('aroll', '🖼 絵', R.filterCount(S.lines, 'ungenerated') ? `${R.filterCount(S.lines, 'ungenerated')}件未生成` : '')
     + tab('final', '✅ 仕上がり', (() => { const n = FM.counts(S.lines); return n.blocking + n.restale ? `${n.blocking + n.restale}件` : ''; })(),
-      S.view && S.view.psassist && !S.view.psassist.available ? 'この環境ではPhotoshop連携（ホスト工程）を使いません' : '');
+      S.view && S.view.psassist && !S.view.psassist.available ? 'この環境ではPhotoshop連携（ホスト工程）を使いません' : '')
+    + tab('broll', '🎬 A/Bロール', BI.B.box ? (BI.count() ? `${BI.count()}行` : '') : '');
 }
 
 function renderToolbar() {
   if (S.tab !== 'script') S.tpending = null;
   if (S.tab === 'final') { $('toolbar').innerHTML = FI.toolbarHtml(); return; }
+  if (S.tab === 'broll') {
+    if (BI.hasBusyInput()) return;                       // クレジットを入力中は描き直さない（入力が消える）
+    $('toolbar').innerHTML = BI.toolbarHtml();
+    return;
+  }
   if (S.tab === 'aroll') {
     if (AR.hasBusyInput()) return;                       // 追加指示を入力中は描き直さない（入力が消える）
     $('toolbar').innerHTML = AR.toolbarHtml();
@@ -226,6 +238,7 @@ function rowHtml(l) {
 
 function renderList() {
   if (S.tab === 'final') { $('list').className = ''; $('list').innerHTML = FI.gridHtml(); return; }
+  if (S.tab === 'broll') { $('list').className = ''; $('list').innerHTML = BI.gridHtml(); return; }
   const rows = S.tab === 'aroll' ? R.rowsFor(S.lines, S.afilter, S.dupMap) : S.lines.filter((l) => S.filter === 'all' || M.needsWork(S.tab, l, S.enabled));
   $('list').className = 'list';
   $('list').innerHTML = rows.map(rowHtml).join('') || `<div class="note">${S.lines.length ? 'この条件の行はありません' : '行がありません'}</div>`;
@@ -233,11 +246,11 @@ function renderList() {
 
 // ── 行モーダル ────────────────────────────────────────────
 const scrim = $('scrim'), modal = $('modal');
-const MSEC = [['script', '台本'], ['tts', '音声'], ['aroll', '絵'], ['final', '仕上がり']];
+const MSEC = [['script', '台本'], ['tts', '音声'], ['aroll', '絵'], ['final', '仕上がり'], ['broll', 'Bロール']];
 
 function openModal(id, section) {
   S.drawer = null;
-  S.modal = { id, section: section || ({ tts: 'tts', aroll: 'aroll', final: 'final' }[S.tab] || 'script'), pending: null, edited: false };
+  S.modal = { id, section: section || ({ tts: 'tts', aroll: 'aroll', final: 'final', broll: 'broll' }[S.tab] || 'script'), pending: null, edited: false };
   scrim.hidden = false;
   drawModal();
   prepareSection();
@@ -247,6 +260,7 @@ function openModal(id, section) {
 function prepareSection() {
   if (S.modal && S.modal.section === 'aroll') Promise.all([AR.enter(), AR.loadChars()]).then(() => AR.A && drawIfModal());
   if (S.modal && S.modal.section === 'final') FI.enter().then(drawIfModal);
+  if (S.modal && S.modal.section === 'broll') BI.enter().then(drawIfModal);
 }
 function drawIfModal() { if (S.modal && !S.drawer) drawModal(); }
 function closeModal() { S.modal = null; S.drawer = null; scrim.hidden = true; }
@@ -325,6 +339,7 @@ function drawModal() {
         <button class="btn" data-op="timing">保存</button><span class="hint">間だけ変えた行は、音声を作り直さずタイムラインを作り直すと反映</span></div></div>`,
     aroll: () => AR.modalHtml(l),
     final: () => FI.modalHtml(l),
+    broll: () => BI.modalHtml(l),
   };
   const conf = M_.pending ? pendingHtml(l) : '';
   const rc = M.can('confirm', l, S.lines, S.enabled), sub = M.isSub(l);
@@ -338,7 +353,7 @@ function drawModal() {
       <button class="btn ok" data-act="confirm" data-id="${esc(l.id)}" ${rc ? `disabled title="${esc(rc)}"` : ''}>✓ この行を確定</button>
       <button class="btn ghost" data-act="close" aria-label="閉じる">✕</button></div>
     ${M_.section === 'script' ? '' : ctxHtml(l)}
-    <div class="mtabs" role="tablist">${MSEC.map(([k, n]) => `<button role="tab" data-sec="${k}" aria-selected="${M_.section === k}"><span class="dot ${seg[k][0]}"></span>${n}</button>`).join('')}</div>
+    <div class="mtabs" role="tablist">${MSEC.map(([k, n]) => `<button role="tab" data-sec="${k}" aria-selected="${M_.section === k}"><span class="dot ${(seg[k] || BI.seg(l))[0]}"></span>${n}</button>`).join('')}</div>
     <div class="mbody">${conf}${secBody[M_.section]()}</div>
     <div class="mfoot"><span class="hint">← → で前後の行 ／ Esc で閉じる ／ Ctrl+Z で元に戻す</span></div>`;
   const pos = modal.querySelector('#m-pos');
@@ -695,11 +710,11 @@ async function adoptRun() {
 // ── イベント ─────────────────────────────────────────────
 document.addEventListener('click', (e) => {
   const ab = e.target.closest('[data-a]');                // 絵タブ（aroll_ui.js）・仕上がりタブ（final_ui.js＝f- 始まり）の操作
-  if (ab && !ab.matches('input,select,textarea,details')) { if (!ab.disabled) (ab.dataset.a.startsWith('f-') ? FI : AR).click(ab); return; }
+  if (ab && !ab.matches('input,select,textarea,details')) { if (!ab.disabled) owner(ab.dataset.a).click(ab); return; }
   if (e.target.closest('input,select,textarea,label,summary')) return;   // 行の選択・設定の操作で行モーダルを開かない
   const b = e.target.closest('[data-act],[data-op],[data-tab],[data-sec],[data-open]');
   if (!b) { if (e.target === scrim) closeModal(); return; }
-  if (b.dataset.tab) { if (b.disabled) return; S.tab = b.dataset.tab; store.set('wb-tab', S.tab); render(); if (S.tab === 'aroll') AR.enter(); else if (S.tab === 'final') FI.enter(); return; }
+  if (b.dataset.tab) { if (b.disabled) return; S.tab = b.dataset.tab; store.set('wb-tab', S.tab); render(); if (S.tab === 'aroll') AR.enter(); else if (S.tab === 'final') FI.enter(); else if (S.tab === 'broll') BI.enter(); return; }
   if (b.dataset.sec) { S.modal.section = b.dataset.sec; S.modal.pending = null; drawModal(); prepareSection(); return; }
   if (b.dataset.op) { if (!b.disabled) startOp(b.dataset.op); return; }
   if (b.dataset.open && !e.target.closest('button')) { openModal(b.dataset.open); return; }
@@ -743,7 +758,7 @@ document.addEventListener('click', (e) => {
 });
 
 document.addEventListener('change', (e) => {
-  if (e.target.dataset && e.target.dataset.a) { (e.target.dataset.a.startsWith('f-') ? FI : AR).change(e.target); return; }
+  if (e.target.dataset && e.target.dataset.a) { owner(e.target.dataset.a).change(e.target); return; }
   if (e.target.dataset && e.target.dataset.sel && S.drawer) {
     e.target.checked ? S.drawer.selected.add(e.target.dataset.sel) : S.drawer.selected.delete(e.target.dataset.sel);
     S.drawer.pending = null; drawDrawer();
@@ -752,10 +767,16 @@ document.addEventListener('change', (e) => {
 
 // モーダルの入力を触ったら、ポーリングの再描画で入力中の本文を消さない
 document.addEventListener('input', (e) => {
-  if (e.target.dataset && e.target.dataset.a && !e.target.dataset.a.startsWith('f-')) AR.input(e.target);
+  if (e.target.dataset && e.target.dataset.a && e.target.dataset.a.startsWith('b-')) BI.input(e.target);
+  else if (e.target.dataset && e.target.dataset.a && !e.target.dataset.a.startsWith('f-')) AR.input(e.target);
   if (S.modal && modal.contains(e.target)) S.modal.edited = true;
 });
-document.addEventListener('toggle', (e) => { if (e.target.dataset && e.target.dataset.a) (e.target.dataset.a.startsWith('f-') ? FI : AR).toggle(e.target); }, true);
+document.addEventListener('toggle', (e) => { if (e.target.dataset && e.target.dataset.a) { const o = owner(e.target.dataset.a); if (o.toggle) o.toggle(e.target); } }, true);
+// Bロールのドラッグ＆ドロップ（箱→行／行→箱／行の中の並べ替え／ファイル→行・箱）
+document.addEventListener('dragstart', (e) => BI.dragstart(e));
+document.addEventListener('dragover', (e) => BI.dragover(e));
+document.addEventListener('drop', (e) => BI.drop(e));
+document.addEventListener('dragend', () => BI.dragend());
 
 document.addEventListener('keydown', (e) => {
   const typing = /TEXTAREA|INPUT|SELECT/.test((document.activeElement || {}).tagName || '');
@@ -814,7 +835,7 @@ async function picker() {
   $('back').href = '/';
   try {
     await load();
-    if (S.tab === 'aroll') AR.enter(); else if (S.tab === 'final') FI.enter();
+    if (S.tab === 'aroll') AR.enter(); else if (S.tab === 'final') FI.enter(); else if (S.tab === 'broll') BI.enter();
     const want = params.get('line');
     if (want && byId(want)) { openModal(want); flash(want); }
   } catch (e) {

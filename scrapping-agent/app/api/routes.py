@@ -3104,6 +3104,16 @@ async def get_broll_file(project_id: str, episode_number: int, name: str):
     return FileResponse(f, media_type=media.get(f.suffix.lower(), "application/octet-stream"))
 
 
+@router.get("/projects/{project_id}/episodes/{episode_number}/broll/thumb/{asset_id}")
+async def get_broll_thumb(project_id: str, episode_number: int, asset_id: str, w: int = 360):
+    """写真の縮小JPEG（一覧の格子用・幅80〜960）。動画は 404（画面側が <video> の先頭フレームを使う）。"""
+    ep_dir = _broll_ep(project_id, episode_number)
+    f = broll_manager.thumb_file(ep_dir, asset_id, w)
+    if f is None:
+        raise HTTPException(status_code=404, detail=f"no thumbnail: {asset_id}")
+    return FileResponse(f, media_type="image/jpeg", headers={"Cache-Control": "private, max-age=3600"})
+
+
 @router.post("/projects/{project_id}/episodes/{episode_number}/broll/migrate")
 async def migrate_broll(project_id: str, episode_number: int):
     """旧 footage.json のクリップを箱へコピーする（割り当てはしない・冪等・元は残す）。"""

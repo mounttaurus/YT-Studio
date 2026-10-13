@@ -483,6 +483,48 @@ def asset_file(ep_dir: Path, name: str) -> Path | None:
     return f if f.parent == base and f.is_file() else None
 
 
+THUMBS_DIR = ".thumbs"
+THUMB_MIN, THUMB_MAX = 80, 960
+
+
+def thumb_file(ep_dir: Path, asset_id: str, width: int = 360) -> Path | None:
+    """写真の縮小JPEG（一覧の格子用）。箱の中身には触れず、`broll/.thumbs/` にだけ書く（作り直せる＝消してよい）。
+    動画・読めない画像は None（動画は画面側が <video> の先頭フレームを使う）。同じ幅・同じ元なら作り直さない。"""
+    from PIL import Image  # 遅く読む（media_probe と同じ依存）
+    if not ASSET_ID_RE.match(asset_id or ""):
+        return None
+    width = max(THUMB_MIN, min(THUMB_MAX, int(width)))
+    doc = load(ep_dir)
+    asset = find_asset(doc, asset_id)
+    if asset is None or asset.get("media_type") != "photo":
+        return None
+    src = (ep_dir / asset["file"]).resolve()
+    base = broll_dir(ep_dir).resolve()
+    if src.parent != base or not src.is_file():
+        return None
+    out = base / THUMBS_DIR / f"{asset_id}_{width}.jpg"
+    if out.is_file() and out.stat().st_mtime >= src.stat().st_mtime:
+        return out
+    try:
+        with Image.open(src) as im:
+            im.load()
+            im.thumbnail((width, width * 2))               # 縦長も潰さない（幅基準・高さは幅の2倍まで）
+            if im.mode in ("RGBA", "LA", "P"):               # 透過は白に敷く（JPEG）
+                rgba = im.convert("RGBA")
+                bg = Image.new("RGB", rgba.size, (255, 255, 255))
+                bg.paste(rgba, mask=rgba.split()[-1])
+                im = bg
+            else:
+                im = im.convert("RGB")
+            out.parent.mkdir(parents=True, exist_ok=True)
+            tmp = out.with_name(f".{out.name}.tmp")
+            im.save(tmp, "JPEG", quality=82, optimize=True)
+            tmp.replace(out)
+    except (OSError, ValueError):
+        return None
+    return out
+
+
 # ── 旧 footage.json からの移行（§3-3・1回・冪等） ──
 
 _LEGACY_SOURCE = {"pexels": "pexels", "pixabay": "pixabay", "vecteezy": "vecteezy", "ai": "ai", "user_upload": "user",

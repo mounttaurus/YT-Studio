@@ -17,7 +17,8 @@ export function createApi(fetchImpl = (...a) => fetch(...a)) {
   };
   async function call(method, path, body, params) {
     const init = { method, headers: {} };
-    if (body !== undefined) { init.headers['Content-Type'] = 'application/json'; init.body = JSON.stringify(body); }
+    if (typeof FormData !== 'undefined' && body instanceof FormData) init.body = body;            // ファイルの取り込み（境界はブラウザが付ける）
+    else if (body !== undefined) { init.headers['Content-Type'] = 'application/json'; init.body = JSON.stringify(body); }
     const res = await fetchImpl(path + q(params), init);
     let data = null;
     try { data = await res.json(); } catch { /* 本文なし */ }
@@ -27,6 +28,8 @@ export function createApi(fetchImpl = (...a) => fetch(...a)) {
   const ep = (pid, n) => `/projects/${encodeURIComponent(pid)}/episodes/${n}`;
   // 絵（scrapping-agent）は director の中継 /api/scrapping/ 経由。1話ぶんのAロールは .../aroll 以下
   const ar = (pid, n) => `/api/scrapping${ep(pid, n)}/aroll`;
+  // Bロールの箱（scrapping-agent・Docs/BROLL_PLAN.md）。書くのは scrapping-agent だけ＝画面はここを通す
+  const br = (pid, n) => `/api/scrapping${ep(pid, n)}/broll`;
   return {
     projects: () => call('GET', '/projects'),
     episodes: (pid) => call('GET', `/projects/${encodeURIComponent(pid)}/episodes`),
@@ -75,6 +78,16 @@ export function createApi(fetchImpl = (...a) => fetch(...a)) {
       createJob: (pid, n, body) => call('POST', `${ep(pid, n)}/psassist/jobs`, body),
       cancel: (pid, n, jobId) => call('POST', `${ep(pid, n)}/psassist/jobs/${encodeURIComponent(jobId)}/cancel`),
       pendingCutouts: (charId) => call('GET', `/api/scrapping/panel-library/${encodeURIComponent(charId)}/ps-status`),
+    },
+    // Bロールの箱: 取り込み（multipart）・行への割り当て・並べ替え・札の直し・箱から外す（_trash へ移すだけ）
+    broll: {
+      get: (pid, n) => call('GET', br(pid, n)),
+      upload: (pid, n, form) => call('POST', `${br(pid, n)}/upload`, form),
+      assign: (pid, n, body) => call('POST', `${br(pid, n)}/assign`, body),
+      unassign: (pid, n, body) => call('POST', `${br(pid, n)}/unassign`, body),
+      reorder: (pid, n, body) => call('POST', `${br(pid, n)}/reorder`, body),
+      patch: (pid, n, assetId, body) => call('PATCH', `${br(pid, n)}/assets/${encodeURIComponent(assetId)}`, body),
+      trash: (pid, n, assetId) => call('DELETE', `${br(pid, n)}/assets/${encodeURIComponent(assetId)}`),
     },
     presets: () => call('GET', '/api/scrapping/panel/presets'),
     styles: () => call('GET', '/api/scrapping/imagegen/styles'),

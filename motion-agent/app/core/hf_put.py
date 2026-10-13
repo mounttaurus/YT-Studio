@@ -51,8 +51,33 @@ def next_comp_id(project_id: str, episode: int) -> str:
     return f"mi_{top + 1:04d}"
 
 
-def _payload(path: str, value) -> bytes:
-    if isinstance(value, dict) and "base64" in value:
+def _box_asset_bytes(box_dir: Path, path: str, asset_id: str) -> bytes:
+    """Bロールの箱（episodes/epNN/broll/）の素材の中身を、コンポジションの assets/ へ写すために読む（読むだけ＝M4）。
+    箱の素材は出典・ライセンスが台帳にある＝素材を base64 で会話に流さずに済む。写真だけ・拡張子は箱のファイルと同じ。"""
+    try:
+        doc = json.loads((box_dir / "broll.json").read_text(encoding="utf-8"))
+    except (OSError, ValueError) as e:
+        raise PutError(f"{path}: この話に Bロールの箱が無い（broll_register で素材を入れてから）") from e
+    asset = next((a for a in doc.get("assets") or [] if a.get("asset_id") == asset_id), None)
+    if asset is None:
+        raise PutError(f"{path}: 箱に無い素材: {asset_id}（broll_list で asset_id を確かめる）")
+    if asset.get("media_type") != "photo":
+        raise PutError(f"{path}: {asset_id} は写真ではない（assets/ へ写せるのは写真だけ）")
+    src = (box_dir.parent / str(asset.get("file") or "")).resolve()
+    if src.parent != box_dir.resolve() or not src.is_file():
+        raise PutError(f"{path}: 箱の素材のファイルが無い: {asset_id}")
+    ext = lambda n: ".jpg" if n.lower().endswith((".jpg", ".jpeg")) else Path(n).suffix.lower()   # noqa: E731
+    if ext(path) != ext(src.name):
+        raise PutError(f"{path}: 拡張子が箱の素材（{src.suffix}）と違う。{Path(path).stem}{src.suffix} にする")
+    return src.read_bytes()
+
+
+def _payload(path: str, value, box_dir: Path | None = None) -> bytes:
+    if isinstance(value, dict) and "asset_id" in value and "base64" not in value:
+        if box_dir is None:
+            raise PutError(f"{path}: 箱の素材は話のコンポジションにだけ写せる")
+        data = _box_asset_bytes(box_dir, path, str(value["asset_id"]))
+    elif isinstance(value, dict) and "base64" in value:
         if not BINARY_RE.search(path):
             raise PutError(f"{path}: base64 で書けるのは画像（png・jpg・webp）だけ")
         try:
@@ -103,13 +128,14 @@ def put(project_id: str, episode: int, comp_id: str | None, files: dict) -> dict
     if len(files) > MAX_FILES:
         raise PutError(f"files は {MAX_FILES} 個まで")
     project_root = config.SHARED_DIR / "projects" / hf._name(project_id, "project_id")
+    box_dir = project_root / "episodes" / f"ep{int(episode):02d}" / "broll"
     if not project_root.is_dir():
         raise FileNotFoundError(f"プロジェクトが無い: {project_id}")
     payloads: dict[str, bytes] = {}
     for path, value in files.items():
         if not isinstance(path, str) or ".." in path.split("/") or not PATH_RE.match(path):
             raise PutError(f"書けないパス: {path!r}（index.html・motion.json・compositions/custom/*.html・assets/ の画像／json／txt だけ）")
-        payloads[path] = _payload(path, value)
+        payloads[path] = _payload(path, value, box_dir)
     created = not comp_id
     cid = comp_id or next_comp_id(project_id, episode)
     d = hf.project_dir(project_id, episode, cid)

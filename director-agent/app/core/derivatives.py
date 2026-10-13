@@ -9,7 +9,7 @@
 - `confirm(ctx)`  … **行の確定**（W2・§4-3）の時の後処理（任意。既定は何もしない）。音声＝要再生成・未生成の
                     行を作り直す（ローカルGPU・無料＝I6 の例外・D9）／絵＝新しい行の下ごしらえ。画像の生成（課金）は走らない
 
-今の派生物は ja音声（`tts`）・Aロール（`aroll`）・仕上がり（`final`）の3つ。将来の
+今の派生物は ja音声（`tts`）・Aロール（`aroll`）・仕上がり（`final`）・Bロール（`broll`＝描画だけ）の4つ。将来の
 `訳（lang）`・`訳の音声（lang）`・`訳の吹き出し（lang）` は、`register()` を1回呼ぶだけで
 **窓口を書き換えずに**足せる（レーン名 `lane` が応答の `impact` のキーになる）。
 影響の文面は §2-3 の表（項目が何に効くか）から作る＝表を変えたら文面も変わる（このファイル1か所）。
@@ -55,6 +55,7 @@ class Derivative:
     key = ""      # 内部名
     lane = ""     # 応答 `impact` のキー
     label = ""    # 人向けの名前（警告の頭に付く）
+    describe_only = False   # True＝後処理を持たない（apply・confirm を呼ばず、`applied` にも出さない）。影響が無ければレーンも出さない
 
     def describe(self, ctx: OpContext) -> list[dict]:
         raise NotImplementedError
@@ -87,7 +88,9 @@ def describe_all(ctx: OpContext) -> dict:
     out = {}
     for d in _REGISTRY:
         try:
-            out[d.lane] = d.describe(ctx)
+            lane = d.describe(ctx)
+            if lane or not d.describe_only:   # 描画だけの派生物（Bロール）は影響が無ければレーンごと出さない
+                out[d.lane] = lane
         except Exception as e:  # noqa: BLE001 — 文面の失敗で確認欄全体を落とさない
             out[d.lane] = [item("keep", f"（{d.label}の影響を調べられませんでした: {type(e).__name__}）")]
     return out
@@ -98,6 +101,8 @@ async def apply_all(ctx: OpContext) -> tuple[dict, list[str]]:
     失敗と、派生物自身が返した注意（例: 在庫の絵を戻せなかった）を `warnings` にまとめる。"""
     applied, warnings = {}, []
     for d in _REGISTRY:
+        if d.describe_only:
+            continue
         try:
             res = await d.apply(ctx)
             applied[d.lane] = res
@@ -118,7 +123,7 @@ async def confirm_all(ctx: ConfirmContext, only: str | None = None) -> tuple[dic
     1つ失敗しても残りは続ける。確定そのもの（指紋の記録）は済んでいる（I3 と同じ理屈）。"""
     applied, warnings = {}, []
     for d in _REGISTRY:
-        if only and d.key != only:
+        if (only and d.key != only) or d.describe_only:
             continue
         try:
             res = await d.confirm(ctx)
@@ -399,6 +404,46 @@ class FinalDerivative(Derivative):
         return {}
 
 
+# ─── 派生物4: Bロール（scrapping-agent の箱・describe だけ） ─────────
+
+def _broll_placements(ctx: OpContext) -> dict:
+    """{line_id: 当たっている素材の数}（空の行は除く）。箱が無い・壊れている話数は {}（何も言わない）。"""
+    doc = _read_json(ctx.ep_dir / "broll" / "broll.json") if ctx.ep_dir else None
+    if not isinstance(doc, dict):
+        return {}
+    return {lid: len(items) for lid, items in (doc.get("placements") or {}).items() if items}
+
+
+class BrollDerivative(Derivative):
+    """割り当ては `line_id` に付いている（BR1）ので、台本の操作に後処理は要らない（BR6）。影響の文だけを出す。
+    結合・削除で行が消えると、割り当ては消えずに「行から外れた素材」として箱に残る（導出）。
+    台本の Undo で行が戻れば、割り当ても自動で戻る。影響が無い操作・箱が無い話数は何も言わない（レーンごと出さない）。"""
+    key, lane, label = "broll", "broll", "Bロール"
+    describe_only = True
+
+    def describe(self, ctx: OpContext) -> list[dict]:
+        placed = _broll_placements(ctx)
+        if not placed:
+            return []
+        d, out = ctx.diff, []
+        gone = [i for i in d["removed_ids"] if i in placed]
+        if gone:
+            n = sum(placed[i] for i in gone)
+            out.append(item("later", f"{names(gone)} のBロール {n}件は「行から外れた素材」として箱に残る"
+                                     "（元に戻すと戻る・当て直すならA/Bロールタブから）"))
+        fronts = [i for i in _split_front_ids(ctx) if i in placed]
+        if fronts and ctx.op in SPLIT_OPS:
+            n = sum(placed[i] for i in fronts)
+            out.append(item("keep", f"前半 {names(fronts)} のBロール {n}件は前半に残る（後半に当てるなら A/Bロールタブで）"))
+        if [i for i in d["moved_ids"] if i in placed]:
+            out.append(item("keep", "Bロールは行に付いて動く（当て直しは要らない）"))
+        return out
+
+    async def apply(self, ctx: OpContext) -> dict:
+        return {}
+
+
 register(TtsDerivative())
 register(ArollDerivative())
 register(FinalDerivative())
+register(BrollDerivative())

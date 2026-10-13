@@ -1246,6 +1246,7 @@ Photoshop作業者は `export/script_lines.txt` の行番号で画像を引け�
 | `POST …/broll/assign`・`unassign`・`reorder` | `{line_id, asset_id, index?, note?}`・`{line_id, asset_id}`・`{line_id, asset_ids}` |
 | `PATCH`・`DELETE …/broll/assets/{asset_id}` | 札・ライセンス・クレジット・メモ／箱から外す（`_trash`） |
 | `GET …/broll/file/{name}` | 配信（`broll/` 直下のファイルだけ） |
+| `GET …/broll/thumb/{asset_id}?w=` | 写真の縮小JPEG（幅80〜960・既定360）。`broll/.thumbs/{asset_id}_{w}.jpg` に作り直せる形で置く（消してよい）。動画は 404（画面が先頭フレームを使う） |
 | `POST …/broll/migrate` | 旧 `footage.json` → 箱（割り当てはしない・冪等・元は残す。旧セクションは `note` と `legacy` に残す） |
 
 失敗は `detail: {code, message}`（`bad_license`・`unsupported`・`unknown_line`・`unknown_asset`・`still_placed` など）。

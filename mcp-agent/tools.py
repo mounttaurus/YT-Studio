@@ -1875,7 +1875,9 @@ async def motion_hf_looks() -> dict:
 async def motion_hf_put(project_id: str, episode_number: int, files: dict, comp_id: str = "new", check: bool = True) -> dict:
     """話のコンポジションへファイルを書く（書くのは motion-agent だけ＝本番のデータへ直接書かない）。
     comp_id="new" なら新しい mi_NNNN。files は {パス: 中身}: index.html・motion.json（辞書で渡してよい）・
-    compositions/custom/*.html（その場の部品）・assets/ の素材（画像は {"base64": …}）だけ。
+    compositions/custom/*.html（その場の部品）・assets/ の素材だけ。素材の写真は、**箱の素材なら {"asset_id": "b_…"}**
+    （motion-agent が箱から写す＝base64 で流さない。写真だけ・拡張子は箱のファイルと同じ。先に broll_register で箱へ）、
+    手元の画像は {"base64": …}。
     書く前の版は history/ に残る。書いたあと、描く前の検査（motion_hf_check と同じ・deep なし）の結果を check に返す。
     組み立ては辞書のブロック（motion_hf_blocks）の host を index.html に書く。motion.json の fit は {"sec": 秒} か
     {"line_id": "line_034"}（その行の音声の長さに合わせる）。"""

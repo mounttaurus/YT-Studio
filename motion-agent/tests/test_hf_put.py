@@ -121,3 +121,47 @@ def test_engine_version_mismatch_is_a_warning(shared, monkeypatch):
     res = hf.check(r["target"])
     assert res["ok"] is True
     assert [w["code"] for w in res["warnings"]] == ["engine_version_differs"]
+
+
+# ── 箱の素材を assets/ へ写す（{"asset_id": …}）──
+
+def _box(shared, assets, ep=1):
+    box = shared / "projects" / "demo" / "episodes" / f"ep{ep:02d}" / "broll"
+    box.mkdir(parents=True)
+    (box / "broll.json").write_text(json.dumps({"assets": assets, "placements": {}}), encoding="utf-8")
+    return box
+
+
+def test_asset_from_the_box_is_copied_without_base64(shared):
+    box = _box(shared, [{"asset_id": "b_aaaa1111_olson_img", "media_type": "photo", "file": "broll/b_aaaa1111_olson_img.jpg"}])
+    (box / "b_aaaa1111_olson_img.jpg").write_bytes(b"JPEG-olson-bytes")
+    r = hf_put.put("demo", 1, None, {"index.html": INDEX, "assets/olson.jpg": {"asset_id": "b_aaaa1111_olson_img"}})
+    assert (_comp_dir(shared) / "assets" / "olson.jpg").read_bytes() == b"JPEG-olson-bytes"
+    assert "assets/olson.jpg" in r["written"]
+
+
+def test_box_asset_is_refused_when_it_cannot_be_trusted(shared):
+    with pytest.raises(hf_put.PutError, match="箱が無い"):
+        hf_put.put("demo", 1, None, {"assets/a.jpg": {"asset_id": "b_aaaa1111_x_img"}})
+    box = _box(shared, [{"asset_id": "b_aaaa1111_x_img", "media_type": "photo", "file": "broll/b_aaaa1111_x_img.jpg"},
+                        {"asset_id": "b_bbbb2222_v_vid", "media_type": "video", "file": "broll/b_bbbb2222_v_vid.mp4"},
+                        {"asset_id": "b_cccc3333_esc_img", "media_type": "photo", "file": "../script.json"}])
+    (box / "b_aaaa1111_x_img.jpg").write_bytes(b"x")
+    (box / "b_bbbb2222_v_vid.mp4").write_bytes(b"v")
+    with pytest.raises(hf_put.PutError, match="箱に無い素材"):
+        hf_put.put("demo", 1, None, {"assets/a.jpg": {"asset_id": "b_dddd4444_none_img"}})
+    with pytest.raises(hf_put.PutError, match="写真ではない"):
+        hf_put.put("demo", 1, None, {"assets/a.png": {"asset_id": "b_bbbb2222_v_vid"}})
+    with pytest.raises(hf_put.PutError, match="拡張子"):
+        hf_put.put("demo", 1, None, {"assets/a.png": {"asset_id": "b_aaaa1111_x_img"}})            # jpg を png の名前で置かない
+    (shared / "projects" / "demo" / "episodes" / "ep01" / "script.json").write_text("{}", encoding="utf-8")
+    with pytest.raises(hf_put.PutError, match="ファイルが無い"):
+        hf_put.put("demo", 1, None, {"assets/a.jpg": {"asset_id": "b_cccc3333_esc_img"}})          # 箱の外を指す台帳は読まない
+    assert not (shared / "projects" / "demo" / "episodes" / "ep01" / "motion").exists(), "拒否したら何も書かない"
+
+
+def test_jpeg_and_jpg_are_the_same_extension(shared):
+    box = _box(shared, [{"asset_id": "b_aaaa1111_x_img", "media_type": "photo", "file": "broll/b_aaaa1111_x_img.jpeg"}])
+    (box / "b_aaaa1111_x_img.jpeg").write_bytes(b"j")
+    hf_put.put("demo", 1, None, {"assets/x.jpg": {"asset_id": "b_aaaa1111_x_img"}})
+    assert (_comp_dir(shared) / "assets" / "x.jpg").read_bytes() == b"j"

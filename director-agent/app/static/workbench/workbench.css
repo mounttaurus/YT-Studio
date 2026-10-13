@@ -254,3 +254,47 @@ input[type=text] { background: #0b0d12; color: var(--text); border: 1px solid va
 .bubblebtn { display: inline-flex; flex-direction: column; align-items: center; gap: 1px; padding: 3px 6px; font-size: 10.5px; color: var(--text); }
 .bubblebtn.on { outline: 2px solid var(--accent); }
 
+/* A/Bロールタブ（Docs/BROLL_PLAN.md §5・B2）: 左＝行の表（セリフ・A・B）／右＝素材の箱（引き出し） */
+.bwrap { display: grid; grid-template-columns: minmax(0, 1fr) 320px; gap: 12px; align-items: start; }
+.bmain { display: flex; flex-direction: column; gap: 8px; min-width: 0; }
+.brow { display: grid; grid-template-columns: 92px minmax(0, 1fr) 168px minmax(190px, 300px); gap: 12px; align-items: start;
+  background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 10px 12px; cursor: pointer; }
+.brow:hover { border-color: var(--line-2); background: #171c28; }
+.brow.bover, .bdrawer.bover, .box.bover { border-color: var(--accent); background: var(--accent-soft); }
+.bmeta { display: flex; flex-direction: column; gap: 4px; }
+.bbody .text { line-height: 1.7; overflow-wrap: anywhere; }
+.bA { position: relative; }
+.bA img { width: 100%; aspect-ratio: 16/9; object-fit: cover; border-radius: 6px; border: 1px solid var(--line-2); display: block; background: #0b0d13; }
+.bA .none { display: flex; align-items: center; justify-content: center; aspect-ratio: 16/9; border: 1px dashed var(--line-2); border-radius: 6px; color: var(--faint); }
+.bk { position: absolute; right: 4px; bottom: 4px; background: rgba(0, 0, 0, .65); color: #fff; font-size: 10px; padding: 0 5px; border-radius: 4px; pointer-events: none; }
+.bB { display: flex; gap: 8px; align-items: flex-start; flex-wrap: wrap; }
+.bchips { display: flex; gap: 6px; flex-wrap: wrap; flex: 1; min-width: 0; }
+.bchip { position: relative; width: 112px; border: 1px solid var(--line-2); border-radius: 8px; overflow: hidden; background: var(--panel-3); cursor: grab; }
+.bmedia { position: relative; display: block; aspect-ratio: 16/9; background: #0b0d13; overflow: hidden; }
+.bmedia img, .bmedia video { width: 100%; height: 100%; object-fit: cover; display: block; }
+.bchip .bctl { display: flex; justify-content: flex-end; gap: 2px; padding: 2px; background: var(--panel-2); }
+.bchip .bctl button { background: none; border: 1px solid var(--line-2); border-radius: 4px; color: var(--muted); font-size: 10px; padding: 0 5px; line-height: 1.5; }
+.bchip .bctl button:hover { color: var(--text); border-color: var(--accent); }
+.bpick { grid-column: 1 / -1; border-top: 1px dashed var(--line-2); padding-top: 8px; display: flex; flex-direction: column; gap: 8px; cursor: default; }
+.btiles { display: grid; grid-template-columns: repeat(auto-fill, minmax(112px, 1fr)); gap: 8px; }
+.btile { position: relative; padding: 0; border: 1px solid var(--line-2); border-radius: 8px; overflow: hidden; background: var(--panel-3); cursor: pointer; text-align: left; }
+.btile.sel { outline: 2px solid var(--accent); }
+.btile .bnew, .btile .bused { position: absolute; left: 4px; top: 4px; font-size: 10px; padding: 0 5px; border-radius: 4px; background: var(--warn-soft); color: var(--warn); pointer-events: none; }
+.btile .bused { background: var(--info-soft); color: var(--info); }
+.btile .bwarn { position: absolute; right: 4px; top: 2px; color: var(--warn); }
+.bdrawer { position: sticky; top: 8px; display: flex; flex-direction: column; gap: 8px; max-height: calc(100vh - 24px); overflow: auto;
+  background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 10px 12px; }
+.bdetail { display: flex; flex-direction: column; gap: 6px; border: 1px solid var(--line-2); border-radius: 8px; padding: 8px; background: var(--panel-3); }
+.bbig { aspect-ratio: 16/9; background: #0b0d13; border-radius: 6px; overflow: hidden; }
+.bbig img, .bbig video { width: 100%; height: 100%; object-fit: contain; }
+.borph { background: var(--bad-soft); border: 1px solid #6b2426; border-radius: 10px; padding: 10px 12px; display: flex; flex-direction: column; gap: 8px; }
+.borph h3 { margin: 0; font-size: 13px; color: var(--bad); }
+.borphrow { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+.borphrow .bmedia { width: 112px; flex: none; }
+.borphinfo { display: flex; flex-direction: column; flex: 1; min-width: 160px; }
+@media (max-width: 1000px) {
+  .bwrap { grid-template-columns: minmax(0, 1fr); }
+  .bdrawer { position: static; max-height: none; }
+  .brow { grid-template-columns: 70px minmax(0, 1fr); }
+  .bA, .bB { grid-column: 1 / -1; }
+}
