@@ -150,9 +150,43 @@ def load_manifest(project_id: str, episode: int) -> dict | None:
     if f is None or not f.exists():
         return None
     try:
-        return json.loads(f.read_text(encoding="utf-8"))
+        manifest = json.loads(f.read_text(encoding="utf-8"))
     except Exception:
         return None
+    _repair_machine_cast(project_id, manifest)
+    return manifest
+
+
+def _needs_cast_repair(panel: dict) -> bool:
+    """機械が決めた2人以上のキャストか（手で「＋キャラ（2人写り）」した行＝`characters_source: user` は除く）。"""
+    return (not panel.get("orphan") and panel.get("characters_source") != "user"
+            and len([c for c in (panel.get("characters") or []) if c]) > 1)
+
+
+def _repair_machine_cast(project_id: str, manifest: dict) -> list[str]:
+    """機械が決めた2人以上のキャストを、話者1人へ直す（メモリ上で直し、次の保存で書き戻る）。
+
+    2ショットは自動の生成・選定から禁止（2026-09-21）だが、それより前に作った話数の aroll.json には
+    LLM が決めた2人のキャストが残っている。プロンプトを作る側（``_normalize_characters``）だけで
+    禁止していたため、旧データの行は生成し直すたびに2ショットになり、在庫の選び直しも在庫登録（切り抜き）も
+    対象外になっていた（2026-10-13 20260728_001）。**読む口はここ1つ**なので、全ての入口（生成・選び直し・
+    一括・表示）が同じキャストを見る。
+
+    話者の描くキャラは配役（``get_speaker_map`` の ``image_char_id``）から取る（``characters`` の並び順は
+    話者を表さない）。話者が描けない（声だけ）ならナレーション（空）。配役が引けない話者だけ先頭を残す。
+    """
+    panels = [p for p in manifest.get("panels", []) if _needs_cast_repair(p)]
+    if not panels:
+        return []
+    speaker_map = get_speaker_map(project_id)
+    fixed = []
+    for p in panels:
+        sp = speaker_map.get(p.get("speaker_id") or "")
+        chars = [c for c in p["characters"] if c]
+        p["characters"] = chars[:1] if sp is None else ([sp["image_char_id"]] if sp.get("image_char_id") else [])
+        p["slot_key"] = compute_slot_key(p["characters"], p.get("slot"))
+        fixed.append(p.get("line_id"))
+    return fixed
 
 
 def save_manifest(project_id: str, episode: int, manifest: dict) -> bool:
@@ -467,6 +501,11 @@ def update_line(
                 p["slot_source"] = "user"
             if characters is not None:
                 p["characters"] = [c for c in characters if c][:2]
+                # 手で足した2人写りだけを残す印（無い2人のキャストは読み込み時に話者1人へ直す＝_repair_machine_cast）
+                if len(p["characters"]) > 1:
+                    p["characters_source"] = "user"
+                else:
+                    p.pop("characters_source", None)
             p["slot_key"] = compute_slot_key(p.get("characters"), p.get("slot"))
             save_manifest(project_id, episode, manifest)
             return p
@@ -1480,6 +1519,10 @@ async def generate_line_image(
     if panel.get("orphan"):
         raise ValueError(f"台本から削除された行です（生成しません）: {line_id}")
     # プロンプトが要るのは新規生成の時だけ（在庫の引用は使わない）。無ければ生成の直前に作る
+    line = _script_lines_by_id(project_id, episode).get(line_id) or panel
+    if len([c for c in (panel.get("characters") or []) if c]) == 1 and _complete_slot(panel, line) and log is not None:
+        # 在庫の照合より前に補う（感情が欠けたままだと照合が必ず外れ、在庫に合う絵があっても課金生成になる）
+        log.append(f"ℹ️ {line_id} は slot が空だったので、ルールで補いました")
 
     out_dir = aroll_dir(project_id, episode)
     out_dir.mkdir(parents=True, exist_ok=True)
@@ -1574,6 +1617,13 @@ async def generate_line_image(
         if _panel_needs_prompt(panel):
             why = "; ".join(f["error"] for f in (got or {}).get("failed", []))
             raise ValueError(f"prompt is empty: {line_id}" + (f"（演出プロンプトを作れませんでした: {why}）" if why else ""))
+    if (_prompt_mode() == "template" and panel.get("prompt_source") != "user"
+            and len([c for c in (panel.get("characters") or []) if c]) == 1):
+        # 機械が書いたプロンプトは、生成の直前に**今の slot から定型で作り直す**。保存された文面を使うと、
+        # ①「絵の希望」（slot）を変えても絵に効かない ②旧仕様（2026-09以前）の LLM 文面の背景の描写
+        # （"Office with a whiteboard in the background" 等）がパステル背景の指定に勝ち、背景付きで描かれる
+        # ③同じく "A two-shot of …" が残っていて2人で描かれる（2026-10-13 20260728_001）。手書き（user）だけは文面を尊重する
+        _put_template_prompt(panel, line)
 
     full_prompt = _compose_prompt(panel, manifest.get("style", "kamishibai"))
     refs = _resolve_refs(panel.get("characters", []), log)
@@ -1624,15 +1674,10 @@ async def generate_line_image(
         panel["cutout_assigned_at"] = None
 
         chars = [c for c in (panel.get("characters") or []) if c]
+        # 冒頭で補った slot は、プロンプトを作る途中で panel を読み直すと消える（ensure_prompts はディスクから読む）。ここでもう一度補う
+        if len(chars) == 1 and _complete_slot(panel, line) and log is not None:
+            log.append(f"ℹ️ {line_id} は slot が空だったので、ルールで補って在庫に登録します")
         slot = panel.get("slot") or {}
-        if len(chars) == 1 and not (slot.get("emotion") and slot.get("shot") and slot.get("angle")):
-            # slot が空・不完全だと、下の在庫登録が**黙って飛ばされ**、絵は出来たのに行へ紐付かない
-            # （2026-10-06 butler_crooks: 7行が組版でキャラ欠落）。生成は止めず、ルールで補って登録する。
-            slot = dict(slot_rules.rule_slot(panel), **{k: v for k, v in slot.items() if v})
-            panel["slot"], panel["slot_source"] = slot, panel.get("slot_source") if panel.get("slot_source") == "user" else "rule"
-            panel["slot_key"] = compute_slot_key(chars, slot)
-            if log is not None:
-                log.append(f"ℹ️ {line_id} は slot が空だったので、ルールで補って在庫に登録します")
         emotion, shot, angle = slot.get("emotion"), slot.get("shot"), slot.get("angle")
         if len(chars) == 1 and emotion and shot and angle:
             char_id = chars[0]
@@ -2841,6 +2886,8 @@ def fill_slots_without_llm(manifest: dict, line_ids, lines_by_id: dict) -> dict:
             p["prompt_text_hash"] = text_hash(line.get("text") or p.get("text"))
             if donor.get("characters"):
                 p["characters"] = list(donor["characters"])
+                if donor.get("characters_source"):
+                    p["characters_source"] = donor["characters_source"]   # 手で足した2人写りを引き継ぐ
             if p.get("slot_source") != "user" and donor.get("slot"):
                 p["slot"] = dict(donor["slot"])
                 p["slot_source"] = "inherited"
@@ -2859,6 +2906,46 @@ def _panel_needs_prompt(panel: dict | None) -> bool:
     return panel is not None and not panel.get("orphan") and not (panel.get("prompt") or "").strip()
 
 
+def _prompt_mode() -> str:
+    """演出プロンプトの作り方。既定は定型（API を呼ばない・2026-10-06 ユーザー方針）。LLM は AROLL_PROMPT_MODE=llm の時だけ。"""
+    return "llm" if os.getenv("AROLL_PROMPT_MODE", "template").strip().lower() == "llm" else "template"
+
+
+def _complete_slot(panel: dict, line: dict) -> bool:
+    """slot の欠けた軸（emotion/shot/angle）を `line`（台本の行）からルールで補う。補ったら True。
+
+    slot が空・不完全だと、在庫の照合（slot_key）も生成後の在庫登録も**黙って飛ばされ**、絵は出来たのに行へ
+    紐付かない（2026-10-06 butler_crooks: 7行が組版でキャラ欠落）。手で選んだ値・手で直した印（user）は残す。
+    """
+    slot = panel.get("slot") or {}
+    if slot.get("emotion") and slot.get("shot") and slot.get("angle"):
+        return False
+    panel["slot"] = dict(slot_rules.rule_slot(line), **{k: v for k, v in slot.items() if v})
+    panel["slot_source"] = "user" if panel.get("slot_source") == "user" else "rule"
+    panel["slot_key"] = compute_slot_key(panel.get("characters"), panel["slot"])
+    return True
+
+
+def _put_template_prompt(panel: dict, line: dict) -> None:
+    """slot から定型の演出プロンプトを panel に書く（LLM なし・保存は呼び出し側）。
+
+    slot が無ければ `line`（台本の行）からルールで作る。手で直した slot（`slot_source=="user"`）は具体化しない。
+    """
+    lid = panel.get("line_id") or ""
+    _complete_slot(panel, line)
+    slot = panel["slot"]
+    if panel.get("slot_source") != "user":
+        # 未指定のルールの slot は、行IDで決めた画角・ポーズを入れる（同じ絵ばかり生成しない）。書き戻す。
+        slot = slot_rules.template_slot(slot, lid)
+        if slot != panel["slot"]:
+            panel["slot"] = slot
+            panel["slot_source"] = panel.get("slot_source") if panel.get("slot_source") in ("rule", "derived", "inherited") else "rule"
+            panel["slot_key"] = compute_slot_key(panel.get("characters"), slot)
+    panel["prompt"] = slot_rules.template_prompt(slot, panel.get("speaker_name") or "")
+    panel["prompt_source"] = "template"
+    panel["prompt_text_hash"] = text_hash(line.get("text"))
+
+
 def _apply_template_prompts(project_id: str, episode: int, manifest: dict, script: dict,
                             line_ids: list[str], out: dict) -> None:
     """プロンプトの無いコマに、slot から定型の演出プロンプトを書く（LLM なし・保存まで行う）。
@@ -2872,17 +2959,7 @@ def _apply_template_prompts(project_id: str, episode: int, manifest: dict, scrip
         lid = p.get("line_id")
         if lid not in wanted or not _panel_needs_prompt(p) or p.get("prompt_source") == "user":
             continue
-        slot = p.get("slot") or slot_rules.rule_slot(lines.get(lid) or p)
-        if p.get("slot_source") != "user":
-            # 未指定のルールの slot は、行IDで決めた画角・ポーズを入れる（同じ絵ばかり生成しない）。書き戻す。
-            slot = slot_rules.template_slot(slot, lid)
-            if slot != (p.get("slot") or {}):
-                p["slot"] = slot
-                p["slot_source"] = p.get("slot_source") if p.get("slot_source") in ("rule", "derived", "inherited") else "rule"
-                p["slot_key"] = compute_slot_key(p.get("characters"), slot)
-        p["prompt"] = slot_rules.template_prompt(slot, p.get("speaker_name") or "")
-        p["prompt_source"] = "template"
-        p["prompt_text_hash"] = text_hash((lines.get(lid) or p).get("text"))
+        _put_template_prompt(p, lines.get(lid) or p)
         done.append(lid)
     if done:
         save_manifest(project_id, episode, manifest)
@@ -2915,7 +2992,7 @@ async def ensure_prompts(project_id: str, episode: int, line_ids: list[str],
 
     # 既定は定型（API を呼ばない・2026-10-06 ユーザー方針）。LLM は AROLL_PROMPT_MODE=llm の時だけ。
     # 在庫に積む絵は再利用される汎用の絵なので、行ごとの細かな動作は要らない。
-    if os.getenv("AROLL_PROMPT_MODE", "template").strip().lower() != "llm":
+    if _prompt_mode() == "template":
         _apply_template_prompts(project_id, episode, manifest, script, need, out)
         if log is not None and out["generated"]:
             log.append(f"✍ {len(out['generated'])}行の演出プロンプトを定型で作りました（API なし）")
